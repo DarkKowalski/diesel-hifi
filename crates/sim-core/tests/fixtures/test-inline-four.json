@@ -1,0 +1,670 @@
+{
+  "schema_version": 1,
+  "identity": {
+    "id": "synthetic-test-inline-four",
+    "display_name": "Synthetic Inline-Four Test Engine",
+    "manufacturer_reference": "None. Entirely invented geometry used only to prove the solver is configuration-driven.",
+    "power_code": "TEST",
+    "disclaimer": "Test fixture. Every value is invented. Not a model of any real engine and never shipped in the catalog."
+  },
+  "geometry": {
+    "cylinders": 4,
+    "bore_m": 0.11,
+    "stroke_m": 0.135,
+    "connecting_rod_m": 0.23,
+    "compression_ratio": 17.0,
+    "firing_order": [
+      1,
+      3,
+      4,
+      2
+    ],
+    "published_displacement_m3": 0.005131792,
+    "published_stroke_bore_ratio": 1.227273
+  },
+  "valvetrain": {
+    "intake_valves_per_cylinder": 2,
+    "exhaust_valves_per_cylinder": 2,
+    "intake_valve_close_rad": -2.7925268,
+    "exhaust_valve_open_rad": 2.443461
+  },
+  "injection": {
+    "rail_pressure_max_pa": 90000000.0,
+    "amplified_pressure_max_pa": 210000000.0,
+    "fuel_lower_heating_value_j_per_kg": 42700000.0,
+    "max_fuel_mg_per_cycle": 120.0,
+    "smoke_limit_afr": 22.0
+  },
+  "combustion": {
+    "start_of_combustion_rad": -0.0872665,
+    "burn_duration_rad": 0.6981317,
+    "combustion_efficiency": 0.98,
+    "burned_gas_cv_j_per_kg_k": 1150.0,
+    "polytropic_compression": 1.35,
+    "polytropic_expansion": 1.3
+  },
+  "friction": {
+    "fmep_constant_pa": 60000.0,
+    "fmep_peak_pressure_coeff": 0.005,
+    "fmep_piston_speed_coeff_pa_s_per_m": 1200.0,
+    "fmep_piston_speed_sq_coeff": 130.0
+  },
+  "air_path": {
+    "intake_manifold_pressure_pa": 101325.0,
+    "intake_manifold_temperature_k": 320.0,
+    "exhaust_manifold_pressure_pa": 106000.0,
+    "crankcase_pressure_pa": 101325.0,
+    "gas_constant_j_per_kg_k": 287.0528,
+    "volumetric_efficiency": 0.92
+  },
+  "governor": {
+    "idle_target_rpm": 700.0,
+    "idle_p_gain_mg_per_rad_s": 1.2,
+    "idle_i_gain_mg_per_rad": 0.6,
+    "idle_integral_limit_mg": 40.0,
+    "overspeed_taper_start_rpm": 2200.0,
+    "overspeed_cutoff_rpm": 2400.0
+  },
+  "load": {
+    "accessory_torque_constant_nm": 25.0,
+    "accessory_torque_per_rad_s": 0.02,
+    "max_external_load_nm": 5000.0,
+    "starter_torque_nm": 1200.0,
+    "starter_cutout_rpm": 300.0
+  },
+  "inertia": {
+    "rotating_inertia_kg_m2": 1.5,
+    "complete_engine_mass_kg": 620.0
+  },
+  "limits": {
+    "max_combustion_pressure_pa": 23000000.0,
+    "max_rpm": 2600.0,
+    "max_gas_temperature_k": 3000.0
+  },
+  "solver": {
+    "fixed_step_s": 2.5e-05,
+    "max_steps_per_batch": 20000
+  },
+  "audio": {
+    "reference_spl_db": 94.0,
+    "exhaust_gain": 1.0
+  },
+  "rated": {
+    "max_power_w": 250000.0,
+    "max_power_hp": 340.0,
+    "max_torque_nm": 1600.0
+  },
+  "sources": [
+    {
+      "id": "synthetic-fixture",
+      "title": "Synthetic test fixture (no real source document)",
+      "publisher": "diesel-hifi test suite",
+      "technical_status": "n/a",
+      "order_number": "n/a",
+      "scope": "Invented values used only to prove the solver reads configuration rather than branching on an engine ID.",
+      "local_path": null
+    }
+  ],
+  "provenance": [
+    {
+      "path": "geometry.cylinders",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.cylinders`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -37.0,
+        45.0
+      ]
+    },
+    {
+      "path": "geometry.bore_m",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.bore_m`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.9900000000000002,
+        2.21
+      ]
+    },
+    {
+      "path": "geometry.stroke_m",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.stroke_m`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2.215,
+        2.4850000000000003
+      ]
+    },
+    {
+      "path": "geometry.connecting_rod_m",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.connecting_rod_m`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -3.0700000000000003,
+        3.5300000000000002
+      ]
+    },
+    {
+      "path": "geometry.compression_ratio",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.compression_ratio`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -154.0,
+        188.0
+      ]
+    },
+    {
+      "path": "geometry.firing_order",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.firing_order`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.0,
+        1.0
+      ]
+    },
+    {
+      "path": "geometry.published_displacement_m3",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.published_displacement_m3`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.046186128,
+        1.056449712
+      ]
+    },
+    {
+      "path": "geometry.published_stroke_bore_ratio",
+      "status": "calibrated",
+      "value_note": "invented test value for `geometry.published_stroke_bore_ratio`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -12.045457,
+        14.500003000000001
+      ]
+    },
+    {
+      "path": "valvetrain.intake_valves_per_cylinder",
+      "status": "calibrated",
+      "value_note": "invented test value for `valvetrain.intake_valves_per_cylinder`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -19.0,
+        23.0
+      ]
+    },
+    {
+      "path": "valvetrain.exhaust_valves_per_cylinder",
+      "status": "calibrated",
+      "value_note": "invented test value for `valvetrain.exhaust_valves_per_cylinder`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -19.0,
+        23.0
+      ]
+    },
+    {
+      "path": "valvetrain.intake_valve_close_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `valvetrain.intake_valve_close_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -31.717794800000004,
+        26.1327412
+      ]
+    },
+    {
+      "path": "valvetrain.exhaust_valve_open_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `valvetrain.exhaust_valve_open_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -22.991149,
+        27.878071
+      ]
+    },
+    {
+      "path": "injection.rail_pressure_max_pa",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.rail_pressure_max_pa`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -810000001.0,
+        990000001.0
+      ]
+    },
+    {
+      "path": "injection.amplified_pressure_max_pa",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.amplified_pressure_max_pa`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1890000001.0,
+        2310000001.0
+      ]
+    },
+    {
+      "path": "injection.fuel_lower_heating_value_j_per_kg",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.fuel_lower_heating_value_j_per_kg`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -384300001.0,
+        469700001.0
+      ]
+    },
+    {
+      "path": "injection.max_fuel_mg_per_cycle",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.max_fuel_mg_per_cycle`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1081.0,
+        1321.0
+      ]
+    },
+    {
+      "path": "injection.smoke_limit_afr",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.smoke_limit_afr`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -199.0,
+        243.0
+      ]
+    },
+    {
+      "path": "combustion.start_of_combustion_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.start_of_combustion_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.9599315000000002,
+        1.7853984999999999
+      ]
+    },
+    {
+      "path": "combustion.burn_duration_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.burn_duration_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -7.2831853,
+        8.679448700000002
+      ]
+    },
+    {
+      "path": "combustion.combustion_efficiency",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.combustion_efficiency`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -9.82,
+        11.780000000000001
+      ]
+    },
+    {
+      "path": "combustion.burned_gas_cv_j_per_kg_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.burned_gas_cv_j_per_kg_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -10351.0,
+        12651.0
+      ]
+    },
+    {
+      "path": "combustion.polytropic_compression",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.polytropic_compression`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -13.15,
+        15.85
+      ]
+    },
+    {
+      "path": "combustion.polytropic_expansion",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.polytropic_expansion`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -12.7,
+        15.3
+      ]
+    },
+    {
+      "path": "friction.fmep_constant_pa",
+      "status": "calibrated",
+      "value_note": "invented test value for `friction.fmep_constant_pa`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -540001.0,
+        660001.0
+      ]
+    },
+    {
+      "path": "friction.fmep_peak_pressure_coeff",
+      "status": "calibrated",
+      "value_note": "invented test value for `friction.fmep_peak_pressure_coeff`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.045,
+        1.055
+      ]
+    },
+    {
+      "path": "friction.fmep_piston_speed_coeff_pa_s_per_m",
+      "status": "calibrated",
+      "value_note": "invented test value for `friction.fmep_piston_speed_coeff_pa_s_per_m`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -10801.0,
+        13201.0
+      ]
+    },
+    {
+      "path": "friction.fmep_piston_speed_sq_coeff",
+      "status": "calibrated",
+      "value_note": "invented test value for `friction.fmep_piston_speed_sq_coeff`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1171.0,
+        1431.0
+      ]
+    },
+    {
+      "path": "air_path.intake_manifold_pressure_pa",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.intake_manifold_pressure_pa`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -911926.0,
+        1114576.0
+      ]
+    },
+    {
+      "path": "air_path.intake_manifold_temperature_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.intake_manifold_temperature_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2881.0,
+        3521.0
+      ]
+    },
+    {
+      "path": "air_path.exhaust_manifold_pressure_pa",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.exhaust_manifold_pressure_pa`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -954001.0,
+        1166001.0
+      ]
+    },
+    {
+      "path": "air_path.crankcase_pressure_pa",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.crankcase_pressure_pa`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -911926.0,
+        1114576.0
+      ]
+    },
+    {
+      "path": "air_path.gas_constant_j_per_kg_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.gas_constant_j_per_kg_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2584.4752,
+        3158.5807999999997
+      ]
+    },
+    {
+      "path": "air_path.volumetric_efficiency",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.volumetric_efficiency`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -9.280000000000001,
+        11.120000000000001
+      ]
+    },
+    {
+      "path": "governor.idle_target_rpm",
+      "status": "calibrated",
+      "value_note": "invented test value for `governor.idle_target_rpm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -6301.0,
+        7701.0
+      ]
+    },
+    {
+      "path": "governor.idle_p_gain_mg_per_rad_s",
+      "status": "calibrated",
+      "value_note": "invented test value for `governor.idle_p_gain_mg_per_rad_s`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -11.8,
+        14.2
+      ]
+    },
+    {
+      "path": "governor.idle_i_gain_mg_per_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `governor.idle_i_gain_mg_per_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -6.4,
+        7.6
+      ]
+    },
+    {
+      "path": "governor.idle_integral_limit_mg",
+      "status": "calibrated",
+      "value_note": "invented test value for `governor.idle_integral_limit_mg`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -361.0,
+        441.0
+      ]
+    },
+    {
+      "path": "governor.overspeed_taper_start_rpm",
+      "status": "calibrated",
+      "value_note": "invented test value for `governor.overspeed_taper_start_rpm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -19801.0,
+        24201.0
+      ]
+    },
+    {
+      "path": "governor.overspeed_cutoff_rpm",
+      "status": "calibrated",
+      "value_note": "invented test value for `governor.overspeed_cutoff_rpm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -21601.0,
+        26401.0
+      ]
+    },
+    {
+      "path": "load.accessory_torque_constant_nm",
+      "status": "calibrated",
+      "value_note": "invented test value for `load.accessory_torque_constant_nm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -226.0,
+        276.0
+      ]
+    },
+    {
+      "path": "load.accessory_torque_per_rad_s",
+      "status": "calibrated",
+      "value_note": "invented test value for `load.accessory_torque_per_rad_s`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.18,
+        1.22
+      ]
+    },
+    {
+      "path": "load.max_external_load_nm",
+      "status": "calibrated",
+      "value_note": "invented test value for `load.max_external_load_nm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -45001.0,
+        55001.0
+      ]
+    },
+    {
+      "path": "load.starter_torque_nm",
+      "status": "calibrated",
+      "value_note": "invented test value for `load.starter_torque_nm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -3601.0,
+        4401.0
+      ]
+    },
+    {
+      "path": "load.starter_cutout_rpm",
+      "status": "calibrated",
+      "value_note": "invented test value for `load.starter_cutout_rpm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2701.0,
+        3301.0
+      ]
+    },
+    {
+      "path": "inertia.rotating_inertia_kg_m2",
+      "status": "calibrated",
+      "value_note": "invented test value for `inertia.rotating_inertia_kg_m2`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -14.5,
+        17.5
+      ]
+    },
+    {
+      "path": "inertia.complete_engine_mass_kg",
+      "status": "calibrated",
+      "value_note": "invented test value for `inertia.complete_engine_mass_kg`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -5581.0,
+        6821.0
+      ]
+    },
+    {
+      "path": "limits.max_combustion_pressure_pa",
+      "status": "calibrated",
+      "value_note": "invented test value for `limits.max_combustion_pressure_pa`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -207000001.0,
+        253000001.0
+      ]
+    },
+    {
+      "path": "limits.max_rpm",
+      "status": "calibrated",
+      "value_note": "invented test value for `limits.max_rpm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -23401.0,
+        28601.0
+      ]
+    },
+    {
+      "path": "limits.max_gas_temperature_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `limits.max_gas_temperature_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -27001.0,
+        33001.0
+      ]
+    },
+    {
+      "path": "solver.fixed_step_s",
+      "status": "calibrated",
+      "value_note": "invented test value for `solver.fixed_step_s`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.000225,
+        1.000275
+      ]
+    },
+    {
+      "path": "solver.max_steps_per_batch",
+      "status": "calibrated",
+      "value_note": "invented test value for `solver.max_steps_per_batch`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -180001.0,
+        220001.0
+      ]
+    },
+    {
+      "path": "audio.reference_spl_db",
+      "status": "calibrated",
+      "value_note": "invented test value for `audio.reference_spl_db`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -847.0,
+        1035.0
+      ]
+    },
+    {
+      "path": "audio.exhaust_gain",
+      "status": "calibrated",
+      "value_note": "invented test value for `audio.exhaust_gain`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -10.0,
+        12.0
+      ]
+    },
+    {
+      "path": "rated.max_power_w",
+      "status": "calibrated",
+      "value_note": "invented test value for `rated.max_power_w`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2250001.0,
+        2750001.0
+      ]
+    },
+    {
+      "path": "rated.max_power_hp",
+      "status": "calibrated",
+      "value_note": "invented test value for `rated.max_power_hp`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -3061.0,
+        3741.0
+      ]
+    },
+    {
+      "path": "rated.max_torque_nm",
+      "status": "calibrated",
+      "value_note": "invented test value for `rated.max_torque_nm`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -14401.0,
+        17601.0
+      ]
+    }
+  ]
+}

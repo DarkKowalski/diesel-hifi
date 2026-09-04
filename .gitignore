@@ -1,0 +1,20 @@
+/datasheet/
+/engine-sim
+
+# Rust
+/target/
+
+# Node / pnpm
+node_modules/
+
+# Generated wasm-pack output (rebuild with `pnpm wasm:build`)
+/web/src/wasm/
+
+# Build output
+/web/dist/
+/web/dist-subpath/
+
+# Test artifacts
+/web/test-results/
+/web/playwright-report/
+/web/.svelte-kit/

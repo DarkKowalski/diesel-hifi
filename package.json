@@ -1,0 +1,24 @@
+{
+  "name": "diesel-hifi",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser-based diesel truck engine simulator. Rust simulation core, WASM in a Web Worker, static Svelte UI.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "wasm:build": "wasm-pack build crates/sim-wasm --release --target web --out-dir ../../web/src/wasm --out-name sim_wasm",
+    "wasm:test": "wasm-pack test --node crates/sim-wasm",
+    "dev": "pnpm wasm:build && pnpm --filter web dev",
+    "check": "pnpm --filter web check",
+    "test": "pnpm wasm:build && pnpm wasm:test && pnpm --filter web test",
+    "test:unit": "pnpm --filter web test:unit",
+    "test:e2e": "pnpm --filter web test:e2e",
+    "build": "pnpm wasm:build && pnpm --filter web build && node scripts/verify-dist.mjs web/dist",
+    "build:subpath": "pnpm wasm:build && pnpm --filter web build:subpath && node scripts/verify-dist.mjs web/dist-subpath",
+    "preview": "pnpm --filter web preview"
+  }
+}
