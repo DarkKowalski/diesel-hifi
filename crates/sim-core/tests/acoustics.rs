@@ -862,3 +862,155 @@ fn a_modal_bank_above_nyquist_is_rejected() {
         error.message
     );
 }
+
+// --- seeded cylinder-to-cylinder variation --------------------------------
+//
+// Six bit-identical cylinders sum to a mathematically pure harmonic comb with
+// no jitter and no amplitude scatter, and the ear is extremely good at hearing
+// that: it hears it as synthesised. Real engines have injector delivery scatter
+// and port-to-port flow scatter, and nothing in a real six is identical to
+// anything else in it. The trims are drawn once at reset from the reset seed,
+// which is what makes this compatible with determinism rather than a threat to
+// it.
+
+/// The shipped configuration with both build-scatter spreads set to zero.
+fn perfect_engine() -> ValidatedConfig {
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["valvetrain"]["exhaust_area_spread"] = serde_json::json!(0.0);
+    document["injection"]["cylinder_delivery_spread"] = serde_json::json!(0.0);
+    EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect("mutated config validates")
+}
+
+fn samples_with_seed(config: ValidatedConfig, seed: u64, rpm: f64, steps: usize) -> Vec<f32> {
+    let mut sim = Simulation::new(
+        config,
+        ResetOptions {
+            seed,
+            initial_rpm: rpm,
+            initial_crank_rad: 0.0,
+            coolant_temp_k: 293.15,
+        },
+    )
+    .expect("simulation builds");
+    sim.set_controls(controls(0.4, false, true))
+        .expect("controls accepted");
+
+    let mut sink = vec![0.0f32; PIN_CHUNK as usize];
+    for _ in 0..1_200 {
+        sim.advance(PIN_CHUNK).expect("advance");
+        sim.pin_speed_rpm(rpm).expect("pin");
+        sim.drain_audio(&mut sink);
+    }
+    let mut out = vec![0.0f32; steps];
+    let mut written = 0;
+    while written < out.len() {
+        let batch = PIN_CHUNK.min((out.len() - written) as u32);
+        sim.advance(batch).expect("advance");
+        sim.pin_speed_rpm(rpm).expect("pin");
+        written += sim.drain_audio(&mut out[written..]);
+    }
+    out
+}
+
+#[test]
+fn a_different_seed_builds_a_different_engine() {
+    let a = samples_with_seed(config(), 1, 1_000.0, 20_000);
+    let b = samples_with_seed(config(), 2, 1_000.0, 20_000);
+    assert_ne!(
+        a, b,
+        "two seeds must build two engines; if the trims were not applied these \
+         would be identical"
+    );
+
+    // Different, but not wildly so: this is a build tolerance, not a different
+    // engine family. Compare energies rather than samples.
+    let energy = |s: &[f32]| s.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>();
+    let (ea, eb) = (energy(&a), energy(&b));
+    let ratio = ea.max(eb) / ea.min(eb);
+    assert!(
+        ratio < 1.5,
+        "a 2% build tolerance should not change the output energy by {ratio:.2}x"
+    );
+}
+
+#[test]
+fn the_same_seed_builds_the_same_engine_bit_for_bit() {
+    // The whole reason the trims are drawn at reset rather than per step. This
+    // is the guarantee that keeps batch invariance and repeatability intact.
+    let a = samples_with_seed(config(), 7, 1_000.0, 20_000);
+    let b = samples_with_seed(config(), 7, 1_000.0, 20_000);
+    assert_eq!(a, b, "one seed must give one engine, bit for bit");
+}
+
+#[test]
+fn zeroing_the_spreads_restores_six_identical_cylinders() {
+    // Proves the variation comes from the configured spreads and not from
+    // somewhere incidental: with both set to zero the seed stops mattering.
+    let a = samples_with_seed(perfect_engine(), 1, 1_000.0, 20_000);
+    let b = samples_with_seed(perfect_engine(), 2, 1_000.0, 20_000);
+    assert_eq!(
+        a, b,
+        "with no build scatter the seed must have nothing left to vary"
+    );
+
+    // And a perfect engine really is a different signal from a scattered one.
+    let scattered = samples_with_seed(config(), 1, 1_000.0, 20_000);
+    assert_ne!(a, scattered, "the spreads must actually reach the solver");
+}
+
+#[test]
+fn the_trim_breaks_the_harmonic_comb_without_moving_the_note() {
+    // Scatter is supposed to disturb the *evenness* of the pulse train, not its
+    // period. If it moved the firing frequency it would be a defect rather than
+    // realism.
+    let cylinders = config().config().geometry.cylinders;
+    for rpm in [800.0, 1_400.0] {
+        let scattered = samples_with_seed(config(), 3, rpm, 40_000);
+        let measured = fundamental_hz(&scattered, 40_000.0, 20.0, 400.0);
+        let expected = firing_hz(rpm, cylinders);
+        assert!(
+            (measured - expected).abs() < expected * 0.05,
+            "at {rpm:.0} rpm the note should stay at {expected:.1} Hz, got {measured:.1} Hz"
+        );
+    }
+}
+
+#[test]
+fn an_implausibly_wide_build_tolerance_is_rejected() {
+    // The cap is what stops a realism knob from becoming a calibration change.
+    for (section, field) in [
+        ("valvetrain", "exhaust_area_spread"),
+        ("injection", "cylinder_delivery_spread"),
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+        document[section][field] = serde_json::json!(0.5);
+        let error = EngineConfig::from_json(&document.to_string())
+            .expect("mutated config parses")
+            .validate()
+            .expect_err("a 50% build tolerance must be rejected");
+        assert!(
+            error.message.contains(field),
+            "the rejection should name `{section}.{field}`, got: {}",
+            error.message
+        );
+    }
+
+    // And a negative spread is meaningless rather than merely too large.
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["valvetrain"]["exhaust_area_spread"] = serde_json::json!(-0.01);
+    let error = EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect_err("a negative build tolerance must be rejected");
+    assert!(
+        error.message.contains("exhaust_area_spread"),
+        "the rejection should name the field, got: {}",
+        error.message
+    );
+}

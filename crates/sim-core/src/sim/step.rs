@@ -249,7 +249,10 @@ pub(super) fn step(
     let mut step_peak_temperature_k: f64 = 0.0;
     let mut fuel_latched_kg = 0.0;
 
-    let exhaust_port = acoustics::Port {
+    // Port geometry common to every cylinder. The effective area is then
+    // trimmed per cylinder below, because no two ports in a real head flow
+    // identically and six identical ports are audible as such.
+    let nominal_exhaust_port = acoustics::Port {
         effective_area_m2: valvetrain.exhaust_effective_area_m2,
         valve_open_rad: valvetrain.exhaust_valve_open_rad,
         ramp_rad: valvetrain.exhaust_ramp_rad,
@@ -272,6 +275,11 @@ pub(super) fn step(
         let mut c = state.cylinders[index];
         let psi_old = cylinder::signed_cycle_angle(theta_old, c.phase_offset_rad);
         let psi_new = cylinder::signed_cycle_angle(theta_new, c.phase_offset_rad);
+
+        let exhaust_port = acoustics::Port {
+            effective_area_m2: nominal_exhaust_port.effective_area_m2 * c.exhaust_area_trim,
+            ..nominal_exhaust_port
+        };
         let phase_new = cylinder::phase_at(
             psi_new,
             valvetrain.intake_valve_close_rad,
@@ -323,7 +331,11 @@ pub(super) fn step(
             c.profile = heat_release::Profile::NONE;
 
             let smoke_limit_kg = air_kg / inj.smoke_limit_afr;
-            let fuel_kg = (demand_mg * 1.0e-6).min(smoke_limit_kg).max(0.0);
+            // The trim scales what this injector delivers for a given command.
+            // The smoke limit still applies after it: a generous injector on a
+            // cylinder short of air is still held to the air it has.
+            let commanded_kg = demand_mg * 1.0e-6 * c.fuel_trim;
+            let fuel_kg = commanded_kg.min(smoke_limit_kg).max(0.0);
             c.injection =
                 injection::schedule(inj, fuel_kg, rpm, state.omega_rad_per_s, c.pressure_pa);
 

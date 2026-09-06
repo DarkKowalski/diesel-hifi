@@ -564,6 +564,38 @@ leaves the batch-invariance and repeatability tests untouched.
 why an unseeded room is unacceptable. The same argument applies here and the same
 generator shape should be used on the Rust side.
 
+#### 5.5.1 What building it changed — implemented at step 2
+
+**Two spreads, not one.** §5.5 describes "a fixed per-cylinder multiplier" applied to
+both port area and delivered fuel. Splitting it in two costs one extra path and buys
+honesty: injector delivery scatter and port flow scatter are genuinely different
+manufacturing facts with different magnitudes, and each lands in the section that
+already owns the quantity it perturbs — `injection.cylinder_delivery_spread` at ±1.5%
+and `valvetrain.exhaust_area_spread` at ±2%. One knob covering both would have needed a
+new home and a name that described neither.
+
+**`sim-core` already had the generator.** §5.5 proposes porting `cabin.ts`'s
+`xorshift32` shape to Rust. Unnecessary: `rng.rs` has `Pcg32`, and `SimState` already
+carries one seeded from `ResetOptions.seed` with a comment saying it exists so that
+"cycle-to-cycle variation cannot later be added unseeded". This is that variation, and
+it draws from the stream that was put there for it.
+
+**Trims are drawn for every slot, not only the live ones.** The reset loop runs over
+`MAX_CYLINDERS`, so drawing per slot keeps the value a given cylinder index receives
+independent of the engine's cylinder count. Drawing only for live cylinders would have
+made the inline-four fixture and the six share a stream position by accident.
+
+**The smoke limit still applies after the trim.** A generous injector on a cylinder
+short of air is held to the air it has, which is what stops the scatter from quietly
+raising fuelling at the limit.
+
+The calibration is unmoved, and that is now asserted rather than assumed:
+`the_per_cylinder_build_scatter_does_not_move_the_calibration` sweeps the scattered
+engine against one with both spreads zeroed and requires peak power and peak torque to
+agree within 1%, plus the published 230 bar envelope to hold for the scattered engine at
+every point rather than on average. The validator caps both spreads at 0.1 so a realism
+knob cannot become a calibration change by being turned up.
+
 ### 5.6 P6 — retune the listening stages, last
 
 Once there is content above 1 kHz, revisit in this order:

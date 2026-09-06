@@ -61,6 +61,16 @@ pub struct CylinderState {
     pub burned_fraction: f64,
     /// Heat lost to the walls during the cycle in progress, joules.
     pub wall_heat_loss_j: f64,
+
+    /// This cylinder's injector delivery multiplier, about 1.0.
+    ///
+    /// Drawn once at reset from the reset seed. Six bit-identical cylinders sum
+    /// to a mathematically pure harmonic comb with no jitter and no amplitude
+    /// scatter, and the ear hears that immediately as synthesised. Nothing in a
+    /// real six is identical to anything else in it.
+    pub fuel_trim: f64,
+    /// This cylinder's exhaust port area multiplier, about 1.0.
+    pub exhaust_area_trim: f64,
 }
 
 impl CylinderState {
@@ -81,6 +91,10 @@ impl CylinderState {
             profile_ready: false,
             burned_fraction: 0.0,
             wall_heat_loss_j: 0.0,
+            // Neutral until a reset draws the real trims. A cylinder built
+            // without them is an average cylinder, not a broken one.
+            fuel_trim: 1.0,
+            exhaust_area_trim: 1.0,
         }
     }
 

@@ -596,6 +596,21 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         au.structural_gain.is_finite() && au.structural_gain >= 0.0,
         "audio.structural_gain must be finite and not negative",
     )?;
+
+    // Build scatter. Zero is legal and means a perfect engine; the upper bound
+    // is what keeps a "realism" knob from quietly becoming a calibration
+    // change, since a spread wide enough to move peak power is a spread that is
+    // no longer modelling manufacturing tolerance.
+    let vt_spread = config.valvetrain.exhaust_area_spread;
+    require(
+        vt_spread.is_finite() && (0.0..=0.1).contains(&vt_spread),
+        "valvetrain.exhaust_area_spread must be finite and fall in [0, 0.1]",
+    )?;
+    let inj_spread = config.injection.cylinder_delivery_spread;
+    require(
+        inj_spread.is_finite() && (0.0..=0.1).contains(&inj_spread),
+        "injection.cylinder_delivery_spread must be finite and fall in [0, 0.1]",
+    )?;
     require(
         !au.structural_modes.is_empty(),
         "audio.structural_modes must name at least one mode",

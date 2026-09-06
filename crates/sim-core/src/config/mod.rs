@@ -106,6 +106,14 @@ pub struct Valvetrain {
     /// acoustic source needs an area as well, because the exhaust pulse is a
     /// flow through a port, not an event on a crank wheel.
     pub exhaust_effective_area_m2: f64,
+    /// Fractional half-width of cylinder-to-cylinder exhaust port area scatter.
+    ///
+    /// No two ports in a real head flow identically: casting tolerance, valve
+    /// seat cut, and guide wear all differ cylinder to cylinder. Drawn once per
+    /// cylinder at reset from the reset seed, never per step, so the engine is
+    /// bit-for-bit reproducible while no longer being six identical copies of
+    /// one cylinder.
+    pub exhaust_area_spread: f64,
 }
 
 /// Injection system.
@@ -141,6 +149,12 @@ pub struct Injection {
     /// values move injection later, which is what keeps peak cylinder pressure
     /// inside the published envelope at high load.
     pub soi_load_retard_rad_per_mg: f64,
+    /// Fractional half-width of injector-to-injector delivery scatter.
+    ///
+    /// Real injectors are matched to a tolerance, not to each other. Drawn once
+    /// per cylinder at reset from the reset seed, on the same terms as
+    /// `valvetrain.exhaust_area_spread`.
+    pub cylinder_delivery_spread: f64,
 }
 
 /// Double-Wiebe heat release.
@@ -596,6 +610,7 @@ impl EngineConfig {
             "valvetrain.exhaust_valve_open_rad" => self.valvetrain.exhaust_valve_open_rad,
             "valvetrain.exhaust_ramp_rad" => self.valvetrain.exhaust_ramp_rad,
             "valvetrain.exhaust_effective_area_m2" => self.valvetrain.exhaust_effective_area_m2,
+            "valvetrain.exhaust_area_spread" => self.valvetrain.exhaust_area_spread,
 
             "injection.rail_pressure_max_pa" => self.injection.rail_pressure_max_pa,
             "injection.amplified_pressure_max_pa" => self.injection.amplified_pressure_max_pa,
@@ -614,6 +629,7 @@ impl EngineConfig {
             }
             "injection.soi_schedule" => return None,
             "injection.soi_load_retard_rad_per_mg" => self.injection.soi_load_retard_rad_per_mg,
+            "injection.cylinder_delivery_spread" => self.injection.cylinder_delivery_spread,
 
             "combustion.combustion_efficiency" => self.combustion.combustion_efficiency,
             "combustion.cetane_number" => self.combustion.cetane_number,

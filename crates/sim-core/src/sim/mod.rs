@@ -497,6 +497,25 @@ impl Simulation {
         let pressure = state.intake.pressure_pa;
         let temperature = state.intake.temperature_k;
 
+        // Build scatter, drawn here and nowhere else.
+        //
+        // Six bit-identical cylinders sum to a mathematically pure harmonic comb
+        // with no jitter and no amplitude scatter, and the ear is very good at
+        // hearing that: it hears it as synthesised. Real engines have
+        // injector-to-injector delivery scatter and port-to-port flow scatter,
+        // and nothing in a real six is identical to anything else in it.
+        //
+        // Fixed once per reset, never per step and never per cycle. That is what
+        // keeps this compatible with determinism rather than in tension with it:
+        // the same seed gives the same engine bit for bit, so batch invariance
+        // and run-to-run repeatability are untouched. Per-step noise would break
+        // both.
+        //
+        // Drawn for every slot rather than only the live ones, so the stream a
+        // given cylinder index sees does not depend on the cylinder count.
+        let fuel_spread = cfg.injection.cylinder_delivery_spread;
+        let area_spread = cfg.valvetrain.exhaust_area_spread;
+
         for index in 0..MAX_CYLINDERS {
             let offset = derived.phase_offsets_rad.get(index).copied().unwrap_or(0.0);
             let psi = cylinder::signed_cycle_angle(state.crank_angle_rad, offset);
@@ -508,6 +527,8 @@ impl Simulation {
                 cfg.valvetrain.intake_valve_close_rad,
                 cfg.valvetrain.exhaust_valve_open_rad,
             );
+            c.fuel_trim = 1.0 + fuel_spread * (2.0 * state.rng.next_f64() - 1.0);
+            c.exhaust_area_trim = 1.0 + area_spread * (2.0 * state.rng.next_f64() - 1.0);
             state.cylinders[index] = c;
         }
 

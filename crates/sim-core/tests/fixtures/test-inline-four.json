@@ -28,7 +28,8 @@
     "intake_valve_close_rad": -2.7925268,
     "exhaust_valve_open_rad": 2.443461,
     "exhaust_effective_area_m2": 0.0018,
-    "exhaust_ramp_rad": 0.6108652
+    "exhaust_ramp_rad": 0.6108652,
+    "exhaust_area_spread": 0.02
   },
   "injection": {
     "rail_pressure_max_pa": 90000000.0,
@@ -54,7 +55,8 @@
       ]
     },
     "soi_load_retard_rad_per_mg": 0.00045,
-    "stoichiometric_afr": 14.5
+    "stoichiometric_afr": 14.5,
+    "cylinder_delivery_spread": 0.015
   },
   "combustion": {
     "combustion_efficiency": 0.98,
@@ -420,6 +422,16 @@
       "safe_range": [
         -1.00405,
         1.00495
+      ]
+    },
+    {
+      "path": "injection.cylinder_delivery_spread",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.cylinder_delivery_spread`",
+      "purpose": "Gives each cylinder its own delivered fuel quantity for the same command, so the six burns differ slightly in heat release and therefore in pulse amplitude and in clatter. Companion to `valvetrain.exhaust_area_spread` and drawn on the same terms: once per cylinder at reset, from the reset seed. The smoke limit still applies after the trim, so a generous injector on a cylinder short of air is still held to the air it has.",
+      "safe_range": [
+        0.0,
+        0.1
       ]
     },
     {
@@ -940,6 +952,16 @@
       "safe_range": [
         -1.0018,
         1.0072
+      ]
+    },
+    {
+      "path": "valvetrain.exhaust_area_spread",
+      "status": "calibrated",
+      "value_note": "invented test value for `valvetrain.exhaust_area_spread`",
+      "purpose": "Breaks the cylinder-to-cylinder symmetry of the exhaust pulse train. Six bit-identical cylinders sum to a mathematically pure harmonic comb with no jitter and no amplitude scatter, and the ear hears that as synthesised rather than as an engine. Drawn once per cylinder at reset from the reset seed, never per step, so determinism is exact. Deliberately far too small to move any calibration result: a spread that shifts peak power is not modelling a tolerance, and the validator caps it at 0.1 for that reason.",
+      "safe_range": [
+        0.0,
+        0.1
       ]
     },
     {

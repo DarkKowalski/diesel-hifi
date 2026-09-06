@@ -312,3 +312,56 @@ fn the_synthetic_fixture_sweeps_through_the_same_harness() {
         "the smaller synthetic engine must make less power than the OM 471 reference"
     );
 }
+
+/// Build scatter is a realism device and must not be a calibration change.
+///
+/// The per-cylinder trims exist so the six cylinders stop being bit-identical
+/// copies of one another, which is audible. They are deliberately far too small
+/// to matter to torque or power, and this is the test that holds them there: a
+/// plus or minus 2% cylinder trim that shifts peak power is a trim that is too
+/// large, whatever it does for the sound.
+#[test]
+fn the_per_cylinder_build_scatter_does_not_move_the_calibration() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(sim_core::catalog::OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["valvetrain"]["exhaust_area_spread"] = serde_json::json!(0.0);
+    document["injection"]["cylinder_delivery_spread"] = serde_json::json!(0.0);
+    let perfect = EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect("mutated config validates");
+
+    let scattered = dyno::peaks(&full_load_sweep()).expect("the sweep produced points");
+    let even = dyno::peaks(&dyno::sweep(&perfect, sweep_options()).expect("sweep completes"))
+        .expect("the sweep produced points");
+
+    let power_shift = (scattered.peak_power_w - even.peak_power_w) / even.peak_power_w;
+    let torque_shift = (scattered.peak_torque_nm - even.peak_torque_nm) / even.peak_torque_nm;
+    assert!(
+        power_shift.abs() < 0.01,
+        "build scatter moved peak power by {:+.2}% ({:.1} kW scattered against {:.1} kW even); \
+         a trim that moves the calibration is too large",
+        power_shift * 100.0,
+        scattered.peak_power_w / 1000.0,
+        even.peak_power_w / 1000.0
+    );
+    assert!(
+        torque_shift.abs() < 0.01,
+        "build scatter moved peak torque by {:+.2}% ({:.1} Nm against {:.1} Nm)",
+        torque_shift * 100.0,
+        scattered.peak_torque_nm,
+        even.peak_torque_nm
+    );
+
+    // And the peak-pressure envelope is a published limit, so it has to hold
+    // for the scattered engine too rather than only on average.
+    for point in full_load_sweep() {
+        assert!(
+            point.peak_pressure_pa <= ENVELOPE_PA,
+            "at {:.0} rpm the scattered engine peaks at {:.1} bar, past the published \
+             230 bar envelope",
+            point.rpm,
+            point.peak_pressure_pa / 1.0e5
+        );
+    }
+}
