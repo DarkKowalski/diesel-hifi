@@ -123,14 +123,19 @@ fn values_absent_from_the_manual_are_never_classified_as_published() {
         "geometry.firing_order",
         "valvetrain.intake_valve_close_rad",
         "valvetrain.exhaust_valve_open_rad",
-        "combustion.start_of_combustion_rad",
-        "combustion.burn_duration_rad",
-        "combustion.polytropic_compression",
+        "combustion.cetane_number",
+        "combustion.premixed_duration_rad",
+        "combustion.diffusion_duration_rad_per_mg",
         "friction.fmep_constant_pa",
         "inertia.rotating_inertia_kg_m2",
         "governor.overspeed_taper_start_rpm",
         "governor.overspeed_cutoff_rpm",
-        "air_path.intake_manifold_pressure_pa",
+        "air_path.boost_target_schedule",
+        "air_path.charge_temperature_base_k",
+        "injection.soi_schedule",
+        "injection.soi_load_retard_rad_per_mg",
+        "injection.nozzle_hole_diameter_m",
+        "heat_transfer.wall_temperature_k",
     ] {
         assert_eq!(
             status_of(&config, path),
@@ -343,7 +348,7 @@ fn rejects_a_calibrated_value_outside_its_safe_range() {
 #[test]
 fn rejects_a_derived_value_without_inputs() {
     let error = mutate(|d| {
-        let index = entry_index(d, "air_path.gas_constant_j_per_kg_k");
+        let index = entry_index(d, "gas.gas_constant_j_per_kg_k");
         d["provenance"][index]["inputs"] = serde_json::json!([]);
     });
     assert!(error.message.contains("inputs"), "{}", error.message);

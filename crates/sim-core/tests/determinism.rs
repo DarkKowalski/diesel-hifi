@@ -7,8 +7,9 @@ use sim_core::{Controls, Engine, ResetOptions, Snapshot};
 
 /// A fixed control script: (steps to advance, controls to apply first).
 const SCRIPT: &[(u32, Controls)] = &[
+    // Crank until it lights.
     (
-        6_000,
+        20_000,
         Controls {
             pedal: 0.0,
             load_torque_nm: 0.0,
@@ -16,8 +17,9 @@ const SCRIPT: &[(u32, Controls)] = &[
             ignition: true,
         },
     ),
+    // Idle on the governor.
     (
-        10_000,
+        20_000,
         Controls {
             pedal: 0.0,
             load_torque_nm: 0.0,
@@ -25,8 +27,9 @@ const SCRIPT: &[(u32, Controls)] = &[
             ignition: true,
         },
     ),
+    // Pull away under load.
     (
-        10_000,
+        20_000,
         Controls {
             pedal: 0.65,
             load_torque_nm: 400.0,
@@ -34,11 +37,12 @@ const SCRIPT: &[(u32, Controls)] = &[
             ignition: true,
         },
     ),
+    // Back off.
     (
-        8_000,
+        20_000,
         Controls {
             pedal: 0.2,
-            load_torque_nm: 1200.0,
+            load_torque_nm: 300.0,
             starter: false,
             ignition: true,
         },

@@ -56,7 +56,7 @@ test('the worker boots and the selector is populated from the real catalog API',
   await expect(page.getByTestId('disclaimer')).not.toBeEmpty();
 
   // Versions come from the WASM module, so a boot means WASM really loaded.
-  await expect(page.getByTestId('status-bar')).toContainText('api v1');
+  await expect(page.getByTestId('status-bar')).toContainText('api v2');
   await expect(page.getByTestId('status-bar')).toContainText('Web Worker');
 });
 
@@ -162,4 +162,59 @@ test('the built site makes no external network requests', async ({ page }) => {
   await page.waitForTimeout(1_500);
 
   expect(external, `unexpected external requests: ${external.join(', ')}`).toEqual([]);
+});
+
+test('cycle-averaged torque and power appear once the engine runs', async ({ page }) => {
+  await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+
+  // Whole-cycle averages only exist after a complete four-stroke cycle.
+  await expect(page.getByTestId('cycle-averages')).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => numeric(page, 'brake-power')).not.toBeNaN();
+
+  // Milestone 2 combustion telemetry: the published APCRS variant is reported.
+  await expect(page.getByTestId('variant')).toHaveText(/standard|amplified/);
+
+  // Load the engine so the boost schedule actually spools.
+  await page.getByTestId('pedal').fill('90');
+  await page.getByTestId('load').fill('1500');
+  await expect
+    .poll(() => numeric(page, 'intake-pressure'), {
+      timeout: 25_000,
+      message: 'charge pressure should rise above ambient under load',
+    })
+    .toBeGreaterThan(1.1);
+});
+
+test('the dynamometer sweep renders a calibrated curve', async ({ page }) => {
+  await bootstrap(page);
+
+  await expect(page.getByTestId('dyno-chart')).toHaveCount(0);
+  await page.getByTestId('run-sweep').click();
+
+  // The chart appears once every point is measured.
+  await expect(page.getByTestId('dyno-chart')).toBeVisible({ timeout: 120_000 });
+
+  // Peaks are labelled CALIBRATED, never presented as OEM data, and the
+  // published magnitudes are drawn as a separate reference.
+  await expect(page.getByTestId('peak-power-label')).toContainText('CALIBRATED');
+  await expect(page.getByTestId('peak-torque-label')).toContainText('CALIBRATED');
+  await expect(page.getByTestId('dyno-chart')).toContainText('PUBLISHED 375');
+  await expect(page.getByTestId('dyno-chart')).toContainText('PUBLISHED 2500');
+  await expect(page.getByTestId('calibration-note')).toContainText('not OEM data');
+
+  // The measured peaks land near the published magnitudes.
+  const peaks = page.getByTestId('dyno-peaks');
+  await expect(peaks).toBeVisible();
+  const text = await peaks.innerText();
+  const power = Number.parseFloat(text.match(/([\d.]+) kW/)?.[1] ?? 'NaN');
+  const torque = Number.parseFloat(text.match(/([\d]+) N·m/)?.[1] ?? 'NaN');
+  expect(Math.abs(power - 375) / 375).toBeLessThanOrEqual(0.03);
+  expect(Math.abs(torque - 2500) / 2500).toBeLessThanOrEqual(0.03);
+
+  // An accessible table view of the same numbers exists.
+  await page.getByRole('button', { name: 'Show table' }).click();
+  await expect(page.getByTestId('sweep-table')).toBeVisible();
+  expect(await page.getByTestId('sweep-table').locator('tbody tr').count()).toBeGreaterThan(9);
 });

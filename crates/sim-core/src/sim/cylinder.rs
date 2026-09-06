@@ -14,6 +14,8 @@
 //! discontinuity is at TDC overlap, inside the gas-exchange region.
 
 use crate::config::validate::CYCLE_RAD;
+use crate::sim::heat_release::Profile;
+use crate::sim::injection::Event;
 
 /// Which boundary condition currently applies to a cylinder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,16 +34,33 @@ pub struct CylinderState {
     /// Cycle-angle offset of this cylinder relative to cylinder 1.
     pub phase_offset_rad: f64,
     pub phase: Phase,
-    /// Trapped mass (air plus any burned products), kg.
+
+    /// Trapped mass, kg: fresh charge plus residual plus injected fuel.
     pub mass_kg: f64,
     pub temperature_k: f64,
     pub pressure_pa: f64,
-    /// Air mass trapped at intake valve closing, kg.
+
+    /// Motored (no-combustion) pressure trace, needed by the Woschni
+    /// combustion-velocity term and useful for comparison in the UI.
+    pub motored_pressure_pa: f64,
+    pub motored_temperature_k: f64,
+
+    /// Fresh air trapped at intake valve closing, kg. The smoke limit uses this,
+    /// not the total mass, so residual gas correctly reduces available oxygen.
     pub trapped_air_kg: f64,
-    /// Fuel latched for the cycle in progress, kg.
-    pub fuel_charge_kg: f64,
-    /// Cumulative burned fraction already released this cycle, `0..=1`.
+    /// Burned gas carried over from the previous cycle, kg.
+    pub residual_kg: f64,
+    pub residual_temperature_k: f64,
+
+    /// The injection event scheduled for the cycle in progress.
+    pub injection: Event,
+    /// The burn profile, built when injection actually starts.
+    pub profile: Profile,
+    pub profile_ready: bool,
+    /// Cumulative burned fraction released so far this cycle, `0..=1`.
     pub burned_fraction: f64,
+    /// Heat lost to the walls during the cycle in progress, joules.
+    pub wall_heat_loss_j: f64,
 }
 
 impl CylinderState {
@@ -52,9 +71,26 @@ impl CylinderState {
             mass_kg,
             temperature_k,
             pressure_pa,
+            motored_pressure_pa: pressure_pa,
+            motored_temperature_k: temperature_k,
             trapped_air_kg: mass_kg,
-            fuel_charge_kg: 0.0,
+            residual_kg: 0.0,
+            residual_temperature_k: temperature_k,
+            injection: Event::NONE,
+            profile: Profile::NONE,
+            profile_ready: false,
             burned_fraction: 0.0,
+            wall_heat_loss_j: 0.0,
+        }
+    }
+
+    /// Residual gas as a fraction of total trapped mass.
+    pub fn residual_fraction(&self) -> f64 {
+        let total = self.residual_kg + self.trapped_air_kg;
+        if total > 0.0 {
+            self.residual_kg / total
+        } else {
+            0.0
         }
     }
 }

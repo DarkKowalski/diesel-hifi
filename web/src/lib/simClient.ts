@@ -15,8 +15,11 @@ import {
   type Controls,
   type FromWorker,
   type ProvenanceReport,
+  type OperatingPoint,
   type ResetOptions,
   type Snapshot,
+  type SweepOptions,
+  type SweepPeaks,
   type ToWorker,
 } from '../worker/protocol';
 
@@ -42,6 +45,12 @@ export interface ReadyInfo {
 export interface SimClientHandlers {
   onSnapshot?: (snapshot: Snapshot) => void;
   onError?: (error: SimClientError) => void;
+  onSweepProgress?: (done: number, total: number, rpm: number) => void;
+}
+
+export interface SweepResult {
+  points: OperatingPoint[];
+  peaks: SweepPeaks | null;
 }
 
 interface Pending {
@@ -95,6 +104,12 @@ export class SimClient {
 
     if (data.t === 'snapshot' && data.rid === null) {
       this.#handlers.onSnapshot?.(data.snapshot);
+      return;
+    }
+
+    // Progress is a stream on an outstanding request id, not its resolution.
+    if (data.t === 'sweepProgress') {
+      this.#handlers.onSweepProgress?.(data.done, data.total, data.rpm);
       return;
     }
 
@@ -171,6 +186,20 @@ export class SimClient {
 
   async run(running: boolean): Promise<void> {
     await this.#request((rid) => ({ t: 'run', rid, running }));
+  }
+
+  /**
+   * Run a dynamometer sweep.
+   *
+   * Progress arrives through `onSweepProgress`; the promise resolves with the
+   * measured points and their peaks.
+   */
+  async sweep(options: SweepOptions): Promise<SweepResult> {
+    const message = await this.#request((rid) => ({ t: 'sweep', rid, options }));
+    if (message.t !== 'sweepResult') {
+      throw new SimClientError('PROTOCOL', 'expected a sweep result');
+    }
+    return { points: message.points, peaks: message.peaks };
   }
 
   /** Advance an exact number of fixed steps. Deterministic; used by tests. */

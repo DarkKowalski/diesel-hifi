@@ -25,8 +25,11 @@ import {
   PROTOCOL_VERSION,
   type ConfigSummary,
   type FromWorker,
+  type OperatingPoint,
   type ProvenanceReport,
   type Snapshot,
+  type SweepOptions,
+  type SweepPeaks,
   type ToWorker,
 } from './protocol';
 
@@ -137,6 +140,55 @@ function tick(): void {
   scheduleTick();
 }
 
+/**
+ * Measure a dynamometer sweep one point at a time.
+ *
+ * Each point is a separate call into WebAssembly, with a progress message in
+ * between, so a long sweep never blocks the worker for its whole duration and
+ * the UI can show how far along it is.
+ */
+function runSweep(rid: number, options: SweepOptions): void {
+  const sim = requireHandle();
+  // Pausing the live loop keeps the sweep off the same time slice, so a sweep
+  // measured while the engine is running still takes a bounded wall-clock time.
+  const wasRunning = running;
+  stopLoop();
+
+  const speeds = sim.sweepSpeeds(options) as number[];
+  const points: OperatingPoint[] = [];
+  let index = 0;
+
+  const measureNext = (): void => {
+    if (handle === null) return;
+    if (index >= speeds.length) {
+      const peaks = (SimHandle.sweepPeaks(points) ?? null) as SweepPeaks | null;
+      post({ t: 'sweepResult', rid, points, peaks });
+      if (wasRunning) startLoop();
+      return;
+    }
+    const rpm = speeds[index]!;
+    try {
+      points.push(
+        handle.operatingPoint(
+          rpm,
+          options.pedal,
+          options.settleCycles,
+          options.measureCycles,
+        ) as OperatingPoint,
+      );
+    } catch (error) {
+      fail(rid, error);
+      if (wasRunning) startLoop();
+      return;
+    }
+    index += 1;
+    post({ t: 'sweepProgress', rid, done: index, total: speeds.length, rpm });
+    setTimeout(measureNext, 0);
+  };
+
+  measureNext();
+}
+
 async function handleInit(rid: number): Promise<void> {
   if (handle === null) {
     await init({ module_or_path: wasmUrl });
@@ -214,6 +266,11 @@ function dispatch(message: ToWorker): void {
       const sim = requireHandle();
       const snapshot = sim.advance(message.steps) as Snapshot;
       post({ t: 'snapshot', rid: message.rid, snapshot });
+      return;
+    }
+
+    case 'sweep': {
+      runSweep(message.rid, message.options);
       return;
     }
   }

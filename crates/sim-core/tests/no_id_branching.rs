@@ -11,11 +11,24 @@ const SOLVER_SOURCES: &[(&str, &str)] = &[
     ("sim/cylinder.rs", include_str!("../src/sim/cylinder.rs")),
     ("sim/torque.rs", include_str!("../src/sim/torque.rs")),
     ("sim/governor.rs", include_str!("../src/sim/governor.rs")),
+    ("sim/gas.rs", include_str!("../src/sim/gas.rs")),
+    ("sim/injection.rs", include_str!("../src/sim/injection.rs")),
+    (
+        "sim/ignition_delay.rs",
+        include_str!("../src/sim/ignition_delay.rs"),
+    ),
+    (
+        "sim/heat_transfer.rs",
+        include_str!("../src/sim/heat_transfer.rs"),
+    ),
     (
         "sim/heat_release.rs",
         include_str!("../src/sim/heat_release.rs"),
     ),
     ("geometry.rs", include_str!("../src/geometry.rs")),
+    // The dynamometer harness reads whatever configuration it is handed, so it
+    // must be free of engine identity too.
+    ("dyno.rs", include_str!("../src/dyno.rs")),
 ];
 
 /// Identifiers that must never appear in solver code.
@@ -43,6 +56,16 @@ const STEPPING_SOURCES: &[(&str, &str)] = &[
     ("sim/cylinder.rs", include_str!("../src/sim/cylinder.rs")),
     ("sim/torque.rs", include_str!("../src/sim/torque.rs")),
     ("sim/governor.rs", include_str!("../src/sim/governor.rs")),
+    ("sim/gas.rs", include_str!("../src/sim/gas.rs")),
+    ("sim/injection.rs", include_str!("../src/sim/injection.rs")),
+    (
+        "sim/ignition_delay.rs",
+        include_str!("../src/sim/ignition_delay.rs"),
+    ),
+    (
+        "sim/heat_transfer.rs",
+        include_str!("../src/sim/heat_transfer.rs"),
+    ),
     (
         "sim/heat_release.rs",
         include_str!("../src/sim/heat_release.rs"),

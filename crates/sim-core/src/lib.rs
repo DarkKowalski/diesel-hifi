@@ -20,6 +20,7 @@
 
 pub mod catalog;
 pub mod config;
+pub mod dyno;
 pub mod error;
 pub mod geometry;
 pub mod rng;
@@ -28,12 +29,13 @@ pub mod snapshot;
 
 pub use catalog::{Catalog, ConfigSummary, BUILTIN_ENGINE_ID};
 pub use config::{EngineConfig, ProvenanceReport, ProvenanceStatus, ValidatedConfig};
+pub use dyno::{OperatingPoint, SweepOptions, SweepPeaks};
 pub use error::{ErrorCode, Result, SimError};
-pub use sim::{Controls, ResetOptions, Simulation};
+pub use sim::{Controls, CycleAverages, ResetOptions, Simulation};
 pub use snapshot::{RunState, Snapshot};
 
 /// Version of the public engine API. Bump on a breaking change.
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
 
 /// A catalog bound to a running simulation.
 ///
@@ -128,5 +130,36 @@ impl Engine {
     /// Read-only access to the simulation, for tests and diagnostics.
     pub fn simulation(&self) -> &Simulation {
         &self.simulation
+    }
+
+    /// Cycle-averaged results of the most recently completed four-stroke cycle.
+    pub fn cycle_averages(&self) -> CycleAverages {
+        self.simulation.cycle_averages()
+    }
+
+    /// Measure one steady-state operating point on a separate simulation
+    /// instance, leaving the live one untouched.
+    pub fn operating_point(
+        &self,
+        rpm: f64,
+        pedal: f64,
+        settle_cycles: u32,
+        measure_cycles: u32,
+    ) -> Result<OperatingPoint> {
+        dyno::operating_point(
+            self.catalog.active_config(),
+            rpm,
+            pedal,
+            settle_cycles,
+            measure_cycles,
+        )
+    }
+
+    /// Measure a speed sweep of the active configuration.
+    ///
+    /// The speeds at which peak power and peak torque land are an outcome of
+    /// this project's calibration, not published OEM data.
+    pub fn sweep(&self, options: SweepOptions) -> Result<Vec<OperatingPoint>> {
+        dyno::sweep(self.catalog.active_config(), options)
     }
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CONTROLS,
   DEFAULT_RESET,
+  DEFAULT_SWEEP,
   isFromWorker,
   isToWorker,
   PROTOCOL_VERSION,
@@ -25,6 +26,7 @@ describe('isToWorker', () => {
       { t: 'setControls', rid: 6, controls: DEFAULT_CONTROLS },
       { t: 'run', rid: 7, running: true },
       { t: 'stepOnce', rid: 8, steps: 100 },
+      { t: 'sweep', rid: 9, options: DEFAULT_SWEEP },
     ];
     for (const message of messages) {
       expect(isToWorker(message), JSON.stringify(message)).toBe(true);
@@ -56,6 +58,11 @@ describe('isFromWorker', () => {
     expect(isFromWorker({ t: 'ready', rid: 1 })).toBe(true);
   });
 
+  it('accepts sweep progress and results', () => {
+    expect(isFromWorker({ t: 'sweepProgress', rid: 4, done: 2, total: 15, rpm: 800 })).toBe(true);
+    expect(isFromWorker({ t: 'sweepResult', rid: 4, points: [], peaks: null })).toBe(true);
+  });
+
   it('accepts unsolicited snapshots and errors on a null request id', () => {
     expect(isFromWorker({ t: 'snapshot', rid: null, snapshot: {} })).toBe(true);
     expect(isFromWorker({ t: 'error', rid: null, code: 'X', message: 'y' })).toBe(true);
@@ -83,5 +90,15 @@ describe('defaults', () => {
     });
     expect(DEFAULT_RESET.seed).toBe(0);
     expect(DEFAULT_RESET.initialRpm).toBe(0);
+  });
+});
+
+describe('DEFAULT_SWEEP', () => {
+  it('covers the usable speed range at full load', () => {
+    expect(DEFAULT_SWEEP.pedal).toBe(1);
+    expect(DEFAULT_SWEEP.startRpm).toBeLessThan(DEFAULT_SWEEP.endRpm);
+    expect(DEFAULT_SWEEP.stepRpm).toBeGreaterThan(0);
+    expect(DEFAULT_SWEEP.settleCycles).toBeGreaterThan(0);
+    expect(DEFAULT_SWEEP.measureCycles).toBeGreaterThan(0);
   });
 });

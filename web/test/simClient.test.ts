@@ -114,6 +114,38 @@ describe('SimClient', () => {
     expect(onSnapshot).toHaveBeenCalledWith(snapshot);
   });
 
+  it('streams sweep progress without resolving the request, then resolves on the result', async () => {
+    const onSweepProgress = vi.fn();
+    const { client, worker } = makeClient(() => null, { onSweepProgress });
+
+    const pending = client.sweep({
+      startRpm: 800,
+      endRpm: 1000,
+      stepRpm: 100,
+      pedal: 1,
+      settleCycles: 10,
+      measureCycles: 4,
+    });
+    const rid = worker.sent[0]!.rid;
+    expect(worker.sent[0]!.t).toBe('sweep');
+
+    worker.emit({ t: 'sweepProgress', rid, done: 1, total: 3, rpm: 800 });
+    worker.emit({ t: 'sweepProgress', rid, done: 2, total: 3, rpm: 900 });
+    expect(onSweepProgress).toHaveBeenCalledTimes(2);
+    expect(onSweepProgress).toHaveBeenLastCalledWith(2, 3, 900);
+
+    worker.emit({
+      t: 'sweepResult',
+      rid,
+      points: [{ rpm: 800 }, { rpm: 900 }, { rpm: 1000 }],
+      peaks: { peakPowerW: 300000, peakPowerRpm: 1000 },
+    });
+
+    const result = await pending;
+    expect(result.points).toHaveLength(3);
+    expect(result.peaks).toMatchObject({ peakPowerRpm: 1000 });
+  });
+
   it('surfaces worker-initiated errors', () => {
     const onError = vi.fn();
     const { worker } = makeClient(() => null, { onError });

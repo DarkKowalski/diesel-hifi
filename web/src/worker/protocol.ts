@@ -62,8 +62,13 @@ export interface Snapshot {
   rpm: number;
   stepsAdvanced: number;
   cylinderPressurePa: number[];
+  /** Motored (no-combustion) pressure per cylinder, for comparison. */
+  cylinderMotoredPressurePa: number[];
   peakPressurePaCycle: number;
   peakPressurePaSession: number;
+  peakGasTemperatureK: number;
+
+  // Instantaneous torque terms.
   torqueGasNm: number;
   torquePumpingNm: number;
   torqueFrictionNm: number;
@@ -71,12 +76,82 @@ export interface Snapshot {
   torqueStarterNm: number;
   torqueLoadNm: number;
   torqueNetNm: number;
+
+  /**
+   * Whole-cycle averages. Instantaneous torque swings by more than a thousand
+   * newton-metres inside a cycle, so these are the values worth reading for
+   * anything quantitative. Only meaningful once `cycleValid` is set.
+   */
+  cycleValid: boolean;
+  cyclesCompleted: number;
+  indicatedTorqueCycleNm: number;
+  brakeTorqueCycleNm: number;
+  brakePowerCycleW: number;
+  imepPa: number;
+  bmepPa: number;
+  bsfcGPerKwh: number;
+
   fuelPerCycleMg: number;
   fuelDemandMg: number;
+  /** Published APCRS variant: "standard" or "amplified". */
+  injectionVariant: string;
+  injectionPressurePa: number;
+  ignitionDelayRad: number;
+  premixedFraction: number;
+
   intakePressurePa: number;
+  intakeTemperatureK: number;
   exhaustPressurePa: number;
-  peakGasTemperatureK: number;
+  residualFraction: number;
+
   fault?: SimFault | null;
+}
+
+/** Mirrors `sim_core::dyno::OperatingPoint`. */
+export interface OperatingPoint {
+  rpm: number;
+  pedal: number;
+  brakeTorqueNm: number;
+  indicatedTorqueNm: number;
+  frictionTorqueNm: number;
+  pumpingTorqueNm: number;
+  brakePowerW: number;
+  imepPa: number;
+  bmepPa: number;
+  fuelMgPerCycle: number;
+  bsfcGPerKwh: number;
+  peakPressurePa: number;
+  peakGasTemperatureK: number;
+  airFuelRatio: number;
+  intakePressurePa: number;
+  residualFraction: number;
+  converged: boolean;
+}
+
+/** Mirrors `sim_core::dyno::SweepOptions`. */
+export interface SweepOptions {
+  startRpm: number;
+  endRpm: number;
+  stepRpm: number;
+  pedal: number;
+  settleCycles: number;
+  measureCycles: number;
+}
+
+/**
+ * Mirrors `sim_core::dyno::SweepPeaks`.
+ *
+ * The engine speeds here are an outcome of this project's calibration. The
+ * source manual does not publish the speeds at which the real engine reaches
+ * its rated figures, and the UI must label them as calibrated.
+ */
+export interface SweepPeaks {
+  peakPowerW: number;
+  peakPowerRpm: number;
+  peakTorqueNm: number;
+  peakTorqueRpm: number;
+  maxPeakPressurePa: number;
+  bestBsfcGPerKwh: number;
 }
 
 /**
@@ -130,7 +205,9 @@ export type ToWorker =
   | { t: 'setControls'; rid: number; controls: Controls }
   | { t: 'run'; rid: number; running: boolean }
   /** Advance an exact step count with no wall-clock involvement. Deterministic. */
-  | { t: 'stepOnce'; rid: number; steps: number };
+  | { t: 'stepOnce'; rid: number; steps: number }
+  /** Run a dynamometer sweep, reporting progress between points. */
+  | { t: 'sweep'; rid: number; options: SweepOptions };
 
 export type FromWorker =
   | {
@@ -147,6 +224,8 @@ export type FromWorker =
   | { t: 'provenance'; rid: number; report: ProvenanceReport }
   | { t: 'ok'; rid: number }
   | { t: 'snapshot'; rid: number | null; snapshot: Snapshot }
+  | { t: 'sweepProgress'; rid: number; done: number; total: number; rpm: number }
+  | { t: 'sweepResult'; rid: number; points: OperatingPoint[]; peaks: SweepPeaks | null }
   | { t: 'error'; rid: number | null; code: string; message: string };
 
 // --- Guards -----------------------------------------------------------------
@@ -164,6 +243,7 @@ const TO_WORKER_KINDS = new Set<string>([
   'setControls',
   'run',
   'stepOnce',
+  'sweep',
 ]);
 
 const FROM_WORKER_KINDS = new Set<string>([
@@ -172,6 +252,8 @@ const FROM_WORKER_KINDS = new Set<string>([
   'provenance',
   'ok',
   'snapshot',
+  'sweepProgress',
+  'sweepResult',
   'error',
 ]);
 
@@ -207,4 +289,14 @@ export const DEFAULT_CONTROLS: Controls = {
   loadTorqueNm: 0,
   starter: false,
   ignition: false,
+};
+
+/** A full-load sweep across the usable speed range. */
+export const DEFAULT_SWEEP: SweepOptions = {
+  startRpm: 600,
+  endRpm: 2000,
+  stepRpm: 100,
+  pedal: 1,
+  settleCycles: 60,
+  measureCycles: 12,
 };

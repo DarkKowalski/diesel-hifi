@@ -10,10 +10,13 @@ import { SimClient, SimClientError, type ReadyInfo } from './simClient';
 import {
   DEFAULT_CONTROLS,
   DEFAULT_RESET,
+  DEFAULT_SWEEP,
   type ConfigSummary,
   type Controls,
+  type OperatingPoint,
   type ProvenanceReport,
   type Snapshot,
+  type SweepPeaks,
 } from '../worker/protocol';
 
 export type Lifecycle = 'idle' | 'loading' | 'ready' | 'error';
@@ -29,6 +32,13 @@ class SimStore {
   errorMessage = $state<string>('');
   errorCode = $state<string>('');
   running = $state(false);
+
+  // Dynamometer sweep.
+  sweepPoints = $state<OperatingPoint[]>([]);
+  sweepPeaks = $state<SweepPeaks | null>(null);
+  sweepRunning = $state(false);
+  sweepDone = $state(0);
+  sweepTotal = $state(0);
 
   #client: SimClient | null = null;
 
@@ -67,6 +77,10 @@ class SimStore {
           }
         },
         onError: this.#fail,
+        onSweepProgress: (done, total) => {
+          this.sweepDone = done;
+          this.sweepTotal = total;
+        },
       });
       this.ready = await this.#client.init();
       this.configs = await this.#client.listConfigs();
@@ -93,6 +107,9 @@ class SimStore {
       await client.selectConfig(id);
       this.activeId = id;
       this.provenance = await client.provenance();
+      // A sweep belongs to the configuration it was measured on.
+      this.sweepPoints = [];
+      this.sweepPeaks = null;
       this.controls = { ...DEFAULT_CONTROLS };
       this.running = false;
       this.clearError();
@@ -120,6 +137,26 @@ class SimStore {
   /** Cut fuelling. The engine coasts down under friction. */
   async stopEngine(): Promise<void> {
     await this.setControls({ ignition: false, starter: false, pedal: 0 });
+  }
+
+  /**
+   * Measure a full-load dynamometer sweep.
+   *
+   * The peak speeds this returns are an outcome of the project's calibration,
+   * not published OEM data, and the UI labels them accordingly.
+   */
+  async runSweep(): Promise<void> {
+    if (this.sweepRunning) return;
+    this.sweepRunning = true;
+    this.sweepDone = 0;
+    this.sweepTotal = 0;
+    this.clearError();
+    await this.#withClient(async (client) => {
+      const result = await client.sweep({ ...DEFAULT_SWEEP });
+      this.sweepPoints = result.points;
+      this.sweepPeaks = result.peaks;
+    });
+    this.sweepRunning = false;
   }
 
   async resetSimulation(): Promise<void> {

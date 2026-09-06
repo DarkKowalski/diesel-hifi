@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "identity": {
     "id": "synthetic-test-inline-four",
     "display_name": "Synthetic Inline-Four Test Engine",
@@ -32,16 +32,51 @@
     "rail_pressure_max_pa": 90000000.0,
     "amplified_pressure_max_pa": 210000000.0,
     "fuel_lower_heating_value_j_per_kg": 42700000.0,
-    "max_fuel_mg_per_cycle": 120.0,
-    "smoke_limit_afr": 22.0
+    "fuel_density_kg_m3": 832.0,
+    "max_fuel_mg_per_cycle": 150.0,
+    "smoke_limit_afr": 21.0,
+    "nozzle_hole_count": 7,
+    "nozzle_hole_diameter_m": 0.00015,
+    "discharge_coefficient": 0.75,
+    "amplified_variant_min_fuel_mg": 60.0,
+    "soi_schedule": {
+      "breakpoints": [
+        700.0,
+        1400.0,
+        2200.0
+      ],
+      "values": [
+        -0.1570796,
+        -0.1919862,
+        -0.2443461
+      ]
+    },
+    "soi_load_retard_rad_per_mg": 0.00045
   },
   "combustion": {
-    "start_of_combustion_rad": -0.0872665,
-    "burn_duration_rad": 0.6981317,
     "combustion_efficiency": 0.98,
-    "burned_gas_cv_j_per_kg_k": 1150.0,
-    "polytropic_compression": 1.35,
-    "polytropic_expansion": 1.3
+    "cetane_number": 50.0,
+    "premixed_wiebe_shape": 2.0,
+    "premixed_wiebe_efficiency": 6.908,
+    "premixed_duration_rad": 0.1745329,
+    "diffusion_wiebe_shape": 0.9,
+    "diffusion_wiebe_efficiency": 6.908,
+    "diffusion_duration_rad_per_mg": 0.0028,
+    "diffusion_duration_min_rad": 0.2617994,
+    "max_premixed_fraction": 0.85
+  },
+  "heat_transfer": {
+    "enabled": true,
+    "woschni_c1_closed": 2.28,
+    "woschni_c1_gas_exchange": 6.18,
+    "woschni_c2": 0.00324,
+    "wall_temperature_k": 480.0
+  },
+  "gas": {
+    "gas_constant_j_per_kg_k": 287.0528,
+    "cv_reference_j_per_kg_k": 718.0,
+    "cv_slope_j_per_kg_k2": 0.18,
+    "reference_temperature_k": 300.0
   },
   "friction": {
     "fmep_constant_pa": 60000.0,
@@ -50,11 +85,28 @@
     "fmep_piston_speed_sq_coeff": 130.0
   },
   "air_path": {
-    "intake_manifold_pressure_pa": 101325.0,
-    "intake_manifold_temperature_k": 320.0,
+    "ambient_pressure_pa": 101325.0,
+    "ambient_temperature_k": 293.15,
+    "boost_target_schedule": {
+      "breakpoints": [
+        700.0,
+        1400.0,
+        1900.0,
+        2300.0
+      ],
+      "values": [
+        120000.0,
+        170000.0,
+        160000.0,
+        140000.0
+      ]
+    },
+    "boost_response_time_s": 0.6,
+    "charge_temperature_base_k": 315.0,
+    "charge_temperature_per_bar_k": 12.0,
     "exhaust_manifold_pressure_pa": 106000.0,
+    "exhaust_pressure_per_bar_boost": 100000.0,
     "crankcase_pressure_pa": 101325.0,
-    "gas_constant_j_per_kg_k": 287.0528,
     "volumetric_efficiency": 0.92
   },
   "governor": {
@@ -257,13 +309,23 @@
       ]
     },
     {
+      "path": "injection.fuel_density_kg_m3",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.fuel_density_kg_m3`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -7489.0,
+        9153.0
+      ]
+    },
+    {
       "path": "injection.max_fuel_mg_per_cycle",
       "status": "calibrated",
       "value_note": "invented test value for `injection.max_fuel_mg_per_cycle`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -1081.0,
-        1321.0
+        -1351.0,
+        1651.0
       ]
     },
     {
@@ -272,28 +334,68 @@
       "value_note": "invented test value for `injection.smoke_limit_afr`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -199.0,
-        243.0
+        -190.0,
+        232.0
       ]
     },
     {
-      "path": "combustion.start_of_combustion_rad",
+      "path": "injection.nozzle_hole_count",
       "status": "calibrated",
-      "value_note": "invented test value for `combustion.start_of_combustion_rad`",
+      "value_note": "invented test value for `injection.nozzle_hole_count`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -1.9599315000000002,
-        1.7853984999999999
+        -64.0,
+        78.0
       ]
     },
     {
-      "path": "combustion.burn_duration_rad",
+      "path": "injection.nozzle_hole_diameter_m",
       "status": "calibrated",
-      "value_note": "invented test value for `combustion.burn_duration_rad`",
+      "value_note": "invented test value for `injection.nozzle_hole_diameter_m`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -7.2831853,
-        8.679448700000002
+        -1.00135,
+        1.00165
+      ]
+    },
+    {
+      "path": "injection.discharge_coefficient",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.discharge_coefficient`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -7.75,
+        9.25
+      ]
+    },
+    {
+      "path": "injection.amplified_variant_min_fuel_mg",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.amplified_variant_min_fuel_mg`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -541.0,
+        661.0
+      ]
+    },
+    {
+      "path": "injection.soi_schedule",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.soi_schedule`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.0,
+        1.0
+      ]
+    },
+    {
+      "path": "injection.soi_load_retard_rad_per_mg",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.soi_load_retard_rad_per_mg`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.00405,
+        1.00495
       ]
     },
     {
@@ -307,33 +409,183 @@
       ]
     },
     {
-      "path": "combustion.burned_gas_cv_j_per_kg_k",
+      "path": "combustion.cetane_number",
       "status": "calibrated",
-      "value_note": "invented test value for `combustion.burned_gas_cv_j_per_kg_k`",
+      "value_note": "invented test value for `combustion.cetane_number`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -10351.0,
-        12651.0
+        -451.0,
+        551.0
       ]
     },
     {
-      "path": "combustion.polytropic_compression",
+      "path": "combustion.premixed_wiebe_shape",
       "status": "calibrated",
-      "value_note": "invented test value for `combustion.polytropic_compression`",
+      "value_note": "invented test value for `combustion.premixed_wiebe_shape`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -13.15,
-        15.85
+        -19.0,
+        23.0
       ]
     },
     {
-      "path": "combustion.polytropic_expansion",
+      "path": "combustion.premixed_wiebe_efficiency",
       "status": "calibrated",
-      "value_note": "invented test value for `combustion.polytropic_expansion`",
+      "value_note": "invented test value for `combustion.premixed_wiebe_efficiency`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -12.7,
-        15.3
+        -63.172,
+        76.988
+      ]
+    },
+    {
+      "path": "combustion.premixed_duration_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.premixed_duration_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2.5707961,
+        2.9198619
+      ]
+    },
+    {
+      "path": "combustion.diffusion_wiebe_shape",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.diffusion_wiebe_shape`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -9.1,
+        10.9
+      ]
+    },
+    {
+      "path": "combustion.diffusion_wiebe_efficiency",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.diffusion_wiebe_efficiency`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -63.172,
+        76.988
+      ]
+    },
+    {
+      "path": "combustion.diffusion_duration_rad_per_mg",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.diffusion_duration_rad_per_mg`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.0252,
+        1.0308
+      ]
+    },
+    {
+      "path": "combustion.diffusion_duration_min_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.diffusion_duration_min_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -3.3561946000000002,
+        3.8797934000000005
+      ]
+    },
+    {
+      "path": "combustion.max_premixed_fraction",
+      "status": "calibrated",
+      "value_note": "invented test value for `combustion.max_premixed_fraction`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -8.65,
+        10.35
+      ]
+    },
+    {
+      "path": "heat_transfer.enabled",
+      "status": "calibrated",
+      "value_note": "invented test value for `heat_transfer.enabled`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.0,
+        1.0
+      ]
+    },
+    {
+      "path": "heat_transfer.woschni_c1_closed",
+      "status": "calibrated",
+      "value_note": "invented test value for `heat_transfer.woschni_c1_closed`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -21.519999999999996,
+        26.08
+      ]
+    },
+    {
+      "path": "heat_transfer.woschni_c1_gas_exchange",
+      "status": "calibrated",
+      "value_note": "invented test value for `heat_transfer.woschni_c1_gas_exchange`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -56.62,
+        68.97999999999999
+      ]
+    },
+    {
+      "path": "heat_transfer.woschni_c2",
+      "status": "calibrated",
+      "value_note": "invented test value for `heat_transfer.woschni_c2`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.02916,
+        1.03564
+      ]
+    },
+    {
+      "path": "heat_transfer.wall_temperature_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `heat_transfer.wall_temperature_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -4321.0,
+        5281.0
+      ]
+    },
+    {
+      "path": "gas.gas_constant_j_per_kg_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `gas.gas_constant_j_per_kg_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2584.4752,
+        3158.5807999999997
+      ]
+    },
+    {
+      "path": "gas.cv_reference_j_per_kg_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `gas.cv_reference_j_per_kg_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -6463.0,
+        7899.0
+      ]
+    },
+    {
+      "path": "gas.cv_slope_j_per_kg_k2",
+      "status": "calibrated",
+      "value_note": "invented test value for `gas.cv_slope_j_per_kg_k2`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2.62,
+        2.9799999999999995
+      ]
+    },
+    {
+      "path": "gas.reference_temperature_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `gas.reference_temperature_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2701.0,
+        3301.0
       ]
     },
     {
@@ -377,9 +629,9 @@
       ]
     },
     {
-      "path": "air_path.intake_manifold_pressure_pa",
+      "path": "air_path.ambient_pressure_pa",
       "status": "calibrated",
-      "value_note": "invented test value for `air_path.intake_manifold_pressure_pa`",
+      "value_note": "invented test value for `air_path.ambient_pressure_pa`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
         -911926.0,
@@ -387,13 +639,53 @@
       ]
     },
     {
-      "path": "air_path.intake_manifold_temperature_k",
+      "path": "air_path.ambient_temperature_k",
       "status": "calibrated",
-      "value_note": "invented test value for `air_path.intake_manifold_temperature_k`",
+      "value_note": "invented test value for `air_path.ambient_temperature_k`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -2881.0,
-        3521.0
+        -2639.35,
+        3225.65
+      ]
+    },
+    {
+      "path": "air_path.boost_target_schedule",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.boost_target_schedule`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -1.0,
+        1.0
+      ]
+    },
+    {
+      "path": "air_path.boost_response_time_s",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.boost_response_time_s`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -6.4,
+        7.6
+      ]
+    },
+    {
+      "path": "air_path.charge_temperature_base_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.charge_temperature_base_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -2836.0,
+        3466.0
+      ]
+    },
+    {
+      "path": "air_path.charge_temperature_per_bar_k",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.charge_temperature_per_bar_k`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -109.0,
+        133.0
       ]
     },
     {
@@ -407,6 +699,16 @@
       ]
     },
     {
+      "path": "air_path.exhaust_pressure_per_bar_boost",
+      "status": "calibrated",
+      "value_note": "invented test value for `air_path.exhaust_pressure_per_bar_boost`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        -900001.0,
+        1100001.0
+      ]
+    },
+    {
       "path": "air_path.crankcase_pressure_pa",
       "status": "calibrated",
       "value_note": "invented test value for `air_path.crankcase_pressure_pa`",
@@ -414,16 +716,6 @@
       "safe_range": [
         -911926.0,
         1114576.0
-      ]
-    },
-    {
-      "path": "air_path.gas_constant_j_per_kg_k",
-      "status": "calibrated",
-      "value_note": "invented test value for `air_path.gas_constant_j_per_kg_k`",
-      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
-      "safe_range": [
-        -2584.4752,
-        3158.5807999999997
       ]
     },
     {
@@ -532,8 +824,8 @@
       "value_note": "invented test value for `load.starter_torque_nm`",
       "purpose": "Test fixture only; exists to exercise the same solver with different data.",
       "safe_range": [
-        -3601.0,
-        4401.0
+        -10801.0,
+        13201.0
       ]
     },
     {

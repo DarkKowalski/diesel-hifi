@@ -246,50 +246,115 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         i.fuel_lower_heating_value_j_per_kg,
         "injection.fuel_lower_heating_value_j_per_kg",
     )?;
+    finite_positive(i.fuel_density_kg_m3, "injection.fuel_density_kg_m3")?;
     finite_positive(i.max_fuel_mg_per_cycle, "injection.max_fuel_mg_per_cycle")?;
     finite_positive(i.smoke_limit_afr, "injection.smoke_limit_afr")?;
+    require(
+        i.nozzle_hole_count >= 1,
+        "injection.nozzle_hole_count must be at least 1",
+    )?;
+    finite_positive(i.nozzle_hole_diameter_m, "injection.nozzle_hole_diameter_m")?;
+    require(
+        i.discharge_coefficient > 0.0 && i.discharge_coefficient <= 1.0,
+        "injection.discharge_coefficient must fall in (0, 1]",
+    )?;
+    require(
+        i.amplified_variant_min_fuel_mg >= 0.0,
+        "injection.amplified_variant_min_fuel_mg must not be negative",
+    )?;
+    i.soi_schedule.validate("injection.soi_schedule")?;
+    require(
+        i.soi_schedule.min_value() > -PI && i.soi_schedule.max_value() < PI,
+        "injection.soi_schedule values must fall in (-PI, PI) relative to firing TDC",
+    )?;
+    require(
+        i.soi_load_retard_rad_per_mg >= 0.0 && i.soi_load_retard_rad_per_mg < 0.01,
+        "injection.soi_load_retard_rad_per_mg must fall in [0, 0.01)",
+    )?;
 
     let c = &config.combustion;
-    require(
-        c.start_of_combustion_rad > -PI && c.start_of_combustion_rad < PI,
-        "combustion.start_of_combustion_rad must fall in (-PI, PI) relative to firing TDC",
-    )?;
-    finite_positive(c.burn_duration_rad, "combustion.burn_duration_rad")?;
     require(
         c.combustion_efficiency > 0.0 && c.combustion_efficiency <= 1.0,
         "combustion.combustion_efficiency must fall in (0, 1]",
     )?;
+    require(
+        c.cetane_number > 0.0 && c.cetane_number < 100.0,
+        "combustion.cetane_number must fall in (0, 100)",
+    )?;
+    finite_positive(c.premixed_wiebe_shape, "combustion.premixed_wiebe_shape")?;
     finite_positive(
-        c.burned_gas_cv_j_per_kg_k,
-        "combustion.burned_gas_cv_j_per_kg_k",
+        c.premixed_wiebe_efficiency,
+        "combustion.premixed_wiebe_efficiency",
+    )?;
+    finite_positive(c.premixed_duration_rad, "combustion.premixed_duration_rad")?;
+    finite_positive(c.diffusion_wiebe_shape, "combustion.diffusion_wiebe_shape")?;
+    finite_positive(
+        c.diffusion_wiebe_efficiency,
+        "combustion.diffusion_wiebe_efficiency",
+    )?;
+    finite_positive(
+        c.diffusion_duration_rad_per_mg,
+        "combustion.diffusion_duration_rad_per_mg",
+    )?;
+    finite_positive(
+        c.diffusion_duration_min_rad,
+        "combustion.diffusion_duration_min_rad",
     )?;
     require(
-        c.polytropic_compression > 1.0 && c.polytropic_compression < 2.0,
-        "combustion.polytropic_compression must fall in (1, 2)",
-    )?;
-    require(
-        c.polytropic_expansion > 1.0 && c.polytropic_expansion < 2.0,
-        "combustion.polytropic_expansion must fall in (1, 2)",
+        c.max_premixed_fraction > 0.0 && c.max_premixed_fraction <= 1.0,
+        "combustion.max_premixed_fraction must fall in (0, 1]",
     )?;
 
+    let ht = &config.heat_transfer;
+    require(
+        ht.woschni_c1_closed > 0.0 && ht.woschni_c1_gas_exchange > 0.0,
+        "Woschni C1 coefficients must be positive",
+    )?;
+    require(
+        ht.woschni_c2 >= 0.0,
+        "heat_transfer.woschni_c2 must not be negative",
+    )?;
+    finite_positive(ht.wall_temperature_k, "heat_transfer.wall_temperature_k")?;
+
+    let gas = &config.gas;
+    finite_positive(gas.gas_constant_j_per_kg_k, "gas.gas_constant_j_per_kg_k")?;
+    finite_positive(gas.cv_reference_j_per_kg_k, "gas.cv_reference_j_per_kg_k")?;
+    require(
+        gas.cv_slope_j_per_kg_k2 >= 0.0,
+        "gas.cv_slope_j_per_kg_k2 must not be negative",
+    )?;
+    finite_positive(gas.reference_temperature_k, "gas.reference_temperature_k")?;
+
     let a = &config.air_path;
-    finite_positive(
-        a.intake_manifold_pressure_pa,
-        "air_path.intake_manifold_pressure_pa",
+    finite_positive(a.ambient_pressure_pa, "air_path.ambient_pressure_pa")?;
+    finite_positive(a.ambient_temperature_k, "air_path.ambient_temperature_k")?;
+    a.boost_target_schedule
+        .validate("air_path.boost_target_schedule")?;
+    require(
+        a.boost_target_schedule.min_value() >= a.ambient_pressure_pa,
+        "air_path.boost_target_schedule must never fall below ambient pressure",
+    )?;
+    require(
+        a.boost_response_time_s > 0.0 && a.boost_response_time_s <= 10.0,
+        "air_path.boost_response_time_s must fall in (0, 10] seconds",
     )?;
     finite_positive(
-        a.intake_manifold_temperature_k,
-        "air_path.intake_manifold_temperature_k",
+        a.charge_temperature_base_k,
+        "air_path.charge_temperature_base_k",
+    )?;
+    require(
+        a.charge_temperature_per_bar_k >= 0.0,
+        "air_path.charge_temperature_per_bar_k must not be negative",
     )?;
     finite_positive(
         a.exhaust_manifold_pressure_pa,
         "air_path.exhaust_manifold_pressure_pa",
     )?;
-    finite_positive(a.crankcase_pressure_pa, "air_path.crankcase_pressure_pa")?;
-    finite_positive(
-        a.gas_constant_j_per_kg_k,
-        "air_path.gas_constant_j_per_kg_k",
+    require(
+        a.exhaust_pressure_per_bar_boost >= 0.0,
+        "air_path.exhaust_pressure_per_bar_boost must not be negative",
     )?;
+    finite_positive(a.crankcase_pressure_pa, "air_path.crankcase_pressure_pa")?;
     require(
         a.volumetric_efficiency > 0.0 && a.volumetric_efficiency <= 1.5,
         "air_path.volumetric_efficiency must fall in (0, 1.5]",

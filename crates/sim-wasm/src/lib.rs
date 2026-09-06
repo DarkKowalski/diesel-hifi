@@ -15,6 +15,7 @@ use serde::Serialize;
 use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::prelude::*;
 
+use sim_core::dyno::{self, SweepOptions};
 use sim_core::{Controls, Engine, ResetOptions, SimError, API_VERSION};
 
 /// Version of the WASM API surface.
@@ -147,5 +148,62 @@ impl SimHandle {
     #[wasm_bindgen(js_name = maxStepsPerBatch)]
     pub fn max_steps_per_batch(&self) -> u32 {
         self.engine.max_steps_per_batch()
+    }
+
+    /// Measure one steady-state dynamometer point on the active configuration.
+    ///
+    /// Runs on a separate simulation instance, so the live one keeps running
+    /// untouched. The caller drives the sweep one point at a time so the worker
+    /// can report progress and stay responsive.
+    #[wasm_bindgen(js_name = operatingPoint)]
+    pub fn operating_point(
+        &self,
+        rpm: f64,
+        pedal: f64,
+        settle_cycles: u32,
+        measure_cycles: u32,
+    ) -> Result<JsValue, JsValue> {
+        let point = self
+            .engine
+            .operating_point(rpm, pedal, settle_cycles, measure_cycles)
+            .map_err(sim_error)?;
+        to_js(&point)
+    }
+
+    /// Measure a whole speed sweep in one call.
+    #[wasm_bindgen(js_name = sweep)]
+    pub fn sweep(&self, options: JsValue) -> Result<JsValue, JsValue> {
+        let options: SweepOptions = if options.is_undefined() || options.is_null() {
+            SweepOptions::default()
+        } else {
+            from_js(options, "sweep options")?
+        };
+        let points = self.engine.sweep(options).map_err(sim_error)?;
+        to_js(&points)
+    }
+
+    /// The engine speeds a sweep would visit, so the UI can show progress.
+    #[wasm_bindgen(js_name = sweepSpeeds)]
+    pub fn sweep_speeds(&self, options: JsValue) -> Result<JsValue, JsValue> {
+        let options: SweepOptions = if options.is_undefined() || options.is_null() {
+            SweepOptions::default()
+        } else {
+            from_js(options, "sweep options")?
+        };
+        to_js(&options.speeds())
+    }
+
+    /// Peak power and torque of a measured sweep.
+    ///
+    /// The speeds reported here are an outcome of this project's calibration.
+    /// The source manual does not publish the speeds at which the real engine
+    /// reaches its rated figures.
+    #[wasm_bindgen(js_name = sweepPeaks)]
+    pub fn sweep_peaks(points: JsValue) -> Result<JsValue, JsValue> {
+        let points: Vec<sim_core::OperatingPoint> = from_js(points, "sweep points")?;
+        match dyno::peaks(&points) {
+            Some(peaks) => to_js(&peaks),
+            None => Ok(JsValue::NULL),
+        }
     }
 }

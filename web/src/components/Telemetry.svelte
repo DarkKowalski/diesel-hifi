@@ -32,10 +32,35 @@
       <div><dt>Load torque</dt><dd>{nm(snapshot.torqueLoadNm)} N m</dd></div>
       <div><dt>Net torque</dt><dd data-testid="torque-net">{nm(snapshot.torqueNetNm)} N m</dd></div>
       <div><dt>Fuel per cycle</dt><dd data-testid="fuel">{mg(snapshot.fuelPerCycleMg)} mg</dd></div>
+      <div><dt>Injection variant</dt><dd data-testid="variant">{snapshot.injectionVariant}</dd></div>
+      <div><dt>Injection pressure</dt><dd>{bar(snapshot.injectionPressurePa)} bar</dd></div>
+      <div><dt>Ignition delay</dt><dd>{degrees(snapshot.ignitionDelayRad)}°</dd></div>
+      <div><dt>Premixed fraction</dt><dd>{(snapshot.premixedFraction * 100).toFixed(0)}%</dd></div>
+      <div><dt>Residual gas</dt><dd>{(snapshot.residualFraction * 100).toFixed(1)}%</dd></div>
       <div><dt>Fuel demand</dt><dd>{mg(snapshot.fuelDemandMg)} mg</dd></div>
-      <div><dt>Intake pressure</dt><dd>{bar(snapshot.intakePressurePa)} bar</dd></div>
+      <div><dt>Intake pressure</dt><dd data-testid="intake-pressure">{bar(snapshot.intakePressurePa)} bar</dd></div>
+      <div><dt>Intake temperature</dt><dd>{kelvin(snapshot.intakeTemperatureK)} K</dd></div>
       <div><dt>Exhaust pressure</dt><dd>{bar(snapshot.exhaustPressurePa)} bar</dd></div>
     </dl>
+
+    <h3>Whole-cycle averages</h3>
+    {#if !snapshot.cycleValid}
+      <p class="muted small">No complete four-stroke cycle yet.</p>
+    {:else}
+      <dl class="grid" data-testid="cycle-averages">
+        <div><dt>Brake torque</dt><dd data-testid="brake-torque">{nm(snapshot.brakeTorqueCycleNm)} N m</dd></div>
+        <div><dt>Indicated torque</dt><dd>{nm(snapshot.indicatedTorqueCycleNm)} N m</dd></div>
+        <div><dt>Brake power</dt><dd data-testid="brake-power">{(snapshot.brakePowerCycleW / 1000).toFixed(1)} kW</dd></div>
+        <div><dt>BMEP</dt><dd>{bar(snapshot.bmepPa)} bar</dd></div>
+        <div><dt>IMEP</dt><dd>{bar(snapshot.imepPa)} bar</dd></div>
+        <div><dt>Fuel consumption</dt><dd>{snapshot.bsfcGPerKwh.toFixed(0)} g/kW·h</dd></div>
+        <div><dt>Cycles completed</dt><dd>{snapshot.cyclesCompleted}</dd></div>
+      </dl>
+      <p class="muted small">
+        Instantaneous torque swings by more than a thousand newton-metres inside a cycle. These
+        whole-cycle averages are the values worth reading.
+      </p>
+    {/if}
 
     <h3>Cylinder pressure</h3>
     <ol class="cylinders" data-testid="cylinders">
@@ -54,8 +79,8 @@
     </ol>
     <p class="muted small">
       The bar scale is the published 230 bar combustion-pressure envelope, used here as a validation
-      limit rather than a target. Milestone 1 runs naturally aspirated, so pressures stay far below
-      it.
+      limit rather than a target. Under the calibrated boost schedule a full-load cycle now
+      approaches it, which is what makes the envelope a real constraint on injection timing.
     </p>
   {/if}
 </section>

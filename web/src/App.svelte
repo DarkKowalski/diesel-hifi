@@ -1,5 +1,6 @@
 <script lang="ts">
   import Controls from './components/Controls.svelte';
+  import DynoPanel from './components/DynoPanel.svelte';
   import EngineSelector from './components/EngineSelector.svelte';
   import ProvenancePanel from './components/ProvenancePanel.svelte';
   import StatusBar from './components/StatusBar.svelte';
@@ -37,6 +38,7 @@
     </div>
     <div class="column">
       <Telemetry />
+      <DynoPanel />
     </div>
   </div>
 
@@ -44,8 +46,9 @@
 
   <footer class="muted small">
     Mercedes-Benz and OM 471 are used as factual references only. No OEM endorsement is implied.
-    Milestone 1 excludes turbocharger, EGR, aftertreatment, engine-brake, and audio modelling; the
-    combustion path is an explicitly labelled placeholder.
+    Milestone 2 models injection, ignition delay, double-Wiebe heat release and wall heat
+    transfer, and prescribes charge pressure from a calibrated boost schedule. Turbocharger and
+    EGR dynamics, aftertreatment, the engine brake, and audio are not modelled yet.
   </footer>
 </main>
 
