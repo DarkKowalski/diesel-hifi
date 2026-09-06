@@ -8,7 +8,7 @@
 //! Two paths radiate, and they are summed at the end rather than in series:
 //!
 //! ```text
-//! source     = sum over cylinders of  a(psi) * (p_cyl - p_exhaust) / p_ambient
+//! source     = sum over cylinders of  net port mass flow, kg/s
 //! exhaust    = lowpass(lowpass(highpass(d(source)/dt)))    out of the pipe
 //! forcing    = d( sum over cylinders of p_cyl / p_ambient )/dt
 //! structural = sum over modes of  gain_k * resonator_k(forcing)   off the iron
@@ -20,6 +20,37 @@
 //! volume flow through it. Radiating the flow itself instead loses 6 dB per
 //! octave, which pushes almost all the energy below the range an ordinary
 //! speaker can reproduce at all — the signal measures fine and is inaudible.
+//!
+//! ## What the exhaust source is, and what it used to be
+//!
+//! The source is the mass flow `flow::exchange` actually passed through the
+//! port, summed over cylinders. It is not computed here: `step.rs` accumulates
+//! it from the transfers it already performs, so the model radiates the quantity
+//! it solved rather than a second quantity resembling it.
+//!
+//! It used to be `area(psi) * (p_cyl - p_exhaust) / p_ambient`, computed beside
+//! the exchange call. That proxy is linear in the pressure difference, while
+//! real orifice flow goes as its square root and saturates once the throat
+//! chokes — so the proxy exaggerated the peak of the blowdown and changed shape
+//! against the truth right through the choked-to-subsonic transition. The pulse
+//! shape is the timbre, so that was audible rather than academic.
+//!
+//! Two properties of the flow matter and both come from `flow.rs` rather than
+//! from here. It is the **clamped and settled** flow, not a fresh unclamped
+//! orifice call: the unclamped explicit flow carries a two-sample limit cycle at
+//! Nyquist which is invisible in the pressure trace and glaring in the audio,
+//! because the radiation derivative amplifies with frequency. And it is signed,
+//! so backflow into a cylinder is a negative contribution without any special
+//! case.
+//!
+//! A cylinder exchanging no gas contributes nothing, however high its pressure
+//! climbs — and *two* things can open its port. The normal exhaust event is one.
+//! The other is the decompression brake, whose release lobe cracks a valve at the
+//! top of compression, when the cylinder-to-manifold pressure difference is larger
+//! than ordinary blowdown ever sees. Both go through `flow::exchange`, so the
+//! brake's bark is on the same scale as the exhaust pulse by construction rather
+//! than by calibration, and the two can never both open the port in one step
+//! because a cylinder is in exactly one phase.
 //!
 //! ## Why the structural path is summed last
 //!
@@ -58,8 +89,6 @@
 
 use crate::config::validate::CYCLE_RAD;
 use crate::config::{AudioCalibration, StructuralMode};
-
-use super::cylinder::Phase;
 
 /// Smooth 0 to 1 ramp, continuous at both ends.
 #[inline]
@@ -122,46 +151,6 @@ impl Port {
         self.effective_area_m2
             * port_area_fraction(psi, self.valve_open_rad, self.ramp_rad, CYCLE_RAD)
     }
-}
-
-/// Contribution of one cylinder to the acoustic source, in square metres.
-///
-/// Open port area times the pressure difference driving gas through it, scaled
-/// by ambient so the result does not depend on the absolute pressure unit. A
-/// larger port makes a louder pulse, which is why the effective area is a real
-/// input rather than a normalised shape.
-///
-/// A cylinder makes no sound at the tailpipe unless something is open, however
-/// high its pressure climbs — but *two* things can be open. The normal exhaust
-/// event is one. The other is the decompression brake, whose release lobe cracks
-/// a valve at the top of compression, when the cylinder-to-manifold pressure
-/// difference is larger than it ever is during ordinary blowdown. Passing that
-/// area in through the same expression is why the brake's hard staccato bark is
-/// an output of the model rather than an effect layered on top of it.
-///
-/// `brake_area_m2` is zero whenever the brake is not acting on this cylinder.
-#[inline]
-pub fn cylinder_source(
-    phase: Phase,
-    psi: f64,
-    cylinder_pressure_pa: f64,
-    exhaust_pressure_pa: f64,
-    ambient_pressure_pa: f64,
-    port: &Port,
-    brake_area_m2: f64,
-) -> f64 {
-    if ambient_pressure_pa <= 0.0 {
-        return 0.0;
-    }
-    let exhaust_area_m2 = if phase == Phase::Exhaust {
-        port.area_m2(psi)
-    } else {
-        0.0
-    };
-    // The brake uses one of the same valves, so the two areas never add: at any
-    // angle the port is as open as whichever event has it open.
-    let area_m2 = exhaust_area_m2.max(brake_area_m2);
-    area_m2 * (cylinder_pressure_pa - exhaust_pressure_pa) / ambient_pressure_pa
 }
 
 /// Soft clipper: linear for small signals, saturating at `knee`.
@@ -544,11 +533,6 @@ mod tests {
     /// 35 degrees, the calibrated ramp width.
     const RAMP: f64 = 0.6109;
 
-    const PORT: Port = Port {
-        effective_area_m2: 2.5e-3,
-        valve_open_rad: 2.4,
-        ramp_rad: RAMP,
-    };
     use crate::config::validate::CYCLE_RAD;
 
     /// The solver step these tests assume, so 40 kHz.
@@ -661,93 +645,6 @@ mod tests {
             let a = port_area_fraction(psi, evo, RAMP, CYCLE_RAD);
             assert!((0.0..=1.0).contains(&a), "area {a} at psi {psi}");
         }
-    }
-
-    #[test]
-    fn a_closed_cylinder_contributes_nothing_however_high_its_pressure() {
-        let s = cylinder_source(Phase::Closed, 0.0, 20.0e6, 200_000.0, 101_325.0, &PORT, 0.0);
-        assert_eq!(s, 0.0);
-    }
-
-    #[test]
-    fn a_braked_cylinder_is_heard_even_though_it_is_closed() {
-        // The decompression brake opens a valve during the closed period, which
-        // is precisely when cylinder pressure is highest. That has to reach the
-        // tailpipe, or the loudest event the engine produces would be silent.
-        let quiet = cylinder_source(
-            Phase::Closed,
-            -0.3,
-            12.0e6,
-            200_000.0,
-            101_325.0,
-            &PORT,
-            0.0,
-        );
-        let barking = cylinder_source(
-            Phase::Closed,
-            -0.3,
-            12.0e6,
-            200_000.0,
-            101_325.0,
-            &PORT,
-            7.5e-4,
-        );
-        assert_eq!(quiet, 0.0);
-        assert!(
-            barking > 0.0,
-            "an open brake valve at 120 bar must radiate, got {barking}"
-        );
-    }
-
-    #[test]
-    fn the_brake_and_the_exhaust_event_never_open_the_port_twice() {
-        // They are the same valve. Where both are open the source must follow
-        // whichever is more open, not their sum.
-        let mid = (2.4 + CYCLE_RAD * 0.5) * 0.5;
-        let exhaust_only = cylinder_source(
-            Phase::Exhaust,
-            mid,
-            600_000.0,
-            200_000.0,
-            101_325.0,
-            &PORT,
-            0.0,
-        );
-        let with_small_brake = cylinder_source(
-            Phase::Exhaust,
-            mid,
-            600_000.0,
-            200_000.0,
-            101_325.0,
-            &PORT,
-            1.0e-6,
-        );
-        assert_eq!(exhaust_only, with_small_brake);
-    }
-
-    #[test]
-    fn blowdown_produces_a_positive_source_and_backflow_a_negative_one() {
-        let mid = (2.4 + CYCLE_RAD * 0.5) * 0.5;
-        let out = cylinder_source(
-            Phase::Exhaust,
-            mid,
-            600_000.0,
-            200_000.0,
-            101_325.0,
-            &PORT,
-            0.0,
-        );
-        let back = cylinder_source(
-            Phase::Exhaust,
-            mid,
-            150_000.0,
-            200_000.0,
-            101_325.0,
-            &PORT,
-            0.0,
-        );
-        assert!(out > 0.0);
-        assert!(back < 0.0);
     }
 
     #[test]

@@ -542,7 +542,7 @@ Consequences to expect and to handle:
 - `audio.exhaust_gain` will need recalibrating; the source changes units and scale.
 - The `exhaust_gain` provenance note becomes accurate — though per §4/P4 it should be
   corrected before this step regardless.
-- **Four** unit tests in `acoustics.rs` call `cylinder_source` directly, not two:
+- **Four** unit tests in `acoustics.rs` called `cylinder_source` directly, not two:
   `a_closed_cylinder_contributes_nothing_however_high_its_pressure` (`:378`),
   `a_braked_cylinder_is_heard_even_though_it_is_closed` (`:384`),
   `the_brake_and_the_exhaust_event_never_open_the_port_twice` (`:414`), and
@@ -550,6 +550,46 @@ Consequences to expect and to handle:
   express invariants that should survive the change, but none of their call signatures
   will. The two brake-related ones need the most thought, since the brake area stops
   being an argument to the source function at all.
+
+#### 5.4.1 What building it changed — implemented at step 3
+
+**`cylinder_source` is gone rather than resignatured.** §5.4 expects its call signature
+to change. In practice there was nothing left for it to do: once `flow::exchange`
+returns what it moved, `step.rs` accumulates `net_out_kg / dt` at the two sites that
+already call it, and a separate per-cylinder source function would only have divided a
+number by `dt`. `exchange` now returns an `Exchange { charge, net_out_kg }` instead of a
+bare `Charge`.
+
+**The four unit tests moved to `flow.rs` rather than being rewritten in place.** They
+were asserting properties of a proxy that no longer exists; the properties themselves
+are properties of the flow, so they belong beside the function that computes it. A shut
+port passes nothing at 200 bar, blowdown is positive and backflow negative, the reported
+`net_out_kg` equals the mass actually removed from the charge, and — standing in for
+"the brake and the exhaust event never open the port twice" — `exchange` does not care
+what opened the port. That last one is now the *reason* the brake and the blowdown
+cannot land on different scales, rather than a defensive `max()` in an audio function.
+The double-opening invariant itself is now structural: there is one `exchange` call per
+cylinder per step, in mutually exclusive phase arms, so a cylinder physically cannot do
+both.
+
+**Recalibration was larger than a tweak: `exhaust_gain` goes 6000 → 20.** A
+dimensionless proxy of order 0.01 became a mass flow of order 1 kg/s.
+
+**The exhaust path got measurably brighter, which is the point.** Real orifice flow
+sharpens the blowdown edge against a linear-in-Δp proxy, so the exhaust term now carries
+top end of its own. It showed up as a test regression:
+`the_structural_path_is_what_puts_energy_above_the_firing_harmonics` compared the output
+against one with the modal bank silenced and required a 4× margin, which fell to 3×. The
+margin was relaxed to 2× with the reason recorded — the structural path is still the
+majority of the content above 500 Hz, and the exhaust path improving is not a regression
+in the thing being tested.
+
+**Raising `exhaust_gain` now *lowers* the high-band share**, which is worth knowing
+before step 5 retunes anything. The exhaust term's energy is concentrated at the firing
+harmonics, so louder exhaust means a larger 80–300 Hz denominator. A sweep at 30 and 40
+pushed idle 2–15 kHz to 4.80% and 3.62%, under the 5% floor; 20 holds it at 6.60%. The
+gain is therefore bounded from *above* by a spectral criterion rather than only by the
+clipper.
 
 ### 5.5 P5 — seeded per-cylinder trim
 
@@ -720,13 +760,17 @@ Baseline for each, from step 0, so the improvement is legible rather than assert
 
 | Criterion | Target | Baseline at step 0 | After step 1 |
 |---|---:|---:|---:|
-| Idle, 500 Hz–15 kHz | ≥ 15% | 0.91% | **27.37%** |
-| Idle, 2–15 kHz | ≥ 5% | 0.03% | **9.72%** |
-| Full load, 500 Hz–15 kHz | ≥ 10% | 1.36% | **51.29%** |
-| `80–300 Hz`, any point | ≤ ~55% | 82.0% (idle) | **39.2%** (idle) |
-| `<80 Hz`, any point | ≤ 35% | 10.4% (idle) | **1.4%** (idle) |
+| Idle, 500 Hz–15 kHz | ≥ 15% | 0.91% | **19.39%** |
+| Idle, 2–15 kHz | ≥ 5% | 0.03% | **6.60%** |
+| Full load, 500 Hz–15 kHz | ≥ 10% | 1.36% | **55.83%** |
+| `80–300 Hz`, any point | ≤ ~55% | 82.0% (idle) | **36.1%** (full) |
+| `<80 Hz`, any point | ≤ 35% | 10.4% (idle) | **1.0%** (idle) |
 
-All five hold after step 1, and full load peaks at 0.818 against the 0.85 knee, so the
+("After" now reports the state at step 3. At step 1 the same columns read 27.37%, 9.72%,
+51.29%, 39.2% and 1.4%; radiating the applied flow at step 3 moved them, because the
+exhaust term changed both shape and weight.)
+
+All five still hold after step 3, and full load peaks at 0.819 against the 0.85 knee, so the
 improvement is not the clipper's doing — which §10 warns is the way to "succeed" here
 dishonestly. The near-Nyquist residue of §3.1 also fell from 3.73% to 0.18% at idle,
 because the modal bank's zeros sit at DC *and* at Nyquist and it therefore refuses to

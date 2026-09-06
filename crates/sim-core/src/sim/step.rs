@@ -261,6 +261,16 @@ pub(super) fn step(
     // Acoustic source, summed across whichever cylinders are blowing down, and
     // the port-area-weighted temperature of the gas they are handing to the
     // exhaust manifold.
+    //
+    // The source is the mass flow the port *actually passed* this step, in kg/s,
+    // taken from `flow::exchange` rather than recomputed beside it. It is
+    // therefore the clamped and settled flow: the unclamped orifice relation
+    // carries a two-sample limit cycle near equilibrium that `flow.rs` documents
+    // at length, and the radiation derivative amplifies with frequency, so
+    // radiating a fresh unclamped call would be glaring where the clamped one is
+    // inaudible. A cylinder that is exchanging no gas contributes nothing, which
+    // is what it should do: however high its pressure climbs, a shut cylinder
+    // makes no sound at the tailpipe.
     let mut acoustic_source = 0.0;
     let mut donor_temperature_sum = 0.0;
     let mut donor_weight = 0.0;
@@ -475,10 +485,19 @@ pub(super) fn step(
                             0.0,
                             dt,
                         );
-                        c.mass_kg = after.mass_kg;
-                        c.temperature_k = after.temperature_k;
-                        c.pressure_pa = after.pressure_pa;
+                        c.mass_kg = after.charge.mass_kg;
+                        c.temperature_k = after.charge.temperature_k;
+                        c.pressure_pa = after.charge.pressure_pa;
                         c.motored_pressure_pa = c.pressure_pa;
+
+                        // The brake radiates through the same expression as the
+                        // exhaust event, because it is the same valve passing
+                        // real gas. That is why the hard staccato bark is an
+                        // output of the model rather than an effect layered on
+                        // top of it — and why it cannot end up on a different
+                        // scale from the blowdown, as it would if the two were
+                        // computed by separate means.
+                        acoustic_source += after.net_out_kg / dt;
                     }
                 }
                 Phase::Intake => {
@@ -519,10 +538,12 @@ pub(super) fn step(
                         dt,
                     );
 
-                    c.mass_kg = after.mass_kg;
-                    c.temperature_k = after.temperature_k;
-                    c.pressure_pa = after.pressure_pa;
+                    c.mass_kg = after.charge.mass_kg;
+                    c.temperature_k = after.charge.temperature_k;
+                    c.pressure_pa = after.charge.pressure_pa;
                     c.motored_pressure_pa = c.pressure_pa;
+
+                    acoustic_source += after.net_out_kg / dt;
                 }
             }
         }
@@ -566,17 +587,6 @@ pub(super) fn step(
             torque_pumping_nm += contribution;
         }
 
-        // The exhaust pulse is a flow through a port, so it exists only while
-        // that port is open and scales with how far open it is.
-        acoustic_source += acoustics::cylinder_source(
-            phase_new,
-            psi_new,
-            c.pressure_pa,
-            exhaust_pa,
-            ambient_pa,
-            &exhaust_port,
-            brake_area_m2,
-        );
         cylinder_pressure_sum_pa += c.pressure_pa;
 
         if phase_new == Phase::Exhaust {
@@ -617,9 +627,10 @@ pub(super) fn step(
 
     // --- acoustic sample, one per step, both radiating paths ---
     //
-    // Normalising by ambient makes the structural forcing dimensionless, which
-    // is the same thing `cylinder_source` does for the exhaust term, and keeps
-    // the calibrated gain from carrying a unit conversion inside it.
+    // Normalising by ambient makes the structural forcing dimensionless and
+    // keeps the calibrated gain from carrying a unit conversion inside it. The
+    // exhaust term arrives in kg/s and is left in it, because that is a real
+    // quantity with a name rather than a proxy needing a scale.
     let structural_forcing = if ambient_pa > 0.0 {
         cylinder_pressure_sum_pa / ambient_pa
     } else {

@@ -253,7 +253,7 @@
   },
   "audio": {
     "reference_spl_db": 94.0,
-    "exhaust_gain": 6000.0,
+    "exhaust_gain": 20.0,
     "highpass_cutoff_hz": 20.0,
     "lowpass_cutoff_hz": 6000.0,
     "soft_clip_knee": 0.85,
@@ -1526,7 +1526,7 @@
     {
       "path": "audio.exhaust_gain",
       "status": "calibrated",
-      "value_note": "6000. The acoustic source is a per-step difference of open exhaust port area times the cylinder-to-manifold pressure difference, scaled by ambient pressure. That is a small number, so the scaling is correspondingly large. Halved from 12000 when the structural path was added: two summed sources against one clipper need the staging re-done, or full load sits on the knee. The source manual does not publish this.",
+      "value_note": "20. The acoustic source is the net mass flow the exhaust port actually passed, in kg/s, taken from the same `flow::exchange` call that moves the gas rather than recomputed beside it. Reduced from 6000 when the source changed from an `area * pressure difference` proxy to real flow: the proxy was a small dimensionless number and needed a large scaling, whereas a mass flow in kg/s is of order one and does not. The source manual does not publish this.",
       "purpose": "Brings the radiated exhaust signal to a usable level before the soft clipper. Set so the loudest realistic condition — the start transient, which is louder than full load — approaches the knee without sitting on it. Driving it far past the knee flat-tops the waveform, and a flat-topped wave is full of high harmonics: an audible buzz, not a louder engine.",
       "safe_range": [
         0.0,

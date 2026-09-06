@@ -662,8 +662,14 @@ fn the_structural_path_is_what_puts_energy_above_the_firing_harmonics() {
 
     let with_share = high_band_share(&with, 500.0);
     let without_share = high_band_share(&without, 500.0);
+    // The margin is 2x rather than the 4x it was when the modal bank landed,
+    // and the reason is a real improvement rather than a regression: radiating
+    // the applied port flow instead of an `area * pressure difference` proxy
+    // sharpened the blowdown edge, so the exhaust path now carries genuine top
+    // end of its own. The structural path is still the majority of what is up
+    // there, which is what this test is for.
     assert!(
-        with_share > without_share * 4.0,
+        with_share > without_share * 2.0,
         "the modal bank should dominate above 500 Hz: {with_share:.4} with it \
          against {without_share:.4} without, which is not a large enough difference \
          to be the mechanism this path claims to be"

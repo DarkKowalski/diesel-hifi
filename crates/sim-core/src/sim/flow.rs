@@ -125,7 +125,7 @@ pub fn exchange(
     volume_m3: f64,
     dv_m3: f64,
     dt: f64,
-) -> Charge {
+) -> Exchange {
     let cv = gas::cv_j_per_kg_k(gas, charge.temperature_k);
     let cp = cv + gas.gas_constant_j_per_kg_k;
 
@@ -166,11 +166,37 @@ pub fn exchange(
         - charge.pressure_pa * dv_m3;
 
     let temperature_k = (new_energy_j / (new_mass_kg * cv)).max(1.0);
-    Charge {
-        mass_kg: new_mass_kg,
-        temperature_k,
-        pressure_pa: gas::pressure_pa(gas, new_mass_kg, temperature_k, volume_m3),
+    Exchange {
+        charge: Charge {
+            mass_kg: new_mass_kg,
+            temperature_k,
+            pressure_pa: gas::pressure_pa(gas, new_mass_kg, temperature_k, volume_m3),
+        },
+        // Reported after both clamps, which is the whole point of reporting it.
+        // The unclamped flow carries the two-sample limit cycle described above,
+        // and radiating that instead would walk straight back into a defect this
+        // module already paid to remove.
+        net_out_kg: out_kg - in_kg,
     }
+}
+
+/// What one step of port exchange did.
+///
+/// The mass is returned alongside the resulting state because the exhaust
+/// acoustic source *is* this flow. Before Milestone 5 the source was a separate
+/// `area * pressure difference` proxy computed next to this call, which meant the
+/// model solved the compressible orifice relation correctly and then radiated a
+/// different quantity: real orifice flow goes as the square root of the pressure
+/// difference and saturates once the throat chokes, so a linear-in-difference
+/// proxy exaggerates the peak of the blowdown and distorts its shape through the
+/// choked-to-subsonic transition. The pulse shape is the timbre.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Exchange {
+    /// The cylinder's gas state after the transfer.
+    pub charge: Charge,
+    /// Net mass that crossed the port out of the cylinder this step, kg.
+    /// Negative when gas flowed back in.
+    pub net_out_kg: f64,
 }
 
 /// Most of the charge that may cross a port in a single step.
@@ -187,6 +213,108 @@ mod tests {
             cv_slope_j_per_kg_k2: 0.18,
             reference_temperature_k: 300.0,
         }
+    }
+
+    /// Cylinder volume and charge for a cylinder near bottom of exhaust stroke.
+    fn cylinder(pressure_pa: f64) -> (Charge, f64) {
+        let volume_m3 = 1.5e-3;
+        let temperature_k = 900.0;
+        let mass_kg = gas::mass_kg(&gas(), pressure_pa, temperature_k, volume_m3);
+        (
+            Charge {
+                mass_kg,
+                temperature_k,
+                pressure_pa,
+            },
+            volume_m3,
+        )
+    }
+
+    fn manifold(area_m2: f64) -> PortState {
+        PortState {
+            area_m2,
+            pressure_pa: 200_000.0,
+            temperature_k: 800.0,
+        }
+    }
+
+    // --- the exhaust acoustic source is this flow, so these are audio tests ---
+    //
+    // They used to live in `acoustics.rs` against an `area * pressure difference`
+    // proxy. The proxy is gone: the model radiates the flow it actually applied,
+    // so the invariants belong here, against the thing that computes it.
+
+    #[test]
+    fn a_shut_port_transfers_nothing_however_high_the_pressure() {
+        // A cylinder makes no sound at the tailpipe unless something is open.
+        let (charge, volume_m3) = cylinder(20.0e6);
+        let result = exchange(&gas(), charge, &manifold(0.0), volume_m3, 0.0, 2.5e-5);
+        assert_eq!(
+            result.net_out_kg, 0.0,
+            "a shut port must pass no gas at 200 bar"
+        );
+    }
+
+    #[test]
+    fn blowdown_leaves_the_cylinder_and_backflow_returns_to_it() {
+        // The sign of the source is the direction of the gas, with no special
+        // case for either: a pulse out is positive, a reversion negative.
+        let (hot, volume_m3) = cylinder(600_000.0);
+        let out = exchange(&gas(), hot, &manifold(2.5e-3), volume_m3, 0.0, 2.5e-5);
+        assert!(
+            out.net_out_kg > 0.0,
+            "6 bar against a 2 bar manifold must blow down, got {}",
+            out.net_out_kg
+        );
+
+        let (low, volume_m3) = cylinder(150_000.0);
+        let back = exchange(&gas(), low, &manifold(2.5e-3), volume_m3, 0.0, 2.5e-5);
+        assert!(
+            back.net_out_kg < 0.0,
+            "1.5 bar against a 2 bar manifold must flow back, got {}",
+            back.net_out_kg
+        );
+    }
+
+    #[test]
+    fn the_port_does_not_care_what_opened_it() {
+        // This is why the engine brake's bark and the exhaust pulse cannot end
+        // up on two different scales. The decompression brake cracks the same
+        // valve at the top of compression, where the pressure difference is
+        // larger than ordinary blowdown ever sees, and it reaches the tailpipe
+        // through this same function. Nothing here distinguishes the two, so
+        // nothing can calibrate them apart.
+        let area_m2 = 7.5e-4;
+        let (braking, volume_m3) = cylinder(12.0e6);
+        let brake = exchange(&gas(), braking, &manifold(area_m2), volume_m3, 0.0, 2.5e-5);
+
+        let (blowing, volume_m3) = cylinder(600_000.0);
+        let blowdown = exchange(&gas(), blowing, &manifold(area_m2), volume_m3, 0.0, 2.5e-5);
+
+        assert!(brake.net_out_kg > 0.0 && blowdown.net_out_kg > 0.0);
+        assert!(
+            brake.net_out_kg > blowdown.net_out_kg,
+            "120 bar through the same port must pass more than 6 bar: {} against {}",
+            brake.net_out_kg,
+            blowdown.net_out_kg
+        );
+    }
+
+    #[test]
+    fn the_reported_flow_is_the_flow_that_was_applied() {
+        // The clamps are the point. `net_out_kg` has to be what actually moved,
+        // or the audio path and the gas path would disagree - and the unclamped
+        // flow is the one carrying the Nyquist limit cycle this module exists to
+        // suppress.
+        let (charge, volume_m3) = cylinder(600_000.0);
+        let before = charge.mass_kg;
+        let result = exchange(&gas(), charge, &manifold(2.5e-3), volume_m3, 0.0, 2.5e-5);
+        let moved = before - result.charge.mass_kg;
+        assert!(
+            (moved - result.net_out_kg).abs() < 1.0e-15,
+            "reported {} against {moved} actually transferred",
+            result.net_out_kg
+        );
     }
 
     #[test]
