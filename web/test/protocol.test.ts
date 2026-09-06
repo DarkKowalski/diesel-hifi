@@ -102,6 +102,11 @@ describe('defaults', () => {
       ignition: false,
       // On by default: the manual states EGR runs across the whole speed range.
       egrEnabled: true,
+      // Brake off, out of gear, on the flat. Every pre-Milestone-4 behaviour
+      // depends on these three contributing exactly nothing until asked.
+      brakeStage: 0,
+      gear: 0,
+      roadGradePercent: 0,
     });
     expect(DEFAULT_RESET.seed).toBe(0);
     expect(DEFAULT_RESET.initialRpm).toBe(0);

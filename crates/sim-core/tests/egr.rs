@@ -8,7 +8,7 @@
 //! the NOx this subsystem exists to suppress.
 
 use sim_core::catalog::OM471_9_M3D_JSON;
-use sim_core::dyno;
+use sim_core::dyno::{self, PointOptions};
 use sim_core::sim::egr;
 use sim_core::{Controls, EngineConfig, ResetOptions, Simulation, ValidatedConfig};
 
@@ -38,6 +38,7 @@ fn settled(rpm: f64, pedal: f64, egr_enabled: bool) -> sim_core::Snapshot {
         starter: false,
         ignition: true,
         egr_enabled,
+        ..Controls::default()
     })
     .expect("controls accepted");
 
@@ -160,8 +161,29 @@ fn disabling_egr_shuts_the_valve_completely() {
 fn switching_egr_off_buys_power_and_fuel_at_the_cost_this_subsystem_exists_to_pay() {
     let config = config();
     let rpm = 1_300.0;
-    let with_egr = dyno::operating_point(&config, rpm, 1.0, 100, 12, true).expect("with EGR");
-    let without = dyno::operating_point(&config, rpm, 1.0, 100, 12, false).expect("without EGR");
+    let with_egr = dyno::operating_point(
+        &config,
+        rpm,
+        &PointOptions {
+            pedal: 1.0,
+            settle_cycles: 100,
+            measure_cycles: 12,
+            ..PointOptions::default()
+        },
+    )
+    .expect("with EGR");
+    let without = dyno::operating_point(
+        &config,
+        rpm,
+        &PointOptions {
+            pedal: 1.0,
+            settle_cycles: 100,
+            measure_cycles: 12,
+            egr_enabled: false,
+            ..PointOptions::default()
+        },
+    )
+    .expect("without EGR");
 
     assert!(
         with_egr.egr_rate > 0.0,
@@ -192,8 +214,29 @@ fn switching_egr_off_buys_power_and_fuel_at_the_cost_this_subsystem_exists_to_pa
 fn recirculation_tightens_the_smoke_limit() {
     let config = config();
     let rpm = 1_300.0;
-    let with_egr = dyno::operating_point(&config, rpm, 1.0, 100, 12, true).expect("with EGR");
-    let without = dyno::operating_point(&config, rpm, 1.0, 100, 12, false).expect("without EGR");
+    let with_egr = dyno::operating_point(
+        &config,
+        rpm,
+        &PointOptions {
+            pedal: 1.0,
+            settle_cycles: 100,
+            measure_cycles: 12,
+            ..PointOptions::default()
+        },
+    )
+    .expect("with EGR");
+    let without = dyno::operating_point(
+        &config,
+        rpm,
+        &PointOptions {
+            pedal: 1.0,
+            settle_cycles: 100,
+            measure_cycles: 12,
+            egr_enabled: false,
+            ..PointOptions::default()
+        },
+    )
+    .expect("without EGR");
 
     let smoke_limit = config.config().injection.smoke_limit_afr;
     // Both are smoke limited at full load; the point is that EGR leaves less

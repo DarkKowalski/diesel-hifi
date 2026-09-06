@@ -21,14 +21,22 @@
 //!   ECU's wastegate setpoint, which is what the manual describes the MCM
 //!   regulating to.
 //!
+//! - **v4** (Milestone 4) — the staged decompression engine brake and a rigid
+//!   truck driveline, as two new sections. Nothing is removed this time, but a v3
+//!   document has neither section and `serde` rejects it, so this is still a
+//!   breaking change to the document.
+//!
+//!   The v3 header predicted Milestone 4 would only grow existing sections and
+//!   need no bump. That was wrong in one respect: the brake and the driveline are
+//!   subsystems in their own right, and folding a brake cam contour into
+//!   `valvetrain` or a vehicle mass into `load` would have made both sections
+//!   describe two unrelated things.
+//!
 //! The *shape* of the document has not changed across any of these: same
 //! versioned sections, same provenance rules, same [`Schedule`] type, and an
 //! additive snapshot. What changes is which calibration fields exist, because a
 //! field that no longer describes anything should not sit in a provenance table
 //! that claims to describe the model.
-//!
-//! Milestone 4 (engine brake, driveline) is expected to add fields to existing
-//! sections and should not need another version bump.
 
 pub mod paths;
 pub mod provenance;
@@ -42,7 +50,7 @@ pub use schedule::Schedule;
 pub use validate::ValidatedConfig;
 
 /// The only configuration schema version understood by this build.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Identity and display metadata. Manufacturer names are factual references only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,6 +271,156 @@ pub struct Egr {
     pub max_rate: f64,
 }
 
+/// Staged decompression engine brake.
+///
+/// The manual describes the mechanism in unusual detail: brake cams with **two
+/// peaks**, the first opening an exhaust valve around the start of the
+/// compression stroke so that "exhaust flows out of the exhaust manifold back
+/// into the cylinder", the second opening it "shortly before ending the
+/// compression stroke" so that "part of the compression pressure is reduced".
+/// Charge, then dump — the piston pays for a compression it never gets back.
+///
+/// What the manual publishes: the 1000 rpm activation floor, that stage I acts on
+/// cylinders 1 to 3, and the two brake-power anchors for the fitted variant. It
+/// publishes no cam contour, no lift, no timing and no MCM target, so everything
+/// describing the *shape* of the event is calibrated.
+///
+/// The anchors are recorded here as published reference values and are read only
+/// by tests. No solver code may consult them: braking torque has to emerge from
+/// cylinder pressure through slider-crank geometry, exactly like firing torque,
+/// and a model that looked up its own answer would prove nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineBrake {
+    /// Fitted variant code: `M5U` standard, or `M5V` high performance.
+    ///
+    /// The manual is explicit that "the hardware of the two systems is identical"
+    /// and that they differ only by "a different code-controlled data record", so
+    /// this selects data, never behaviour.
+    pub variant: String,
+    /// Published: the brake operates above 1000 rpm.
+    pub min_speed_rpm: f64,
+    /// Published: stage I brakes on cylinders 1 to 3.
+    pub stage1_cylinder_count: u32,
+
+    /// Published lower anchor: engine speed and absorbed power.
+    pub anchor_low_rpm: f64,
+    pub anchor_low_power_w: f64,
+    /// Published upper anchor: engine speed and absorbed power.
+    pub anchor_high_rpm: f64,
+    pub anchor_high_power_w: f64,
+
+    /// Signed cycle angle of the charging lobe — the manual's first peak.
+    /// Negative is before firing TDC, so this sits early in the compression
+    /// stroke, after intake valve closing.
+    pub charge_center_rad: f64,
+    /// Signed cycle angle of the release lobe — the manual's second peak, just
+    /// before firing TDC.
+    pub release_center_rad: f64,
+    /// Half-width of the charging lobe in crank angle.
+    ///
+    /// Separate from the release lobe's width because the two peaks do different
+    /// jobs and the manual gives no reason they would be alike. The charging lobe
+    /// has to pass enough gas to fill the cylinder, and the time it is given
+    /// shrinks with engine speed, so it wants to be wide. The release lobe has to
+    /// dump a cylinder that is already at peak compression, which takes very
+    /// little open area and wants to happen late; widening it instead starts the
+    /// dump early and throws away compression work that has not been done yet.
+    pub charge_width_rad: f64,
+    /// Half-width of the release lobe in crank angle.
+    pub release_width_rad: f64,
+    /// Effective flow area of the braked valve at full lift.
+    ///
+    /// One valve, not the pair: the manual says "one of the two exhaust valves is
+    /// opened", and that is also why this is far smaller than
+    /// `valvetrain.exhaust_effective_area_m2`.
+    pub effective_area_m2: f64,
+
+    /// Wastegate boost setpoint commanded in each stage, absolute pascals.
+    ///
+    /// The manual has the MCM actuating the wastegate in stage III to raise
+    /// cylinder pressure and names "the boost pressure and the turbocharger speed"
+    /// as its controlled variables, and says the high-performance variant raises
+    /// cylinder pressure "in all engine brake stages". One setpoint per stage is
+    /// therefore literally the data record the manual describes: M5U leaves stages
+    /// I and II at ambient and lifts stage III; M5V lifts all three.
+    pub stage1_boost_target_pa: f64,
+    pub stage2_boost_target_pa: f64,
+    pub stage3_boost_target_pa: f64,
+    /// Factor applied to the wastegate controller's gains and slew rate while the
+    /// brake is engaged.
+    ///
+    /// The brake carries its own positive feedback: more boost packs the cylinder
+    /// harder, which dumps more energy into the turbine, which makes more boost.
+    /// The wastegate gains calibrated for the fuelled engine are far too hot for
+    /// that plant, and at full gain the loop hunted above 1800 rpm — badly enough
+    /// that absorbed power at the published 2300 rpm anchor swung between 282 and
+    /// 300 kW depending only on where in the oscillation the measurement landed.
+    /// Longer settling did not help, because it was a limit cycle and not a
+    /// transient.
+    ///
+    /// Detuning the loop is the textbook answer to a plant whose gain has changed
+    /// by an order of magnitude, and it is preferable to commanding a fixed valve
+    /// position: with the wastegate held open-loop, absorbed power at 2300 rpm
+    /// swings roughly threefold between positions 0.35 and 0.25 as the turbine
+    /// reaches its speed clamp, which is not a control axis a calibration can sit
+    /// on.
+    pub wastegate_gain_scale: f64,
+
+    /// EGR valve position commanded in each stage.
+    ///
+    /// The manual actuates the EGR positioner alongside the wastegate "whereby
+    /// the fill level of the cylinder is increased again".
+    pub stage1_egr_command: f64,
+    pub stage2_egr_command: f64,
+    pub stage3_egr_command: f64,
+}
+
+/// Truck driveline and road load.
+///
+/// Entirely calibrated. The source is an engine document: it publishes nothing
+/// about the vehicle the engine is fitted to. These values describe a plausible
+/// fully-laden European tractor-trailer, and are the reason the engine brake has
+/// something to brake against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Driveline {
+    /// Gross combination mass, kg.
+    pub vehicle_mass_kg: f64,
+    pub wheel_radius_m: f64,
+    pub rolling_resistance_coeff: f64,
+    /// Drag area, the product of drag coefficient and frontal area, m^2.
+    pub drag_area_m2: f64,
+    pub final_drive_ratio: f64,
+    /// Gearbox ratios, lowest gear first. Gear 0 is neutral and is not listed.
+    pub gear_ratios: Vec<f64>,
+    pub driveline_efficiency: f64,
+    /// Steepest road grade the controls will accept, percent, in both directions.
+    pub max_grade_percent: f64,
+}
+
+impl Driveline {
+    /// Total reduction from crank to wheel for a gear, or `None` in neutral.
+    ///
+    /// Gears are numbered from 1; gear 0 means neutral, and so does any gear
+    /// beyond the fitted ratios.
+    pub fn total_ratio(&self, gear: u32) -> Option<f64> {
+        if gear == 0 {
+            return None;
+        }
+        let ratio = *self.gear_ratios.get((gear - 1) as usize)?;
+        let total = ratio * self.final_drive_ratio;
+        if total > 0.0 {
+            Some(total)
+        } else {
+            None
+        }
+    }
+
+    /// Number of forward gears fitted.
+    pub fn gear_count(&self) -> u32 {
+        self.gear_ratios.len() as u32
+    }
+}
+
 /// Idle governor and overspeed limiting.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Governor {
@@ -361,6 +519,8 @@ pub struct EngineConfig {
     pub air_path: AirPath,
     pub turbo: Turbo,
     pub egr: Egr,
+    pub engine_brake: EngineBrake,
+    pub driveline: Driveline,
     pub governor: Governor,
     pub load: Load,
     pub inertia: Inertia,
@@ -386,9 +546,9 @@ impl EngineConfig {
 
     /// Scalar value at a dotted parameter path, if that path names a number.
     ///
-    /// Returns `None` for known non-scalar paths (firing order, schedules, and
-    /// the heat-transfer enable flag) and for unknown paths. Provenance
-    /// range-containment is skipped for those.
+    /// Returns `None` for known non-scalar paths (firing order, gear ratios,
+    /// schedules, the brake variant code, and the heat-transfer enable flag) and
+    /// for unknown paths. Provenance range-containment is skipped for those.
     pub fn value_at(&self, path: &str) -> Option<f64> {
         let v = match path {
             "geometry.cylinders" => self.geometry.cylinders as f64,
@@ -498,6 +658,37 @@ impl EngineConfig {
             "egr.rate_p_gain" => self.egr.rate_p_gain,
             "egr.rate_i_gain_per_s" => self.egr.rate_i_gain_per_s,
             "egr.max_rate" => self.egr.max_rate,
+
+            "engine_brake.variant" => return None,
+            "engine_brake.min_speed_rpm" => self.engine_brake.min_speed_rpm,
+            "engine_brake.stage1_cylinder_count" => {
+                f64::from(self.engine_brake.stage1_cylinder_count)
+            }
+            "engine_brake.anchor_low_rpm" => self.engine_brake.anchor_low_rpm,
+            "engine_brake.anchor_low_power_w" => self.engine_brake.anchor_low_power_w,
+            "engine_brake.anchor_high_rpm" => self.engine_brake.anchor_high_rpm,
+            "engine_brake.anchor_high_power_w" => self.engine_brake.anchor_high_power_w,
+            "engine_brake.charge_center_rad" => self.engine_brake.charge_center_rad,
+            "engine_brake.release_center_rad" => self.engine_brake.release_center_rad,
+            "engine_brake.charge_width_rad" => self.engine_brake.charge_width_rad,
+            "engine_brake.release_width_rad" => self.engine_brake.release_width_rad,
+            "engine_brake.effective_area_m2" => self.engine_brake.effective_area_m2,
+            "engine_brake.stage1_boost_target_pa" => self.engine_brake.stage1_boost_target_pa,
+            "engine_brake.stage2_boost_target_pa" => self.engine_brake.stage2_boost_target_pa,
+            "engine_brake.stage3_boost_target_pa" => self.engine_brake.stage3_boost_target_pa,
+            "engine_brake.wastegate_gain_scale" => self.engine_brake.wastegate_gain_scale,
+            "engine_brake.stage1_egr_command" => self.engine_brake.stage1_egr_command,
+            "engine_brake.stage2_egr_command" => self.engine_brake.stage2_egr_command,
+            "engine_brake.stage3_egr_command" => self.engine_brake.stage3_egr_command,
+
+            "driveline.vehicle_mass_kg" => self.driveline.vehicle_mass_kg,
+            "driveline.wheel_radius_m" => self.driveline.wheel_radius_m,
+            "driveline.rolling_resistance_coeff" => self.driveline.rolling_resistance_coeff,
+            "driveline.drag_area_m2" => self.driveline.drag_area_m2,
+            "driveline.final_drive_ratio" => self.driveline.final_drive_ratio,
+            "driveline.gear_ratios" => return None,
+            "driveline.driveline_efficiency" => self.driveline.driveline_efficiency,
+            "driveline.max_grade_percent" => self.driveline.max_grade_percent,
 
             "governor.idle_target_rpm" => self.governor.idle_target_rpm,
             "governor.idle_p_gain_mg_per_rad_s" => self.governor.idle_p_gain_mg_per_rad_s,

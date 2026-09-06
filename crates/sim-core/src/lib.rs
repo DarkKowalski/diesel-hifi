@@ -29,17 +29,22 @@ pub mod snapshot;
 
 pub use catalog::{Catalog, ConfigSummary, BUILTIN_ENGINE_ID};
 pub use config::{EngineConfig, ProvenanceReport, ProvenanceStatus, ValidatedConfig};
-pub use dyno::{OperatingPoint, SweepOptions, SweepPeaks};
+pub use dyno::{OperatingPoint, PointOptions, SweepOptions, SweepPeaks};
 pub use error::{ErrorCode, Result, SimError};
 pub use sim::{Controls, CycleAverages, ResetOptions, Simulation};
 pub use snapshot::{RunState, Snapshot};
 
 /// Version of the public engine API. Bump on a breaking change.
 ///
-/// Milestone 3 takes this to 3: a worker that wants sound depends on
+/// Milestone 3 took this to 3: a worker that wants sound depends on
 /// `drain_audio` existing, so a version mismatch has to be visible rather than
 /// showing up as silence.
-pub const API_VERSION: u32 = 3;
+///
+/// Milestone 4 takes it to 4. `operating_point` now takes an options object
+/// rather than a run of positional arguments, and the controls carry a brake
+/// stage, a gear and a road grade. An old worker calling the old shape must fail
+/// loudly rather than quietly measuring the wrong thing.
+pub const API_VERSION: u32 = 4;
 
 /// A catalog bound to a running simulation.
 ///
@@ -154,19 +159,14 @@ impl Engine {
     pub fn operating_point(
         &self,
         rpm: f64,
-        pedal: f64,
-        settle_cycles: u32,
-        measure_cycles: u32,
-        egr_enabled: bool,
+        options: &dyno::PointOptions,
     ) -> Result<OperatingPoint> {
-        dyno::operating_point(
-            self.catalog.active_config(),
-            rpm,
-            pedal,
-            settle_cycles,
-            measure_cycles,
-            egr_enabled,
-        )
+        dyno::operating_point(self.catalog.active_config(), rpm, options)
+    }
+
+    /// Measure an engine-brake speed sweep of the active configuration.
+    pub fn brake_sweep(&self, stage: u8, options: SweepOptions) -> Result<Vec<OperatingPoint>> {
+        dyno::brake_sweep(self.catalog.active_config(), stage, options)
     }
 
     /// Measure a speed sweep of the active configuration.

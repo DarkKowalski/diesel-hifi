@@ -3,6 +3,7 @@
   import { bar, degrees, kelvin, mg, mpa, nm, rpm, seconds } from '../lib/format';
 
   const snapshot = $derived(sim.snapshot);
+  const controls = $derived(sim.controls);
 </script>
 
 <section class="panel" aria-labelledby="telemetry-heading">
@@ -83,6 +84,41 @@
       <div>
         <dt>EGR flow</dt>
         <dd>{snapshot.egrFlowKgPerS.toFixed(3)} kg/s</dd>
+      </div>
+    </dl>
+
+    <h3>Engine brake and driveline</h3>
+    <p class="muted small">
+      Braking torque is not injected anywhere: the brake cam opens an exhaust valve while the
+      cylinder is shut, and the resulting pressure drives the crank through the same slider-crank
+      geometry as combustion does.
+    </p>
+    <dl class="grid" data-testid="brake-driveline">
+      <div>
+        <dt>Brake stage</dt>
+        <dd data-testid="brake-stage-active">
+          {snapshot.brakeActive ? `${['off', 'I', 'II', 'III'][snapshot.brakeStageActive]}` : 'off'}
+        </dd>
+      </div>
+      <div>
+        <dt>Absorbed power</dt>
+        <dd data-testid="brake-absorbed">{(snapshot.brakeAbsorbedPowerW / 1000).toFixed(1)} kW</dd>
+      </div>
+      <div>
+        <dt>Gear</dt>
+        <dd data-testid="gear-readout">{snapshot.gearEngaged ? controls.gear : 'N'}</dd>
+      </div>
+      <div>
+        <dt>Road speed</dt>
+        <dd data-testid="vehicle-speed">{(snapshot.vehicleSpeedMPerS * 3.6).toFixed(1)} km/h</dd>
+      </div>
+      <div>
+        <dt>Road load</dt>
+        <dd data-testid="torque-driveline">{nm(snapshot.torqueDrivelineNm)} N m</dd>
+      </div>
+      <div>
+        <dt>Reflected inertia</dt>
+        <dd data-testid="reflected-inertia">{snapshot.reflectedInertiaKgM2.toFixed(1)} kg m²</dd>
       </div>
     </dl>
 

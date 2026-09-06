@@ -123,6 +123,27 @@ pub struct Snapshot {
     pub turbine_flow_kg_per_s: f64,
     pub egr_flow_kg_per_s: f64,
 
+    // Engine brake and driveline.
+    /// Brake stage actually in force, `0` when the brake is not operating.
+    ///
+    /// This is what the brake *did*, not what the driver asked for: the switch
+    /// can be at stage III while the published operating conditions hold the
+    /// brake off, and the two must be distinguishable in telemetry.
+    pub brake_stage_active: u8,
+    /// Whether the decompression brake is operating at all.
+    pub brake_active: bool,
+    /// Cycle-averaged power the engine is absorbing, watts, positive while
+    /// braking and zero otherwise.
+    pub brake_absorbed_power_w: f64,
+    /// Road speed, m/s. Zero in neutral.
+    pub vehicle_speed_m_per_s: f64,
+    /// Road load reflected to the crank. Negative on a descent.
+    pub torque_driveline_nm: f64,
+    /// Vehicle inertia reflected to the crankshaft, kg m^2.
+    pub reflected_inertia_kg_m2: f64,
+    /// Whether a gear is engaged.
+    pub gear_engaged: bool,
+
     /// Exhaust level relative to the configured reference. Audio samples
     /// themselves are drained separately; the snapshot stays compact.
     pub audio_level_db: f64,

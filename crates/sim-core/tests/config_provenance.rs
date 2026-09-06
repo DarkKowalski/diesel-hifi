@@ -193,7 +193,142 @@ fn the_wastegate_actuator_pressure_is_never_mistaken_for_published_boost() {
     }
 }
 
-/// The EGR cooler duty is the one thing this milestone adds that the manual
+/// The engine brake section is the richest in the manual, and it publishes six
+/// numbers: the speed floor, the three cylinders of stage I, and the two
+/// power anchors for the fitted variant. Everything describing the *shape* of the
+/// braking event is ours.
+#[test]
+fn the_engine_brake_publishes_exactly_six_figures() {
+    let config = parsed();
+
+    for path in [
+        "engine_brake.min_speed_rpm",
+        "engine_brake.stage1_cylinder_count",
+        "engine_brake.anchor_low_rpm",
+        "engine_brake.anchor_low_power_w",
+        "engine_brake.anchor_high_rpm",
+        "engine_brake.anchor_high_power_w",
+    ] {
+        assert_eq!(
+            status_of(&config, path),
+            ProvenanceStatus::Published,
+            "`{path}` is published in the engine brake section"
+        );
+        let entry = config
+            .provenance
+            .iter()
+            .find(|e| e.path == path)
+            .expect("entry");
+        let locator = entry.locator.as_deref().unwrap_or("");
+        assert!(
+            locator.contains("GF14.15-W-0002H"),
+            "`{path}` must cite the engine brake section, got `{locator}`"
+        );
+    }
+
+    // The published values themselves, unchanged.
+    let b = &config.engine_brake;
+    assert_eq!(b.min_speed_rpm, 1000.0);
+    assert_eq!(b.stage1_cylinder_count, 3);
+    assert_eq!(b.anchor_low_rpm, 1300.0);
+    assert_eq!(b.anchor_low_power_w, 100_000.0);
+    assert_eq!(b.anchor_high_rpm, 2300.0);
+    assert_eq!(b.anchor_high_power_w, 300_000.0);
+    assert_eq!(b.variant, "M5U");
+
+    // Everything about the mechanism is calibrated. The manual publishes no cam
+    // contour, no lift, no timing and no MCM target.
+    for path in [
+        "engine_brake.charge_center_rad",
+        "engine_brake.release_center_rad",
+        "engine_brake.charge_width_rad",
+        "engine_brake.release_width_rad",
+        "engine_brake.effective_area_m2",
+        "engine_brake.stage1_boost_target_pa",
+        "engine_brake.stage2_boost_target_pa",
+        "engine_brake.stage3_boost_target_pa",
+        "engine_brake.wastegate_gain_scale",
+        "engine_brake.stage1_egr_command",
+        "engine_brake.stage2_egr_command",
+        "engine_brake.stage3_egr_command",
+    ] {
+        assert_eq!(
+            status_of(&config, path),
+            ProvenanceStatus::Calibrated,
+            "`{path}` is not published and must be classified as calibrated"
+        );
+    }
+}
+
+/// The M5V figures belong to a variant this configuration is not fitted with.
+///
+/// The manual publishes 150 kW / 400 kW for the high performance system. This
+/// engine carries the standard M5U record, and mixing the two would be exactly
+/// the kind of cross-contamination SPEC section 4 forbids for the later 390 kW
+/// figures.
+#[test]
+fn the_high_performance_brake_figures_do_not_leak_into_the_standard_variant() {
+    let config = parsed();
+    assert_eq!(config.engine_brake.variant, "M5U");
+    for value in [150_000.0, 400_000.0] {
+        assert!(
+            (config.engine_brake.anchor_low_power_w - value).abs() > 1.0
+                && (config.engine_brake.anchor_high_power_w - value).abs() > 1.0,
+            "{value} W belongs to the M5V high performance record, not to M5U"
+        );
+    }
+}
+
+/// The published brake anchors are a validation target, and a model allowed to
+/// read its own answer proves nothing.
+///
+/// This is the same guard the 2.8 bar test applies, aimed at a different trap:
+/// there, a number that must never be *claimed*; here, numbers that must never
+/// be *used*. Braking torque has to emerge from cylinder pressure through
+/// slider-crank geometry exactly as firing torque does, so no solver source may
+/// so much as mention the anchor fields.
+#[test]
+fn no_solver_source_reads_the_published_brake_anchors() {
+    const SOLVER_SOURCES: &[(&str, &str)] = &[
+        ("sim/mod.rs", include_str!("../src/sim/mod.rs")),
+        ("sim/step.rs", include_str!("../src/sim/step.rs")),
+        ("sim/brake.rs", include_str!("../src/sim/brake.rs")),
+        ("sim/driveline.rs", include_str!("../src/sim/driveline.rs")),
+        ("sim/torque.rs", include_str!("../src/sim/torque.rs")),
+        ("sim/turbo.rs", include_str!("../src/sim/turbo.rs")),
+        ("sim/flow.rs", include_str!("../src/sim/flow.rs")),
+        ("sim/acoustics.rs", include_str!("../src/sim/acoustics.rs")),
+        ("dyno.rs", include_str!("../src/dyno.rs")),
+    ];
+
+    for (name, source) in SOLVER_SOURCES {
+        // Only production code is scanned. A module's own unit tests legitimately
+        // build an `EngineBrake` literal, anchors and all, and that is not the
+        // solver consulting them.
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        for (number, line) in production.lines().enumerate() {
+            // The brake module's own doc comment says these must not be read;
+            // saying so is not reading them.
+            let code = line.split("//").next().unwrap_or("");
+            for field in [
+                "anchor_low_rpm",
+                "anchor_low_power_w",
+                "anchor_high_rpm",
+                "anchor_high_power_w",
+            ] {
+                assert!(
+                    !code.contains(field),
+                    "{name}:{} reads `{field}`. The published brake anchors are a \
+                     validation target; braking torque must come out of cylinder \
+                     pressure, not out of the answer sheet.",
+                    number + 1
+                );
+            }
+        }
+    }
+}
+
+/// The EGR cooler duty is the one thing Milestone 3 adds that the manual
 /// really does publish, and the effectiveness the solver uses is derived from
 /// it rather than invented alongside it.
 #[test]

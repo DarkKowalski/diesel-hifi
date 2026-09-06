@@ -6,7 +6,7 @@
 //! exist to prove that chain is real and wired in rather than merely present.
 
 use sim_core::catalog::OM471_9_M3D_JSON;
-use sim_core::dyno::{self, SweepOptions};
+use sim_core::dyno::{self, PointOptions, SweepOptions};
 use sim_core::{Controls, Engine, EngineConfig, ResetOptions, Simulation, ValidatedConfig};
 
 fn config() -> ValidatedConfig {
@@ -27,6 +27,7 @@ fn controls(pedal: f64, load_torque_nm: f64, starter: bool) -> Controls {
         starter,
         ignition: true,
         egr_enabled: true,
+        ..Controls::default()
     }
 }
 
@@ -92,6 +93,7 @@ fn boost_decays_back_toward_ambient_when_fuelling_stops() {
             starter: false,
             ignition: false,
             egr_enabled: true,
+            ..Controls::default()
         })
         .expect("controls accepted");
     for _ in 0..200 {
@@ -128,8 +130,17 @@ fn steady_state_boost_tracks_the_setpoint_schedule() {
     let schedule = &config.config().air_path.boost_target_schedule;
 
     for rpm in [1_100.0, 1_400.0, 1_700.0] {
-        let point = dyno::operating_point(&config, rpm, 1.0, 100, 12, true)
-            .unwrap_or_else(|e| panic!("operating point at {rpm} rpm: {e}"));
+        let point = dyno::operating_point(
+            &config,
+            rpm,
+            &PointOptions {
+                pedal: 1.0,
+                settle_cycles: 100,
+                measure_cycles: 12,
+                ..PointOptions::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("operating point at {rpm} rpm: {e}"));
         let setpoint = schedule.lookup(rpm);
         let error = (point.intake_pressure_pa - setpoint).abs() / setpoint;
         assert!(
@@ -145,7 +156,17 @@ fn steady_state_boost_tracks_the_setpoint_schedule() {
 #[test]
 fn the_wastegate_opens_at_high_speed_where_there_is_exhaust_energy_to_spare() {
     let config = config();
-    let point = dyno::operating_point(&config, 1_800.0, 1.0, 100, 12, true).expect("point");
+    let point = dyno::operating_point(
+        &config,
+        1_800.0,
+        &PointOptions {
+            pedal: 1.0,
+            settle_cycles: 100,
+            measure_cycles: 12,
+            ..PointOptions::default()
+        },
+    )
+    .expect("point");
     assert!(
         point.wastegate_position > 0.0,
         "at rated speed the turbo makes more than the setpoint asks for, so the \
@@ -157,8 +178,28 @@ fn the_wastegate_opens_at_high_speed_where_there_is_exhaust_energy_to_spare() {
 #[test]
 fn part_load_needs_less_boost_than_full_load() {
     let config = config();
-    let full = dyno::operating_point(&config, 1_200.0, 1.0, 100, 12, true).expect("full");
-    let part = dyno::operating_point(&config, 1_200.0, 0.4, 100, 12, true).expect("part");
+    let full = dyno::operating_point(
+        &config,
+        1_200.0,
+        &PointOptions {
+            pedal: 1.0,
+            settle_cycles: 100,
+            measure_cycles: 12,
+            ..PointOptions::default()
+        },
+    )
+    .expect("full");
+    let part = dyno::operating_point(
+        &config,
+        1_200.0,
+        &PointOptions {
+            pedal: 0.4,
+            settle_cycles: 100,
+            measure_cycles: 12,
+            ..PointOptions::default()
+        },
+    )
+    .expect("part");
     assert!(
         part.intake_pressure_pa < full.intake_pressure_pa,
         "less fuel demanded means a lower boost setpoint and less exhaust energy"
@@ -196,6 +237,7 @@ fn turbo_lag_after_a_fuel_step_is_plausible() {
         starter: false,
         ignition: true,
         egr_enabled: true,
+        ..Controls::default()
     };
 
     // Settle at light load: the turbo is turning but barely making boost.

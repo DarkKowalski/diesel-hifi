@@ -218,6 +218,9 @@ describe('SimClient', () => {
       starter: false,
       ignition: true,
       egrEnabled: true,
+      brakeStage: 0,
+      gear: 0,
+      roadGradePercent: 0,
     });
     await client.run(true);
     await client.reset({ seed: 3, initialRpm: 0, initialCrankRad: 0, coolantTempK: 293.15 });

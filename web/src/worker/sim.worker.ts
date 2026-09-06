@@ -194,13 +194,15 @@ function runSweep(rid: number, options: SweepOptions): void {
     const rpm = speeds[index]!;
     try {
       points.push(
-        handle.operatingPoint(
-          rpm,
-          options.pedal,
-          options.settleCycles,
-          options.measureCycles,
-          options.egrEnabled,
-        ) as OperatingPoint,
+        handle.operatingPoint(rpm, {
+          pedal: options.pedal,
+          settleCycles: options.settleCycles,
+          measureCycles: options.measureCycles,
+          egrEnabled: options.egrEnabled,
+          // A dynamometer sweep is a fuelled sweep with the brake off.
+          ignition: true,
+          brakeStage: 0,
+        }) as OperatingPoint,
       );
     } catch (error) {
       fail(rid, error);

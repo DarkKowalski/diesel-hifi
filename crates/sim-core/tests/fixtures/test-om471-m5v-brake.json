@@ -1,8 +1,8 @@
 {
   "schema_version": 4,
   "identity": {
-    "id": "mercedes-benz-om471-9-m3d-375kw",
-    "display_name": "OM 471.9 M3D 375 kW Reference",
+    "id": "test-om471-m5v-brake",
+    "display_name": "OM 471.9 M3D with M5V high performance brake (test fixture)",
     "manufacturer_reference": "Mercedes-Benz OM 471.9, power code M3D (engine series 471.9 in model 963/964)",
     "power_code": "M3D",
     "disclaimer": "Public-spec reference simulation built from published service-literature figures. Not an OEM calibration, not a digital twin, and not endorsed by Mercedes-Benz. Manufacturer and engine names are used as factual references only. Values marked calibrated are our estimates, not OEM data. The engine speeds at which this model reaches the published 375 kW and 2500 Nm are an outcome of our calibration; the manual does not publish them."
@@ -178,25 +178,25 @@
     "max_rate": 0.35
   },
   "engine_brake": {
-    "variant": "M5U",
+    "variant": "M5V",
     "min_speed_rpm": 1000.0,
     "stage1_cylinder_count": 3,
     "anchor_low_rpm": 1300.0,
-    "anchor_low_power_w": 100000.0,
+    "anchor_low_power_w": 150000.0,
     "anchor_high_rpm": 2300.0,
-    "anchor_high_power_w": 300000.0,
+    "anchor_high_power_w": 400000.0,
     "charge_center_rad": -2.268928,
     "release_center_rad": -0.2094395,
-    "charge_width_rad": 0.1745329,
-    "release_width_rad": 0.1745329,
     "effective_area_m2": 0.0013,
-    "stage1_boost_target_pa": 101325.0,
-    "stage2_boost_target_pa": 101325.0,
-    "stage3_boost_target_pa": 185000.0,
-    "wastegate_gain_scale": 0.1,
     "stage1_egr_command": 0.0,
     "stage2_egr_command": 0.0,
-    "stage3_egr_command": 0.0
+    "stage3_egr_command": 0.0,
+    "stage1_boost_target_pa": 150000.0,
+    "stage2_boost_target_pa": 170000.0,
+    "stage3_boost_target_pa": 240000.0,
+    "wastegate_gain_scale": 0.1,
+    "charge_width_rad": 0.1745329,
+    "release_width_rad": 0.1745329
   },
   "driveline": {
     "vehicle_mass_kg": 40000.0,
@@ -1058,7 +1058,7 @@
     {
       "path": "engine_brake.variant",
       "status": "calibrated",
-      "value_note": "M5U, the standard system. The manual offers a high performance system (M5V) with identical hardware and a different code-controlled data record; this configuration is fitted with the standard one.",
+      "value_note": "M5V, the high performance system. Identical hardware to M5U; the manual states the two differ only by a different code-controlled data record.",
       "purpose": "Names which published anchor pair this configuration is validated against, and which per-stage air-path data record it carries.",
       "safe_range": [
         0.0,
@@ -1089,7 +1089,7 @@
     {
       "path": "engine_brake.anchor_low_power_w",
       "status": "published",
-      "value_note": "100 kW at 1300 rpm, published for code M5U. VALIDATION TARGET ONLY: no solver code reads this, and braking torque is derived from cylinder pressure through slider-crank geometry like any other torque. The manual does not state which brake stage the figure describes; this model compares it against stage III, the maximum, and that reading is our interpretation rather than published fact.",
+      "value_note": "150 kW at 1300 rpm, published for code M5V. VALIDATION TARGET ONLY.",
       "source_id": "mb-om471-intro-2011",
       "locator": "GF14.15-W-0002H, Engine brake function (ENGINES 471.9 in MODEL 963, 964, codes M5U and M5V), printed pages 60-65 (PDF pages 63-68)"
     },
@@ -1103,14 +1103,14 @@
     {
       "path": "engine_brake.anchor_high_power_w",
       "status": "published",
-      "value_note": "300 kW at 2300 rpm, published for code M5U. VALIDATION TARGET ONLY, on the same terms as the lower anchor.",
+      "value_note": "400 kW at 2300 rpm, published for code M5V. VALIDATION TARGET ONLY.",
       "source_id": "mb-om471-intro-2011",
       "locator": "GF14.15-W-0002H, Engine brake function (ENGINES 471.9 in MODEL 963, 964, codes M5U and M5V), printed pages 60-65 (PDF pages 63-68)"
     },
     {
       "path": "engine_brake.charge_center_rad",
       "status": "calibrated",
-      "value_note": "-130 degrees, early in the compression stroke and clear of the intake valve, which shuts at -160 degrees. The manual's first brake cam peak, which opens the exhaust valve so that 'exhaust flows out of the exhaust manifold back into the cylinder due to the head pressure'. The source manual does not publish this.",
+      "value_note": "-148 degrees, early in the compression stroke and just after the intake valve has shut. The manual's first brake cam peak, which opens the exhaust valve so that 'exhaust flows out of the exhaust manifold back into the cylinder due to the head pressure'. The source manual does not publish this.",
       "purpose": "Sets how much manifold gas is packed into the cylinder before compression, which is most of what determines braking work.",
       "safe_range": [
         -2.7576202,
@@ -1120,7 +1120,7 @@
     {
       "path": "engine_brake.release_center_rad",
       "status": "calibrated",
-      "value_note": "-12 degrees, just before firing TDC. The manual's second brake cam peak: 'the exhaust valve opens for a brief period shortly before the end of the compression stroke. Now part of the compression pressure is reduced.' The source manual does not publish this.",
+      "value_note": "-16 degrees, just before firing TDC. The manual's second brake cam peak: 'the exhaust valve opens for a brief period shortly before the end of the compression stroke. Now part of the compression pressure is reduced.' The source manual does not publish this.",
       "purpose": "Sets how much of the compression work is thrown away instead of being returned to the piston on expansion. Too early wastes compression that has not been paid for yet; too late leaves pressure to push back.",
       "safe_range": [
         -0.7853982,
@@ -1130,8 +1130,8 @@
     {
       "path": "engine_brake.charge_width_rad",
       "status": "calibrated",
-      "value_note": "10 degrees of crank either side of the charging peak. The source manual does not publish this.",
-      "purpose": "Duration of the charging lobe. Narrow, and measurably so: widening it to 28 degrees LOWERS absorbed power at both anchors, because a lobe still open once the piston is rising lets the charge back out again.",
+      "value_note": "15 degrees of crank either side of each peak. The source manual does not publish this.",
+      "purpose": "Charging lobe half-width.",
       "safe_range": [
         0.0349066,
         0.6981317
@@ -1140,8 +1140,8 @@
     {
       "path": "engine_brake.release_width_rad",
       "status": "calibrated",
-      "value_note": "10 degrees of crank either side of the release peak. The source manual does not publish this.",
-      "purpose": "Duration of the release lobe. Narrow and late, so the cylinder is dumped at peak compression rather than part way up it. Widening this measurably lowers peak cylinder pressure below the motored trace, which contradicts the manual's 'the compression pressure is increased as a result'.",
+      "value_note": "15 degrees of crank either side of each peak. The source manual does not publish this.",
+      "purpose": "Release lobe half-width.",
       "safe_range": [
         0.0349066,
         0.6981317
@@ -1150,7 +1150,7 @@
     {
       "path": "engine_brake.effective_area_m2",
       "status": "calibrated",
-      "value_note": "1.3e-3 m^2 at full lift, about half the full exhaust port, because the manual says 'one of the two exhaust valves is opened', and brake lift is short. The source manual does not publish this.",
+      "value_note": "7.5e-4 m^2 at full lift. Smaller than the full exhaust port because the manual says 'one of the two exhaust valves is opened', and brake lift is short. The source manual does not publish this.",
       "purpose": "Flow capacity of the braked valve, which sets how completely the cylinder fills and empties in the short time each lobe allows.",
       "safe_range": [
         1e-05,
@@ -1160,8 +1160,8 @@
     {
       "path": "engine_brake.stage1_boost_target_pa",
       "status": "calibrated",
-      "value_note": "101325 Pa, ambient: in the standard system stages I and II do not lean on the air path at all, and the manual introduces the wastegate only when it reaches stage III. The source manual does not publish this.",
-      "purpose": "Wastegate boost setpoint while stage I is engaged.",
+      "value_note": "Raised above ambient even in the lower stages. The high performance record increases cylinder pressure in ALL stages through the wastegate, which is the whole of what distinguishes M5V from M5U. The source manual publishes no target for either variant.",
+      "purpose": "Wastegate boost setpoint while stage 1 is engaged.",
       "safe_range": [
         50000.0,
         600000.0
@@ -1170,8 +1170,8 @@
     {
       "path": "engine_brake.stage2_boost_target_pa",
       "status": "calibrated",
-      "value_note": "101325 Pa, ambient, for the same reason as stage I. The source manual does not publish this.",
-      "purpose": "Wastegate boost setpoint while stage II is engaged.",
+      "value_note": "Raised above ambient even in the lower stages. The high performance record increases cylinder pressure in ALL stages through the wastegate, which is the whole of what distinguishes M5V from M5U. The source manual publishes no target for either variant.",
+      "purpose": "Wastegate boost setpoint while stage 2 is engaged.",
       "safe_range": [
         50000.0,
         600000.0
@@ -1180,21 +1180,11 @@
     {
       "path": "engine_brake.stage3_boost_target_pa",
       "status": "calibrated",
-      "value_note": "185000 Pa absolute. The manual has stage III raising cylinder pressure through 'the wastegate valve on the turbocharger', with the MCM using boost pressure and turbocharger speed as controlled variables, but publishes no target. The source manual does not publish this.",
-      "purpose": "Wastegate boost setpoint while stage III is engaged; this is what makes stage III absorb more than stage II.",
+      "value_note": "Raised above ambient even in the lower stages. The high performance record increases cylinder pressure in ALL stages through the wastegate, which is the whole of what distinguishes M5V from M5U. The source manual publishes no target for either variant.",
+      "purpose": "Wastegate boost setpoint while stage 3 is engaged.",
       "safe_range": [
         50000.0,
         600000.0
-      ]
-    },
-    {
-      "path": "engine_brake.wastegate_gain_scale",
-      "status": "calibrated",
-      "value_note": "0.1, so the wastegate loop runs at a tenth of its fuelled gains and slew rate while braking. Values from 0.05 to 0.15 all converge and agree to better than a percent; 0.02 is too slow to hold the setpoint and the charge runs away to the temperature limit, so this sits an order of magnitude clear of that edge. The source manual does not publish this.",
-      "purpose": "Stabilises the boost loop against the brake's own positive feedback: more boost fills the cylinder harder, which dumps more energy into the turbine, which makes more boost. At full gain the loop hunts above 1800 rpm and the measured brake power depends on where in the oscillation it is sampled.",
-      "safe_range": [
-        0.001,
-        1.0
       ]
     },
     {
@@ -1220,7 +1210,7 @@
     {
       "path": "engine_brake.stage3_egr_command",
       "status": "calibrated",
-      "value_note": "0.0, shut. The manual actuates the EGR positioner in stage III 'if necessary whereby the fill level of the cylinder is increased again'. In this model opening it makes the brake WEAKER, by 8 kW at 2300 rpm at half open and 40 kW fully open: the EGR valve bleeds the exhaust manifold into the intake, and exhaust manifold pressure is exactly what the charging lobe lives on. It is therefore left shut. The source manual does not publish this.",
+      "value_note": "0.0. The manual actuates the EGR positioner in stage III 'if necessary whereby the fill level of the cylinder is increased again'. In this model the wastegate alone reaches the anchors, so the positioner is left shut rather than opened to no measured benefit. The source manual does not publish this.",
       "purpose": "EGR positioner command while stage III is engaged.",
       "safe_range": [
         0.0,
@@ -1548,6 +1538,16 @@
       "value_note": "2500 N m for power code M3D. The engine speed at which this occurs is NOT published; the speed this model reaches it at is our calibration.",
       "source_id": "mb-om471-intro-2011",
       "locator": "SN00.00-W-0002-05H, Technical data of diesel engine OM 471, printed page 11 (PDF page 14), Power categories"
+    },
+    {
+      "path": "engine_brake.wastegate_gain_scale",
+      "status": "calibrated",
+      "value_note": "0.1, matching the shipped configuration.",
+      "purpose": "Detunes the boost loop against the brake's positive feedback.",
+      "safe_range": [
+        0.001,
+        1.0
+      ]
     }
   ]
 }

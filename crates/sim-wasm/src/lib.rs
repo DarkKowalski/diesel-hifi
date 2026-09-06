@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::prelude::*;
 
-use sim_core::dyno::{self, SweepOptions};
+use sim_core::dyno::{self, PointOptions, SweepOptions};
 use sim_core::{Controls, Engine, ResetOptions, SimError, API_VERSION};
 
 /// Version of the WASM API surface.
@@ -189,19 +189,32 @@ impl SimHandle {
     /// untouched. The caller drives the sweep one point at a time so the worker
     /// can report progress and stay responsive.
     #[wasm_bindgen(js_name = operatingPoint)]
-    pub fn operating_point(
-        &self,
-        rpm: f64,
-        pedal: f64,
-        settle_cycles: u32,
-        measure_cycles: u32,
-        egr_enabled: bool,
-    ) -> Result<JsValue, JsValue> {
+    pub fn operating_point(&self, rpm: f64, options: JsValue) -> Result<JsValue, JsValue> {
+        let options: PointOptions = if options.is_undefined() || options.is_null() {
+            PointOptions::default()
+        } else {
+            from_js(options, "operating point options")?
+        };
         let point = self
             .engine
-            .operating_point(rpm, pedal, settle_cycles, measure_cycles, egr_enabled)
+            .operating_point(rpm, &options)
             .map_err(sim_error)?;
         to_js(&point)
+    }
+
+    /// Measure a whole engine-brake speed sweep at one stage, in one call.
+    ///
+    /// The returned `brakePowerW` is negative at every point: the engine is
+    /// absorbing power, not making it.
+    #[wasm_bindgen(js_name = brakeSweep)]
+    pub fn brake_sweep(&self, stage: u8, options: JsValue) -> Result<JsValue, JsValue> {
+        let options: SweepOptions = if options.is_undefined() || options.is_null() {
+            SweepOptions::default()
+        } else {
+            from_js(options, "sweep options")?
+        };
+        let points = self.engine.brake_sweep(stage, options).map_err(sim_error)?;
+        to_js(&points)
     }
 
     /// Measure a whole speed sweep in one call.

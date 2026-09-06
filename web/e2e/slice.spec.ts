@@ -73,7 +73,7 @@ test('the worker boots and the selector is populated from the real catalog API',
   await expect(page.getByTestId('disclaimer')).not.toBeEmpty();
 
   // Versions come from the WASM module, so a boot means WASM really loaded.
-  await expect(page.getByTestId('status-bar')).toContainText('api v3');
+  await expect(page.getByTestId('status-bar')).toContainText('api v4');
   await expect(page.getByTestId('status-bar')).toContainText('Web Worker');
 });
 
@@ -365,4 +365,86 @@ test('the exhaust output has energy where a speaker can reproduce it', async ({ 
     audible,
     'most of the exhaust energy must sit above 150 Hz, or nothing will be heard',
   ).toBeGreaterThan(tallest * 0.25);
+});
+
+test('a gear and a downhill grade drive the engine, and the brake arrests it', async ({ page }) => {
+  await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect.poll(() => rpm(page), { timeout: 30_000 }).toBeGreaterThan(400);
+
+  // Out of gear the driveline contributes nothing at all, whatever the grade.
+  await page.getByTestId('grade').fill('-6');
+  expect(await numeric(page, 'torque-driveline')).toBe(0);
+  await expect(page.getByTestId('driveline-speed')).toHaveText('—');
+
+  // Get some speed up, then take a gear on the descent and lift off.
+  //
+  // Fifth, not top. A forty-tonne truck on a six percent grade in a high gear
+  // runs away from any engine brake ever built — at 2000 rpm in ninth, gravity
+  // is feeding in around 600 kW against the brake's 220 — which is exactly why
+  // a driver descends in a low gear. The same road speed at a lower ratio means
+  // a faster-turning engine absorbing more, and less gravitational power going
+  // in. Choosing a gear where the brake loses would test nothing but arithmetic.
+  await pullAway(page);
+  await page.getByTestId('load').fill('0');
+  await page.getByTestId('gear').fill('5');
+  await page.getByTestId('pedal').fill('0');
+
+  await expect
+    .poll(() => numeric(page, 'reflected-inertia'), {
+      timeout: 20_000,
+      message: 'a laden truck in gear must reflect real inertia onto the crank',
+    })
+    .toBeGreaterThan(1);
+  await expect.poll(() => numeric(page, 'vehicle-speed'), { timeout: 20_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(() => numeric(page, 'torque-driveline'), {
+      timeout: 20_000,
+      message: 'a descent must drive the crank rather than resist it',
+    })
+    .toBeLessThan(0);
+
+  // Unbraked, the hill winds the engine up on its own.
+  await expect
+    .poll(() => rpm(page), {
+      timeout: 30_000,
+      message: 'a descent in gear with no fuel must accelerate the engine',
+    })
+    .toBeGreaterThan(1_500);
+  const runaway = await rpm(page);
+
+  // Now the brake: all six cylinders plus the wastegate.
+  await page.getByTestId('brake-stage-3').click();
+  await expect
+    .poll(() => numeric(page, 'brake-absorbed'), {
+      timeout: 20_000,
+      message: 'the engine brake must report the power it is absorbing',
+    })
+    .toBeGreaterThan(10);
+  await expect(page.getByTestId('brake-stage-active')).toHaveText('III');
+
+  await expect
+    .poll(() => rpm(page), { timeout: 40_000, message: 'the brake must arrest the descent' })
+    .toBeLessThan(runaway);
+});
+
+test('the brake reports when it is selected but not permitted to act', async ({ page }) => {
+  await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect.poll(() => rpm(page), { timeout: 30_000 }).toBeGreaterThan(400);
+
+  // At idle the engine is below the published 1000 rpm floor, so asking for a
+  // stage must not silently appear to have worked.
+  await page.getByTestId('brake-stage-3').click();
+  await expect(page.getByTestId('brake-inhibited')).toBeVisible();
+  await expect(page.getByTestId('brake-stage-active')).toHaveText('off');
+  expect(await numeric(page, 'brake-absorbed')).toBe(0);
+
+  // Above the floor, with the pedal released, it engages.
+  await pullAway(page);
+  await page.getByTestId('pedal').fill('0');
+  await expect
+    .poll(() => page.getByTestId('brake-stage-active').innerText(), { timeout: 20_000 })
+    .toBe('III');
+  await expect(page.getByTestId('brake-inhibited')).toBeHidden();
 });

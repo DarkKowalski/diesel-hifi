@@ -453,6 +453,115 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         "egr.max_rate must fall in (0, 0.5]",
     )?;
 
+    let b = &config.engine_brake;
+    require(
+        !b.variant.trim().is_empty(),
+        "engine_brake.variant must name the fitted code, such as M5U",
+    )?;
+    finite_positive(b.min_speed_rpm, "engine_brake.min_speed_rpm")?;
+    require(
+        b.stage1_cylinder_count > 0 && b.stage1_cylinder_count <= config.geometry.cylinders as u32,
+        "engine_brake.stage1_cylinder_count must name at least one and at most every cylinder",
+    )?;
+    finite_positive(b.anchor_low_rpm, "engine_brake.anchor_low_rpm")?;
+    finite_positive(b.anchor_low_power_w, "engine_brake.anchor_low_power_w")?;
+    finite_positive(b.anchor_high_rpm, "engine_brake.anchor_high_rpm")?;
+    finite_positive(b.anchor_high_power_w, "engine_brake.anchor_high_power_w")?;
+    require(
+        b.anchor_high_rpm > b.anchor_low_rpm && b.anchor_high_power_w > b.anchor_low_power_w,
+        "the engine brake anchors must be ordered: the upper one is a higher speed and more power",
+    )?;
+    // Both lobes have to fall inside the closed period, or they are not a
+    // decompression brake at all: the charging lobe must come after the intake
+    // valve shuts, and the release lobe must come before the exhaust valve opens
+    // on its own. A lobe outside that window would silently do nothing.
+    let vt = &config.valvetrain;
+    finite_positive(b.charge_width_rad, "engine_brake.charge_width_rad")?;
+    finite_positive(b.release_width_rad, "engine_brake.release_width_rad")?;
+    require(
+        b.charge_center_rad - b.charge_width_rad > vt.intake_valve_close_rad,
+        "engine_brake.charge_center_rad must open after the intake valve has closed",
+    )?;
+    require(
+        b.release_center_rad + b.release_width_rad < vt.exhaust_valve_open_rad,
+        "engine_brake.release_center_rad must close before the exhaust valve opens",
+    )?;
+    require(
+        b.charge_center_rad + b.charge_width_rad < b.release_center_rad - b.release_width_rad,
+        "the charging and release lobes must not overlap",
+    )?;
+    require(
+        b.effective_area_m2 > 0.0 && b.effective_area_m2 <= vt.exhaust_effective_area_m2,
+        "engine_brake.effective_area_m2 must be positive and no larger than the full exhaust port",
+    )?;
+    for (value, path) in [
+        (
+            b.stage1_boost_target_pa,
+            "engine_brake.stage1_boost_target_pa",
+        ),
+        (
+            b.stage2_boost_target_pa,
+            "engine_brake.stage2_boost_target_pa",
+        ),
+        (
+            b.stage3_boost_target_pa,
+            "engine_brake.stage3_boost_target_pa",
+        ),
+    ] {
+        finite_positive(value, path)?;
+    }
+    require(
+        b.wastegate_gain_scale > 0.0 && b.wastegate_gain_scale <= 1.0,
+        "engine_brake.wastegate_gain_scale must fall in (0, 1]",
+    )?;
+    for (value, path) in [
+        (b.stage1_egr_command, "engine_brake.stage1_egr_command"),
+        (b.stage2_egr_command, "engine_brake.stage2_egr_command"),
+        (b.stage3_egr_command, "engine_brake.stage3_egr_command"),
+    ] {
+        require(
+            (0.0..=1.0).contains(&value),
+            format!("{path} must fall in [0, 1]"),
+        )?;
+    }
+
+    let d = &config.driveline;
+    finite_positive(d.vehicle_mass_kg, "driveline.vehicle_mass_kg")?;
+    finite_positive(d.wheel_radius_m, "driveline.wheel_radius_m")?;
+    require(
+        d.rolling_resistance_coeff >= 0.0 && d.rolling_resistance_coeff <= 0.1,
+        "driveline.rolling_resistance_coeff must fall in [0, 0.1]",
+    )?;
+    require(
+        d.drag_area_m2 >= 0.0 && d.drag_area_m2.is_finite(),
+        "driveline.drag_area_m2 must not be negative",
+    )?;
+    finite_positive(d.final_drive_ratio, "driveline.final_drive_ratio")?;
+    require(
+        !d.gear_ratios.is_empty(),
+        "driveline.gear_ratios must list at least one forward gear",
+    )?;
+    for (index, ratio) in d.gear_ratios.iter().enumerate() {
+        finite_positive(*ratio, "driveline.gear_ratios")?;
+        // Lowest gear first, so the ratios fall monotonically. A gearbox listed
+        // out of order would make the gear selector nonsense without failing any
+        // other check.
+        if index > 0 {
+            require(
+                *ratio < d.gear_ratios[index - 1],
+                "driveline.gear_ratios must be listed lowest gear first, strictly decreasing",
+            )?;
+        }
+    }
+    require(
+        d.driveline_efficiency > 0.0 && d.driveline_efficiency <= 1.0,
+        "driveline.driveline_efficiency must fall in (0, 1]",
+    )?;
+    require(
+        d.max_grade_percent > 0.0 && d.max_grade_percent <= 100.0,
+        "driveline.max_grade_percent must fall in (0, 100]",
+    )?;
+
     // The solver step is checked before audio, because the audio cutoffs are
     // validated against the sample rate it implies. Reporting "the low-pass is
     // above Nyquist" when the real fault is an absurd step size would point at

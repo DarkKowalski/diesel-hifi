@@ -29,6 +29,18 @@ export interface Controls {
    * recirculation costs power and fuel to buy lower NOx.
    */
   egrEnabled: boolean;
+  /**
+   * Decompression brake stage: 0 off, through 3.
+   *
+   * This is the driver's switch, not what the brake does. Whether a stage
+   * actually engages is decided against the published operating conditions —
+   * pedal released, above 1000 rpm — and the snapshot reports the difference.
+   */
+  brakeStage: number;
+  /** Selected gear, 0 for neutral. */
+  gear: number;
+  /** Road grade in percent. Negative is a descent. */
+  roadGradePercent: number;
 }
 
 /** Mirrors `sim_core::ResetOptions` (serialized camelCase). */
@@ -127,6 +139,24 @@ export interface Snapshot {
   turbineFlowKgPerS: number;
   egrFlowKgPerS: number;
 
+  /**
+   * Engine brake and driveline.
+   *
+   * `brakeStageActive` is what the brake is *doing*, which is not always what
+   * the switch asks for: the published conditions can hold it off while the
+   * driver has stage III selected, and telemetry has to be able to say so.
+   */
+  brakeStageActive: number;
+  brakeActive: boolean;
+  /** Power the engine is absorbing, watts, positive while braking. */
+  brakeAbsorbedPowerW: number;
+  /** Road speed, m/s. Zero in neutral. */
+  vehicleSpeedMPerS: number;
+  /** Road load at the crank. Negative on a descent. */
+  torqueDrivelineNm: number;
+  reflectedInertiaKgM2: number;
+  gearEngaged: boolean;
+
   /** Exhaust level against the configured reference. Samples arrive separately. */
   audioLevelDb: number;
 
@@ -155,6 +185,7 @@ export interface OperatingPoint {
   wastegatePosition: number;
   egrRate: number;
   residualFraction: number;
+  brakeStage: number;
   converged: boolean;
 }
 
@@ -346,6 +377,11 @@ export const DEFAULT_CONTROLS: Controls = {
   starter: false,
   ignition: false,
   egrEnabled: true,
+  // Brake off, out of gear, on the flat: Milestone 4 contributes nothing until
+  // it is asked to.
+  brakeStage: 0,
+  gear: 0,
+  roadGradePercent: 0,
 };
 
 /** A full-load sweep across the usable speed range. */

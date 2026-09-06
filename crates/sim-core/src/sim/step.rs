@@ -14,8 +14,8 @@ use crate::geometry::SliderCrank;
 use crate::sim::cylinder::{self, Phase};
 use crate::sim::governor::{self, rpm_to_rad_per_s};
 use crate::sim::{
-    acoustics, egr, flow, gas, heat_release, heat_transfer, ignition_delay, injection, manifold,
-    torque, turbo, wrap_cycle, SimState, StepReport,
+    acoustics, brake, driveline, egr, flow, gas, heat_release, heat_transfer, ignition_delay,
+    injection, manifold, torque, turbo, wrap_cycle, SimState, StepReport,
 };
 
 pub(super) fn step(
@@ -65,6 +65,20 @@ pub(super) fn step(
     let events_per_s = count as f64 * rpm / 120.0;
     let fuel_flow_kg_per_s = demand_mg * 1.0e-6 * events_per_s;
 
+    // --- engine brake ---
+    //
+    // Resolved before the air path, because stage III has the MCM actuating the
+    // wastegate and the EGR positioner, and those commands replace the fuelled
+    // calibration's control loops for as long as the brake is engaged.
+    let brake_cmd = brake::command(
+        &cfg.engine_brake,
+        count,
+        state.controls.brake_stage,
+        state.controls.pedal,
+        rpm,
+    );
+    state.brake = brake_cmd;
+
     let load_fraction = (demand_mg / inj.max_fuel_mg_per_cycle).clamp(0.0, 1.0);
     let boost_setpoint_pa =
         ambient_pa + (air.boost_target_schedule.lookup(rpm) - ambient_pa) * load_fraction;
@@ -103,22 +117,46 @@ pub(super) fn step(
 
     // --- actuators ---
     state.egr_rate = egr::rate(egr_flow_kg_per_s, turbo_out.compressor_flow_kg_per_s);
-    let egr_target = cfg.egr.rate_schedule.lookup(rpm).min(cfg.egr.max_rate);
-    state.egr_valve_position = egr::update_valve(
-        &cfg.egr,
-        state.egr_valve_position,
-        &mut state.egr_integral,
-        state.egr_rate,
-        egr_target,
-        state.controls.egr_enabled,
-        dt,
-    );
+    if brake_cmd.active {
+        // While braking the MCM drives the EGR positioner directly rather than
+        // closing a loop on recirculation rate. It has to: the rate schedule is a
+        // combustion calibration, and there is no combustion here. What the valve
+        // is for now is filling the cylinder, which is a position, not a ratio.
+        state.egr_valve_position = brake_cmd.egr_command;
+        state.egr_integral = 0.0;
+    } else {
+        let egr_target = cfg.egr.rate_schedule.lookup(rpm).min(cfg.egr.max_rate);
+        state.egr_valve_position = egr::update_valve(
+            &cfg.egr,
+            state.egr_valve_position,
+            &mut state.egr_integral,
+            state.egr_rate,
+            egr_target,
+            state.controls.egr_enabled,
+            dt,
+        );
+    }
+    // While braking the MCM regulates to its own boost setpoint, through a
+    // deliberately slower loop. The brake changes the plant the wastegate is
+    // driving by about an order of magnitude, and the gains calibrated for the
+    // fuelled engine hunt against it; see `engine_brake.wastegate_gain_scale`.
+    let (wastegate_setpoint_pa, wastegate_gains) = if brake_cmd.active {
+        (
+            brake_cmd.boost_target_pa,
+            turbo::scaled_wastegate_gains(&cfg.turbo, brake_cmd.wastegate_gain_scale),
+        )
+    } else {
+        (
+            boost_setpoint_pa,
+            turbo::scaled_wastegate_gains(&cfg.turbo, 1.0),
+        )
+    };
     state.wastegate_position = turbo::update_wastegate(
-        &cfg.turbo,
+        &wastegate_gains,
         state.wastegate_position,
         &mut state.wastegate_integral,
         state.intake.pressure_pa,
-        boost_setpoint_pa,
+        wastegate_setpoint_pa,
         dt,
     );
     state.turbo_shaft_rad_per_s = turbo::advance_shaft(
@@ -235,6 +273,14 @@ pub(super) fn step(
         );
         let volume_old_m3 = slider.volume_m3(psi_old);
         let volume_new_m3 = slider.volume_m3(psi_new);
+
+        // Brake cam opening for this cylinder, zero unless the brake is engaged
+        // and this cylinder is one of the ones the stage acts on.
+        let brake_area_m2 = if brake_cmd.brakes_cylinder(index) {
+            brake::port_area_m2(&cfg.engine_brake, psi_new)
+        } else {
+            0.0
+        };
 
         if phase_new == Phase::Closed && c.phase != Phase::Closed {
             // --- intake valve closing ---
@@ -381,6 +427,41 @@ pub(super) fn step(
                     c.temperature_k = c.temperature_k.max(1.0);
                     c.pressure_pa =
                         gas::pressure_pa(gas_props, c.mass_kg, c.temperature_k, volume_new_m3);
+
+                    // --- decompression brake ---
+                    //
+                    // The brake cam cracks an exhaust valve twice while the
+                    // cylinder is otherwise shut: once early in compression, to
+                    // let boosted manifold gas *in* and make the coming
+                    // compression more expensive, and once just before firing
+                    // TDC, to throw that compression away instead of returning
+                    // it to the piston on expansion.
+                    //
+                    // `dv` is passed as zero because the piston work for this
+                    // step has already been taken in the temperature update
+                    // above. This transfer is mass and enthalpy only.
+                    if brake_area_m2 > 0.0 {
+                        let after = flow::exchange(
+                            gas_props,
+                            flow::Charge {
+                                mass_kg: c.mass_kg,
+                                temperature_k: c.temperature_k,
+                                pressure_pa: c.pressure_pa,
+                            },
+                            &flow::PortState {
+                                area_m2: brake_area_m2,
+                                pressure_pa: exhaust_pa,
+                                temperature_k: exhaust_k,
+                            },
+                            volume_new_m3,
+                            0.0,
+                            dt,
+                        );
+                        c.mass_kg = after.mass_kg;
+                        c.temperature_k = after.temperature_k;
+                        c.pressure_pa = after.pressure_pa;
+                        c.motored_pressure_pa = c.pressure_pa;
+                    }
                 }
                 Phase::Intake => {
                     c.temperature_k = manifold_k;
@@ -403,71 +484,26 @@ pub(super) fn step(
                     // a manifold boundary because it sits near equilibrium,
                     // whereas the exhaust valve opens onto a pressure ratio
                     // large enough to choke.
-                    let area = exhaust_port.area_m2(psi_new);
-                    let dv = volume_new_m3 - volume_old_m3;
-                    let cv = gas::cv_j_per_kg_k(gas_props, c.temperature_k);
-                    let cp = cv + gas_props.gas_constant_j_per_kg_k;
-
-                    let out_kg = flow::mass_flow_kg_per_s(
+                    let after = flow::exchange(
                         gas_props,
-                        area,
-                        c.pressure_pa,
-                        c.temperature_k,
-                        exhaust_pa,
-                    ) * dt;
-                    let in_kg = flow::mass_flow_kg_per_s(
-                        gas_props,
-                        area,
-                        exhaust_pa,
-                        exhaust_k,
-                        c.pressure_pa,
-                    ) * dt;
+                        flow::Charge {
+                            mass_kg: c.mass_kg,
+                            temperature_k: c.temperature_k,
+                            pressure_pa: c.pressure_pa,
+                        },
+                        &flow::PortState {
+                            area_m2: exhaust_port.area_m2(psi_new),
+                            pressure_pa: exhaust_pa,
+                            temperature_k: exhaust_k,
+                        },
+                        volume_new_m3,
+                        volume_new_m3 - volume_old_m3,
+                        dt,
+                    );
 
-                    // Never empty more than a fraction of the charge in one
-                    // step; an explicit step cannot follow a faster transfer.
-                    let out_kg = out_kg.min(c.mass_kg * 0.2).max(0.0);
-
-                    // Nor may one step carry the cylinder *past* manifold
-                    // pressure. An explicit step transfers a whole step's worth
-                    // of mass at the rate it saw at the start of the step, so
-                    // near equilibrium it overshoots, the pressure difference
-                    // flips sign, and the next step pushes back. That is a
-                    // two-sample limit cycle — a tone at the Nyquist frequency,
-                    // sitting there for as long as the port is open.
-                    //
-                    // It is inaudible in the pressure trace and obvious in the
-                    // audio, because the radiation derivative amplifies with
-                    // frequency: a stopped engine ends up emitting a steady
-                    // ultrasonic buzz that is the loudest thing left once
-                    // combustion stops.
-                    //
-                    // Flow through an orifice stops when the ends equalise; it
-                    // does not reverse within one step. Clamping the transfer to
-                    // the mass that reaches equilibrium says exactly that.
-                    let equilibrium_kg =
-                        gas::mass_kg(gas_props, exhaust_pa, c.temperature_k, volume_new_m3);
-                    let net_kg = in_kg - out_kg;
-                    let headroom_kg = equilibrium_kg - c.mass_kg;
-                    let settle = if net_kg == 0.0 {
-                        1.0
-                    } else {
-                        (headroom_kg / net_kg).clamp(0.0, 1.0)
-                    };
-                    let out_kg = out_kg * settle;
-                    let in_kg = in_kg * settle;
-
-                    let energy_j = c.mass_kg * cv * c.temperature_k;
-                    let new_mass_kg = (c.mass_kg - out_kg + in_kg).max(1.0e-12);
-                    // Enthalpy leaves with the gas that leaves, and arrives with
-                    // any that flows back; the piston does `p dV` on the rest.
-                    let new_energy_j = energy_j - out_kg * cp * c.temperature_k
-                        + in_kg * cp * exhaust_k
-                        - c.pressure_pa * dv;
-
-                    c.mass_kg = new_mass_kg;
-                    c.temperature_k = (new_energy_j / (new_mass_kg * cv)).max(1.0);
-                    c.pressure_pa =
-                        gas::pressure_pa(gas_props, new_mass_kg, c.temperature_k, volume_new_m3);
+                    c.mass_kg = after.mass_kg;
+                    c.temperature_k = after.temperature_k;
+                    c.pressure_pa = after.pressure_pa;
                     c.motored_pressure_pa = c.pressure_pa;
                 }
             }
@@ -521,6 +557,7 @@ pub(super) fn step(
             exhaust_pa,
             ambient_pa,
             &exhaust_port,
+            brake_area_m2,
         );
         if phase_new == Phase::Exhaust {
             let weight = exhaust_port.area_m2(psi_new);
@@ -577,10 +614,28 @@ pub(super) fn step(
     let torque_starter_nm = torque::starter_torque_nm(&cfg.load, state.controls.starter, rpm);
     let torque_load_nm = state.controls.load_torque_nm;
 
+    // --- driveline ---
+    //
+    // The abstract load torque above and the road load here are deliberately
+    // separate terms. One is a dynamometer knob; the other is a truck on a road.
+    // Summing them into a single number would make the telemetry unable to say
+    // which of the two is holding the engine back.
+    let driveline_out = driveline::evaluate(
+        &cfg.driveline,
+        air,
+        gas_props,
+        state.controls.gear,
+        state.controls.road_grade_percent,
+        state.omega_rad_per_s,
+    );
+    state.driveline = driveline_out;
+    let torque_driveline_nm = driveline_out.road_torque_nm;
+
     let torque_net_nm = torque_gas_nm + torque_pumping_nm + torque_starter_nm
         - torque_friction_nm
         - torque_accessory_nm
-        - torque_load_nm;
+        - torque_load_nm
+        - torque_driveline_nm;
 
     state.report = StepReport {
         torque_gas_nm,
@@ -589,6 +644,7 @@ pub(super) fn step(
         torque_accessory_nm,
         torque_starter_nm,
         torque_load_nm,
+        torque_driveline_nm,
         torque_net_nm,
     };
 
@@ -603,7 +659,12 @@ pub(super) fn step(
     }
 
     // --- crank dynamics ---
-    let inertia_kg_m2 = cfg.inertia.rotating_inertia_kg_m2;
+    //
+    // In gear, the truck is rigidly geared to the crankshaft, so its mass appears
+    // here as inertia. Forty tonnes through a high gear reflects two orders of
+    // magnitude more than the engine's own rotating inertia, which is exactly why
+    // a laden truck on a long descent needs a brake that does not wear out.
+    let inertia_kg_m2 = cfg.inertia.rotating_inertia_kg_m2 + driveline_out.reflected_inertia_kg_m2;
     let mut omega = state.omega_rad_per_s + (torque_net_nm / inertia_kg_m2) * dt;
     if !omega.is_finite() {
         return Err(SimError::new(

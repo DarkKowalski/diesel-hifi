@@ -1,6 +1,7 @@
 <script lang="ts">
   import AudioPanel from './components/AudioPanel.svelte';
   import Controls from './components/Controls.svelte';
+  import DrivelinePanel from './components/DrivelinePanel.svelte';
   import DynoPanel from './components/DynoPanel.svelte';
   import EngineSelector from './components/EngineSelector.svelte';
   import ProvenancePanel from './components/ProvenancePanel.svelte';
@@ -36,6 +37,7 @@
     <div class="column">
       <EngineSelector />
       <Controls />
+      <DrivelinePanel />
       <AudioPanel />
     </div>
     <div class="column">
@@ -48,10 +50,10 @@
 
   <footer class="muted small">
     Mercedes-Benz and OM 471 are used as factual references only. No OEM endorsement is implied.
-    Milestone 3 adds wastegate turbocharger and cooled EGR dynamics, exhaust blowdown, and audio
-    taken directly from the computed exhaust pulses. Boost is now an outcome rather than a
-    prescribed schedule. Aftertreatment chemistry, the engine brake and driveline are not
-    modelled.
+    Milestone 4 adds the staged decompression engine brake and a rigid truck driveline. Braking
+    torque comes out of cylinder pressure, exactly as firing torque does, and is validated against
+    the published M5U anchors of 100 kW at 1300 rpm and 300 kW at 2300 rpm. Aftertreatment
+    chemistry, clutch slip and gear-change behaviour are not modelled.
   </footer>
 </main>
 

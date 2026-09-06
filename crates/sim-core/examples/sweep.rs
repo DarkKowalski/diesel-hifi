@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         starter: true,
         ignition: true,
         egr_enabled: true,
+        ..Controls::default()
     })?;
     for tick in 0..90 {
         let snapshot = engine.advance(4_000)?;
@@ -31,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 starter: false,
                 ignition: true,
                 egr_enabled: true,
+                ..Controls::default()
             })?;
         }
         if tick % 15 == 0 || tick == 89 {
@@ -63,14 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // instead of aborting the whole sweep.
     let mut points = Vec::new();
     for rpm in options.speeds() {
-        match dyno::operating_point(
-            config,
-            rpm,
-            options.pedal,
-            options.settle_cycles,
-            options.measure_cycles,
-            options.egr_enabled,
-        ) {
+        match dyno::operating_point(config, rpm, &options.point_options()) {
             Ok(point) => points.push(point),
             Err(error) => println!("{rpm:6.0} rpm FAILED: {error}"),
         }

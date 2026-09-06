@@ -37,6 +37,7 @@ fn controls(pedal: f64, starter: bool, ignition: bool) -> Controls {
         starter,
         ignition,
         egr_enabled: true,
+        ..Controls::default()
     }
 }
 

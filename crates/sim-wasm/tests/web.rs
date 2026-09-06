@@ -34,14 +34,49 @@ fn controls(pedal: f64, load: f64, starter: bool, ignition: bool) -> JsValue {
     set("starter", JsValue::from_bool(starter));
     set("ignition", JsValue::from_bool(ignition));
     set("egrEnabled", JsValue::from_bool(true));
+    set("brakeStage", JsValue::from_f64(0.0));
+    set("gear", JsValue::from_f64(0.0));
+    set("roadGradePercent", JsValue::from_f64(0.0));
+    object.into()
+}
+
+/// Controls with the engine brake selected, in gear, on a descent.
+fn braking_controls(stage: u32, gear: u32, grade_percent: f64) -> JsValue {
+    let object = js_sys::Object::new();
+    let set = |k: &str, v: JsValue| {
+        js_sys::Reflect::set(&object, &JsValue::from_str(k), &v).expect("settable");
+    };
+    set("pedal", JsValue::from_f64(0.0));
+    set("loadTorqueNm", JsValue::from_f64(0.0));
+    set("starter", JsValue::from_bool(false));
+    set("ignition", JsValue::from_bool(true));
+    set("egrEnabled", JsValue::from_bool(true));
+    set("brakeStage", JsValue::from_f64(f64::from(stage)));
+    set("gear", JsValue::from_f64(f64::from(gear)));
+    set("roadGradePercent", JsValue::from_f64(grade_percent));
+    object.into()
+}
+
+/// Point options for one unfuelled engine-brake measurement.
+fn braking_point_options(stage: u32, settle: u32, measure: u32) -> JsValue {
+    let object = js_sys::Object::new();
+    let set = |k: &str, v: JsValue| {
+        js_sys::Reflect::set(&object, &JsValue::from_str(k), &v).expect("settable");
+    };
+    set("pedal", JsValue::from_f64(0.0));
+    set("settleCycles", JsValue::from_f64(f64::from(settle)));
+    set("measureCycles", JsValue::from_f64(f64::from(measure)));
+    set("egrEnabled", JsValue::from_bool(true));
+    set("ignition", JsValue::from_bool(false));
+    set("brakeStage", JsValue::from_f64(f64::from(stage)));
     object.into()
 }
 
 #[wasm_bindgen_test]
 fn exposes_stable_api_versions() {
     // The API version moves with new required calls; the snapshot protocol
-    // stays at 2 because Milestone 3 only added members to it.
-    assert_eq!(api_version(), 3);
+    // stays at 2 because Milestones 3 and 4 only added members to it.
+    assert_eq!(api_version(), 4);
     assert_eq!(snapshot_version(), 2);
 }
 
@@ -283,8 +318,45 @@ fn a_running_engine_produces_audible_output() {
 #[wasm_bindgen_test]
 fn a_dynamometer_point_crosses_the_boundary() {
     let handle = SimHandle::new().expect("handle constructs");
+    let options = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("settleCycles"),
+        &JsValue::from_f64(30.0),
+    )
+    .expect("settable");
+    js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("measureCycles"),
+        &JsValue::from_f64(6.0),
+    )
+    .expect("settable");
+    js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("pedal"),
+        &JsValue::from_f64(1.0),
+    )
+    .expect("settable");
+    js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("egrEnabled"),
+        &JsValue::from_bool(true),
+    )
+    .expect("settable");
+    js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("ignition"),
+        &JsValue::from_bool(true),
+    )
+    .expect("settable");
+    js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("brakeStage"),
+        &JsValue::from_f64(0.0),
+    )
+    .expect("settable");
     let point = handle
-        .operating_point(1200.0, 1.0, 30, 6, true)
+        .operating_point(1200.0, options.into())
         .expect("operating point measures");
     assert!(number(&point, "brakeTorqueNm") > 500.0);
     assert!(number(&point, "brakePowerW") > 0.0);
@@ -322,4 +394,88 @@ fn an_invalid_sweep_is_rejected_with_a_structured_error() {
         .sweep(sweep_options(2000.0, 1000.0, 100.0))
         .expect_err("a reversed sweep is rejected");
     assert_eq!(get(&error, "code").as_string().unwrap(), "INVALID_CONTROL");
+}
+
+#[wasm_bindgen_test]
+fn the_engine_brake_crosses_the_boundary_absorbing_power() {
+    let handle = SimHandle::new().expect("handle constructs");
+    let braked = handle
+        .operating_point(1600.0, braking_point_options(3, 40, 8))
+        .expect("brake point measures");
+
+    // Absorbing, so the sign is negative. It stays negative rather than being
+    // flipped for convenience: it is the same cycle-averaged work integral a
+    // fuelled point reports.
+    assert!(
+        number(&braked, "brakePowerW") < 0.0,
+        "a braking point must report negative power"
+    );
+    assert_eq!(number(&braked, "fuelMgPerCycle"), 0.0);
+    assert_eq!(number(&braked, "brakeStage"), 3.0);
+
+    let motored = handle
+        .operating_point(1600.0, braking_point_options(0, 40, 8))
+        .expect("motored point measures");
+    assert!(
+        number(&braked, "brakePowerW") < number(&motored, "brakePowerW"),
+        "stage III must absorb more than plain motoring"
+    );
+}
+
+#[wasm_bindgen_test]
+fn the_brake_and_driveline_reach_the_snapshot() {
+    let mut handle = SimHandle::new().expect("handle constructs");
+    handle
+        .set_controls(braking_controls(3, 9, -6.0))
+        .expect("controls accepted");
+    handle.reset(JsValue::UNDEFINED).expect("reset");
+    handle
+        .set_controls(braking_controls(3, 9, -6.0))
+        .expect("controls accepted");
+
+    // Reset leaves the crank stopped, so wind it up first: the brake is inert
+    // below the published 1000 rpm floor.
+    let mut snapshot = JsValue::UNDEFINED;
+    for _ in 0..40 {
+        snapshot = handle.advance(4_000).expect("advance");
+    }
+
+    for key in [
+        "brakeStageActive",
+        "brakeAbsorbedPowerW",
+        "vehicleSpeedMPerS",
+        "torqueDrivelineNm",
+        "reflectedInertiaKgM2",
+    ] {
+        assert!(
+            number(&snapshot, key).is_finite(),
+            "`{key}` must arrive finite"
+        );
+    }
+    assert_eq!(
+        get(&snapshot, "gearEngaged"),
+        JsValue::from_bool(true),
+        "ninth gear must read as engaged"
+    );
+    assert!(
+        number(&snapshot, "reflectedInertiaKgM2") > 1.0,
+        "a laden truck in gear must reflect real inertia"
+    );
+    assert!(
+        number(&snapshot, "vehicleSpeedMPerS") > 0.0,
+        "a turning engine in gear must be moving"
+    );
+}
+
+#[wasm_bindgen_test]
+fn an_impossible_brake_stage_is_rejected_with_a_structured_error() {
+    let mut handle = SimHandle::new().expect("handle constructs");
+    let error = handle
+        .set_controls(braking_controls(4, 0, 0.0))
+        .expect_err("stage 4 does not exist");
+    let message = get(&error, "message").as_string().unwrap_or_default();
+    assert!(
+        message.contains("brake_stage"),
+        "the error must name the control, got `{message}`"
+    );
 }

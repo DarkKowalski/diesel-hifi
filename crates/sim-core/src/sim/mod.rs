@@ -11,7 +11,9 @@
 //! `Copy`) at the same time as it mutates state.
 
 pub mod acoustics;
+pub mod brake;
 pub mod cylinder;
+pub mod driveline;
 pub mod egr;
 pub mod flow;
 pub mod gas;
@@ -107,6 +109,19 @@ pub struct Controls {
     /// power and fuel to buy lower NOx.
     #[serde(default = "default_egr_enabled")]
     pub egr_enabled: bool,
+    /// Decompression brake stage, `0` for off through `3`.
+    ///
+    /// The driver's engine brake switch. Whether the stage actually engages is
+    /// decided by [`brake::command`] against the published operating conditions,
+    /// not here — asking for a stage is not the same as getting it.
+    #[serde(default)]
+    pub brake_stage: u8,
+    /// Selected gear, `0` for neutral.
+    #[serde(default)]
+    pub gear: u32,
+    /// Road grade in percent. Negative is a descent.
+    #[serde(default)]
+    pub road_grade_percent: f64,
 }
 
 fn default_egr_enabled() -> bool {
@@ -121,6 +136,12 @@ impl Default for Controls {
             starter: false,
             ignition: false,
             egr_enabled: true,
+            // Brake off, out of gear, on the flat: the driveline and the brake
+            // both contribute exactly nothing until asked, which is what keeps
+            // every pre-Milestone-4 behaviour identical.
+            brake_stage: 0,
+            gear: 0,
+            road_grade_percent: 0.0,
         }
     }
 }
@@ -163,6 +184,8 @@ pub struct StepReport {
     pub torque_accessory_nm: f64,
     pub torque_starter_nm: f64,
     pub torque_load_nm: f64,
+    /// Road load reflected to the crank. Negative on a descent.
+    pub torque_driveline_nm: f64,
     pub torque_net_nm: f64,
 }
 
@@ -314,6 +337,12 @@ pub struct SimState {
     /// Exhaust acoustic source: filters and the produced-sample ring buffer.
     pub(crate) acoustics: Acoustics,
 
+    /// Engine brake and driveline results from the most recent step. Both are
+    /// resolved fresh every step from the controls, so neither is integrated
+    /// state — they are cached here only so the snapshot can report them.
+    pub(crate) brake: brake::Command,
+    pub(crate) driveline: driveline::Output,
+
     pub(crate) fuel_demand_mg: f64,
     pub(crate) last_fuel_charge_mg: f64,
     pub(crate) last_variant: injection::Variant,
@@ -370,6 +399,8 @@ impl Simulation {
             egr_flow_kg_per_s: 0.0,
             engine_flow_kg_per_s: 0.0,
             acoustics: Acoustics::new(config.config().solver.max_steps_per_batch as usize),
+            brake: brake::Command::default(),
+            driveline: driveline::Output::default(),
             fuel_demand_mg: 0.0,
             last_fuel_charge_mg: 0.0,
             last_variant: injection::Variant::Standard,
@@ -441,6 +472,8 @@ impl Simulation {
         state.egr_flow_kg_per_s = 0.0;
         state.engine_flow_kg_per_s = 0.0;
         state.acoustics.reset();
+        state.brake = brake::Command::default();
+        state.driveline = driveline::Output::default();
         state.fuel_demand_mg = 0.0;
         state.last_fuel_charge_mg = 0.0;
         state.last_variant = injection::Variant::Standard;
@@ -497,8 +530,45 @@ impl Simulation {
                 controls.load_torque_nm
             )));
         }
+        if controls.brake_stage > brake::MAX_STAGE {
+            return Err(SimError::invalid_control(format!(
+                "brake_stage must fall in [0, {}], got {}",
+                brake::MAX_STAGE,
+                controls.brake_stage
+            )));
+        }
+        let driveline = &self.config.config().driveline;
+        if controls.gear > driveline.gear_count() {
+            return Err(SimError::invalid_control(format!(
+                "gear must fall in [0, {}], got {}",
+                driveline.gear_count(),
+                controls.gear
+            )));
+        }
+        if !controls.road_grade_percent.is_finite() {
+            return Err(SimError::invalid_control(
+                "road_grade_percent must be finite",
+            ));
+        }
+        let max_grade = driveline.max_grade_percent;
+        if controls.road_grade_percent.abs() > max_grade {
+            return Err(SimError::invalid_control(format!(
+                "road_grade_percent must fall in [-{max_grade}, {max_grade}], got {}",
+                controls.road_grade_percent
+            )));
+        }
         self.state.controls = controls;
         Ok(())
+    }
+
+    /// The engine brake command resolved on the most recent step.
+    pub fn brake_command(&self) -> brake::Command {
+        self.state.brake
+    }
+
+    /// The driveline contribution resolved on the most recent step.
+    pub fn driveline_output(&self) -> driveline::Output {
+        self.state.driveline
     }
 
     /// Current controls.
@@ -717,6 +787,23 @@ impl Simulation {
             compressor_flow_kg_per_s: state.compressor_flow_kg_per_s,
             turbine_flow_kg_per_s: state.turbine_flow_kg_per_s,
             egr_flow_kg_per_s: state.egr_flow_kg_per_s,
+
+            brake_stage_active: state.brake.stage,
+            brake_active: state.brake.active,
+            // Absorbed power is the cycle average with its sign turned round, and
+            // only while the brake is actually operating. A coasting engine also
+            // shows negative brake power — that is just friction and pumping —
+            // and reporting it as brake output would overstate what the brake is
+            // doing.
+            brake_absorbed_power_w: if state.brake.active {
+                (-cycle.brake_power_w).max(0.0)
+            } else {
+                0.0
+            },
+            vehicle_speed_m_per_s: state.driveline.vehicle_speed_m_per_s,
+            torque_driveline_nm: state.report.torque_driveline_nm,
+            reflected_inertia_kg_m2: state.driveline.reflected_inertia_kg_m2,
+            gear_engaged: state.driveline.engaged,
 
             audio_level_db: self.audio_level_db(),
 

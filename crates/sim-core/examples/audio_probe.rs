@@ -70,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             starter: false,
             ignition: true,
             egr_enabled: true,
+            ..Controls::default()
         })?;
 
         let mut sink = vec![0.0f32; PIN_CHUNK as usize];

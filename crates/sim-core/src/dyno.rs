@@ -43,8 +43,75 @@ pub struct OperatingPoint {
     pub wastegate_position: f64,
     pub egr_rate: f64,
     pub residual_fraction: f64,
+    /// Engine brake stage requested at this point, `0` when the brake is off.
+    #[serde(default)]
+    pub brake_stage: u8,
     /// Whether the speed controller actually held the target.
     pub converged: bool,
+}
+
+/// How a single operating point is to be measured.
+///
+/// Grouped rather than passed as a run of positional arguments: the brake sweep
+/// needs to vary fuelling, ignition and brake stage together, and six unlabelled
+/// booleans and numbers at a call site is how the wrong one gets passed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PointOptions {
+    /// Pedal position held throughout. `1.0` gives a full-load point.
+    pub pedal: f64,
+    /// Cycles allowed for the engine and boost to settle before measuring.
+    pub settle_cycles: u32,
+    /// Cycles averaged into the reported figures.
+    pub measure_cycles: u32,
+    /// Whether exhaust gas recirculation runs.
+    pub egr_enabled: bool,
+    /// Whether the engine is fuelled at all.
+    ///
+    /// Off for engine-brake measurements. A braking truck is turning an unfuelled
+    /// engine, and clearing ignition is a more honest way to say that than
+    /// setting the pedal to zero and relying on the idle governor to want nothing
+    /// — which it only does because the measurement speeds happen to sit far
+    /// above idle.
+    pub ignition: bool,
+    /// Decompression brake stage, `0` for off.
+    pub brake_stage: u8,
+}
+
+impl Default for PointOptions {
+    fn default() -> Self {
+        Self {
+            pedal: 1.0,
+            settle_cycles: 40,
+            measure_cycles: 12,
+            egr_enabled: true,
+            ignition: true,
+            brake_stage: 0,
+        }
+    }
+}
+
+impl PointOptions {
+    /// A full-load fuelled point.
+    pub fn fuelled(settle_cycles: u32, measure_cycles: u32) -> Self {
+        Self {
+            settle_cycles,
+            measure_cycles,
+            ..Self::default()
+        }
+    }
+
+    /// An unfuelled point with the engine brake at `stage`.
+    pub fn braking(stage: u8, settle_cycles: u32, measure_cycles: u32) -> Self {
+        Self {
+            pedal: 0.0,
+            settle_cycles,
+            measure_cycles,
+            egr_enabled: true,
+            ignition: false,
+            brake_stage: stage,
+        }
+    }
 }
 
 /// Parameters for a speed sweep.
@@ -113,6 +180,18 @@ impl SweepOptions {
         Ok(())
     }
 
+    /// How each point of this sweep is measured.
+    pub fn point_options(&self) -> PointOptions {
+        PointOptions {
+            pedal: self.pedal,
+            settle_cycles: self.settle_cycles,
+            measure_cycles: self.measure_cycles,
+            egr_enabled: self.egr_enabled,
+            ignition: true,
+            brake_stage: 0,
+        }
+    }
+
     /// Speeds this sweep will visit.
     pub fn speeds(&self) -> Vec<f64> {
         let mut out = Vec::new();
@@ -143,19 +222,22 @@ const CONVERGENCE_TOLERANCE: f64 = 0.02;
 pub fn operating_point(
     config: &ValidatedConfig,
     rpm: f64,
-    pedal: f64,
-    settle_cycles: u32,
-    measure_cycles: u32,
-    egr_enabled: bool,
+    options: &PointOptions,
 ) -> Result<OperatingPoint> {
     if !rpm.is_finite() || rpm <= 0.0 {
         return Err(SimError::invalid_control(
             "operating point rpm must be positive",
         ));
     }
-    if !(0.0..=1.0).contains(&pedal) {
+    if !(0.0..=1.0).contains(&options.pedal) {
         return Err(SimError::invalid_control("pedal must fall in [0, 1]"));
     }
+    if options.settle_cycles == 0 || options.measure_cycles == 0 {
+        return Err(SimError::invalid_control(
+            "an operating point needs at least one settle and one measure cycle",
+        ));
+    }
+    let (settle_cycles, measure_cycles) = (options.settle_cycles, options.measure_cycles);
 
     let dt = config.config().solver.fixed_step_s;
     let mut sim = Simulation::new(
@@ -168,13 +250,16 @@ pub fn operating_point(
         },
     )?;
     // The dynamometer supplies the load by holding speed, so the external load
-    // control stays at zero.
+    // control and the driveline both stay out of it.
     sim.set_controls(Controls {
-        pedal,
+        pedal: options.pedal,
         load_torque_nm: 0.0,
         starter: false,
-        ignition: true,
-        egr_enabled,
+        ignition: options.ignition,
+        egr_enabled: options.egr_enabled,
+        brake_stage: options.brake_stage,
+        gear: 0,
+        road_grade_percent: 0.0,
     })?;
 
     let cycle_s = 2.0 * 60.0 / rpm;
@@ -245,7 +330,7 @@ pub fn operating_point(
 
     Ok(OperatingPoint {
         rpm,
-        pedal,
+        pedal: options.pedal,
         brake_torque_nm: mean_brake,
         indicated_torque_nm: indicated_torque / n,
         friction_torque_nm: friction_torque / n,
@@ -264,6 +349,7 @@ pub fn operating_point(
         wastegate_position: snapshot.wastegate_position,
         egr_rate: snapshot.egr_rate,
         residual_fraction: residual / n,
+        brake_stage: options.brake_stage,
         converged: spread <= CONVERGENCE_TOLERANCE,
     })
 }
@@ -288,19 +374,54 @@ fn advance_cycle_pinned(
 /// Measure a full-load (or part-load) speed sweep.
 pub fn sweep(config: &ValidatedConfig, options: SweepOptions) -> Result<Vec<OperatingPoint>> {
     options.validate()?;
+    let point_options = options.point_options();
     let speeds = options.speeds();
     let mut points = Vec::with_capacity(speeds.len());
     for rpm in speeds {
-        points.push(operating_point(
-            config,
-            rpm,
-            options.pedal,
-            options.settle_cycles,
-            options.measure_cycles,
-            options.egr_enabled,
-        )?);
+        points.push(operating_point(config, rpm, &point_options)?);
     }
     Ok(points)
+}
+
+/// Measure an engine-brake speed sweep: unfuelled, at a fixed brake stage.
+///
+/// Reported `brake_power_w` is negative at every point, because the engine is
+/// absorbing rather than producing. That sign is left alone rather than flipped
+/// for convenience: it comes from the same cycle-averaged work integral as a
+/// fuelled point, and a brake that reported positive power would be hiding what
+/// it is measuring.
+pub fn brake_sweep(
+    config: &ValidatedConfig,
+    stage: u8,
+    options: SweepOptions,
+) -> Result<Vec<OperatingPoint>> {
+    options.validate()?;
+    let point_options = PointOptions::braking(stage, options.settle_cycles, options.measure_cycles);
+    let speeds = options.speeds();
+    let mut points = Vec::with_capacity(speeds.len());
+    for rpm in speeds {
+        points.push(operating_point(config, rpm, &point_options)?);
+    }
+    Ok(points)
+}
+
+/// Absorbed power at one speed and brake stage, in watts, as a positive number.
+///
+/// A convenience for tests and the calibration example, which compare against
+/// published anchors that are quoted as positive absorbed power.
+pub fn absorbed_power_w(
+    config: &ValidatedConfig,
+    rpm: f64,
+    stage: u8,
+    settle_cycles: u32,
+    measure_cycles: u32,
+) -> Result<f64> {
+    let point = operating_point(
+        config,
+        rpm,
+        &PointOptions::braking(stage, settle_cycles, measure_cycles),
+    )?;
+    Ok(-point.brake_power_w)
 }
 
 /// The peak power and peak torque of a measured sweep.

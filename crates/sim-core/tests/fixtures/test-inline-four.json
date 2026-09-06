@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "identity": {
     "id": "synthetic-test-inline-four",
     "display_name": "Synthetic Inline-Four Test Engine",
@@ -1243,6 +1243,276 @@
         0.01,
         2.0
       ]
+    },
+    {
+      "path": "engine_brake.variant",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Names the fixture's brake data record.",
+      "safe_range": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "path": "engine_brake.min_speed_rpm",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Speed floor below which the brake stays off.",
+      "safe_range": [
+        100.0,
+        3000.0
+      ]
+    },
+    {
+      "path": "engine_brake.stage1_cylinder_count",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "How many cylinders stage I acts on. Deliberately two of four, so a hard-coded three would fail here.",
+      "safe_range": [
+        1.0,
+        4.0
+      ]
+    },
+    {
+      "path": "engine_brake.anchor_low_rpm",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Lower validation speed.",
+      "safe_range": [
+        100.0,
+        3000.0
+      ]
+    },
+    {
+      "path": "engine_brake.anchor_low_power_w",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Lower validation power.",
+      "safe_range": [
+        1.0,
+        1000000.0
+      ]
+    },
+    {
+      "path": "engine_brake.anchor_high_rpm",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Upper validation speed.",
+      "safe_range": [
+        100.0,
+        3000.0
+      ]
+    },
+    {
+      "path": "engine_brake.anchor_high_power_w",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Upper validation power.",
+      "safe_range": [
+        1.0,
+        1000000.0
+      ]
+    },
+    {
+      "path": "engine_brake.charge_center_rad",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Charging lobe centre.",
+      "safe_range": [
+        -2.7576202,
+        -2.0943951
+      ]
+    },
+    {
+      "path": "engine_brake.release_center_rad",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Release lobe centre.",
+      "safe_range": [
+        -0.7853982,
+        -0.0349066
+      ]
+    },
+    {
+      "path": "engine_brake.charge_width_rad",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Charging lobe half-width.",
+      "safe_range": [
+        0.0349066,
+        0.6981317
+      ]
+    },
+    {
+      "path": "engine_brake.release_width_rad",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Release lobe half-width.",
+      "safe_range": [
+        0.0349066,
+        0.6981317
+      ]
+    },
+    {
+      "path": "engine_brake.effective_area_m2",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Braked valve flow area.",
+      "safe_range": [
+        1e-05,
+        0.005
+      ]
+    },
+    {
+      "path": "engine_brake.stage1_boost_target_pa",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Wastegate boost setpoint while stage 1 is engaged.",
+      "safe_range": [
+        50000.0,
+        600000.0
+      ]
+    },
+    {
+      "path": "engine_brake.stage2_boost_target_pa",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Wastegate boost setpoint while stage 2 is engaged.",
+      "safe_range": [
+        50000.0,
+        600000.0
+      ]
+    },
+    {
+      "path": "engine_brake.stage3_boost_target_pa",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Wastegate boost setpoint while stage 3 is engaged.",
+      "safe_range": [
+        50000.0,
+        600000.0
+      ]
+    },
+    {
+      "path": "engine_brake.stage1_egr_command",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Stage I EGR positioner command.",
+      "safe_range": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "path": "engine_brake.stage2_egr_command",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Stage II EGR positioner command.",
+      "safe_range": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "path": "engine_brake.stage3_egr_command",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Stage III EGR positioner command.",
+      "safe_range": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "path": "driveline.vehicle_mass_kg",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Mass of the synthetic vehicle.",
+      "safe_range": [
+        500.0,
+        80000.0
+      ]
+    },
+    {
+      "path": "driveline.wheel_radius_m",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Wheel radius.",
+      "safe_range": [
+        0.2,
+        1.0
+      ]
+    },
+    {
+      "path": "driveline.rolling_resistance_coeff",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Rolling resistance.",
+      "safe_range": [
+        0.0,
+        0.1
+      ]
+    },
+    {
+      "path": "driveline.drag_area_m2",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Drag area.",
+      "safe_range": [
+        0.0,
+        20.0
+      ]
+    },
+    {
+      "path": "driveline.final_drive_ratio",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Final drive reduction.",
+      "safe_range": [
+        1.0,
+        10.0
+      ]
+    },
+    {
+      "path": "driveline.gear_ratios",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Five forward ratios.",
+      "safe_range": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "path": "driveline.driveline_efficiency",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Mechanical efficiency.",
+      "safe_range": [
+        0.5,
+        1.0
+      ]
+    },
+    {
+      "path": "driveline.max_grade_percent",
+      "status": "calibrated",
+      "value_note": "Synthetic fixture value; this engine does not exist.",
+      "purpose": "Steepest grade the controls accept.",
+      "safe_range": [
+        1.0,
+        100.0
+      ]
+    },
+    {
+      "path": "engine_brake.wastegate_gain_scale",
+      "status": "calibrated",
+      "value_note": "0.1, matching the shipped configuration.",
+      "purpose": "Detunes the boost loop against the brake's positive feedback.",
+      "safe_range": [
+        0.001,
+        1.0
+      ]
     }
   ],
   "turbo": {
@@ -1281,5 +1551,42 @@
     "rate_p_gain": 20.0,
     "rate_i_gain_per_s": 60.0,
     "max_rate": 0.3
+  },
+  "engine_brake": {
+    "variant": "TEST-A",
+    "min_speed_rpm": 900.0,
+    "stage1_cylinder_count": 2,
+    "anchor_low_rpm": 1200.0,
+    "anchor_low_power_w": 40000.0,
+    "anchor_high_rpm": 2200.0,
+    "anchor_high_power_w": 120000.0,
+    "charge_center_rad": -2.268928,
+    "release_center_rad": -0.2094395,
+    "effective_area_m2": 0.0006,
+    "stage1_egr_command": 0.0,
+    "stage2_egr_command": 0.0,
+    "stage3_egr_command": 0.0,
+    "stage1_boost_target_pa": 101325.0,
+    "stage2_boost_target_pa": 101325.0,
+    "stage3_boost_target_pa": 300000.0,
+    "wastegate_gain_scale": 0.1,
+    "charge_width_rad": 0.1745329,
+    "release_width_rad": 0.1745329
+  },
+  "driveline": {
+    "vehicle_mass_kg": 12000.0,
+    "wheel_radius_m": 0.45,
+    "rolling_resistance_coeff": 0.007,
+    "drag_area_m2": 4.0,
+    "final_drive_ratio": 3.2,
+    "gear_ratios": [
+      6.5,
+      3.9,
+      2.4,
+      1.5,
+      1.0
+    ],
+    "driveline_efficiency": 0.94,
+    "max_grade_percent": 12.0
   }
 }

@@ -16,28 +16,85 @@ Mercedes-Benz OM 471.9 M3D.
 
 Requirements and acceptance criteria live in [`SPEC.md`](SPEC.md).
 
-## Status: Milestone 3 — air path and sound
+## Status: Milestone 4 — truck load and engine brake
 
 Milestone 1 proved the whole path end to end: Rust core → WASM → Web Worker →
 Svelte → static `web/dist`. Milestone 2 replaced its placeholder combustion with
-a real one. Milestone 3 stops prescribing the air path and makes it a physical
-system — and takes the exhaust sound directly from it.
+a real one. Milestone 3 stopped prescribing the air path and made it a physical
+system, taking the exhaust sound directly from it. Milestone 4 gives the engine
+something to work against, and something to hold it back.
 
-**In (Milestone 3):** a mean-value wastegate turbocharger (compressor, turbine,
-a shaft with inertia, a boost controller driving the wastegate); cooled
-high-pressure EGR with a rate controller; both manifolds as real control volumes
-with filling dynamics; burned-gas tracking so recirculated exhaust dilutes the
-oxygen the smoke limit sees; orifice flow through the exhaust valve, giving real
-blowdown; and user-gesture-gated Web Audio whose samples come from that blowdown.
+**In (Milestone 4):** the staged decompression engine brake the manual
+describes — a two-peak brake cam that packs the cylinder from the exhaust
+manifold early in compression and dumps it again just before top dead centre —
+with its three stages, and a rigid truck driveline of gear, final drive, road
+grade, rolling and aerodynamic resistance, and the vehicle's mass reflected onto
+the crankshaft as inertia.
 
-**Boost is now an outcome, not an input.** Milestone 2's `boost_target_schedule`
-survives with a more honest meaning: it is the ECU setpoint the wastegate
-controller regulates towards, which is what the manual describes the MCM doing.
-Turbo lag is no longer a tuned time constant — it emerges from shaft inertia.
+**Braking torque is produced, not prescribed.** The brake computes an *open
+area*; gas flows through it; and the resulting cylinder pressure drives the crank
+through the same slider-crank geometry as combustion. Nothing looks up a braking
+torque, and a test asserts that no solver source so much as mentions the
+published brake-power anchors — those are the validation target, and a model
+allowed to read its own answer would demonstrate nothing.
 
-**Out (later milestones):** aftertreatment chemistry, the staged decompression
-engine brake, driveline and truck load, orifice flow through the *intake* valve,
-and any production-quality audio model.
+**Out (later milestones):** aftertreatment chemistry, clutch slip and
+gear-change behaviour, the manual's shift-assist and engine-stop-assist brake
+functions, ABS interaction, orifice flow through the *intake* valve, and any
+production-quality audio model.
+
+### Engine brake result
+
+The fitted variant is code **M5U**, the standard system. The manual publishes two
+brake-power figures for it, and they are the whole acceptance criterion:
+
+| | Model | Published | Error |
+|---|---:|---:|---:|
+| Brake power at 1300 rpm | 109.0 kW | 100 kW | +9.0% |
+| Brake power at 2300 rpm | 274.4 kW | 300 kW | −8.5% |
+
+Held to ±10% rather than the ±3% the fuelled peaks carry, and the reason is
+worth stating: the power and torque calibration constrained a model whose
+geometry, valve events and injection system were published or tightly bounded,
+whereas the manual publishes **no** brake cam contour, lift, timing, effective
+area or MCM target. There is far more freedom per constraint here.
+
+A tighter fit was available and was rejected. Moving the release lobe earlier and
+widening it reaches ±3% — but it then vents the cylinder from 42° before top dead
+centre, and peak cylinder pressure falls to less than half the motored trace.
+That is a different machine: it hits the number by charging and venting rather
+than by compressing and dumping, and it contradicts the manual's *"the
+compression pressure is increased as a result"*. The configuration shipped here
+opens the release lobe at 12° before top dead centre, where peak pressure sits
+**above** the motored trace, and takes the wider error band.
+
+The manual does not say which stage its figures describe. Maximum brake power is
+stage III, and that is the reading validated against — recorded in provenance and
+here as an interpretation, not as published fact.
+
+| Stage | Manual | Model at 1300 rpm |
+|---|---|---:|
+| Motoring | — | 20.5 kW |
+| I | "brake power is achieved by cylinders 1...3" | 47.4 kW |
+| II | "brake power is provided by all cylinders" | 72.1 kW |
+| III | all cylinders, plus wastegate and EGR positioner | 109.0 kW |
+
+Stage I contributes 0.52 of stage II's braking above the motoring baseline, which
+is what three cylinders of six should give.
+
+### Truck load
+
+Rigid coupling: in gear, road speed is whatever the crankshaft dictates, and the
+truck appears at the crank as inertia — around 210 kg·m² in top gear against the
+engine's own 3.5. That ratio is the whole reason a laden truck on a long descent
+needs a brake that cannot wear out.
+
+Two consequences are documented rather than hidden. Because road speed is derived
+rather than integrated, changing gear changes the truck's speed instantly, and
+neutral means no vehicle at all rather than one coasting. Driveline efficiency is
+applied on the tractive side only, so on overrun the retarding torque is slightly
+overstated; the alternative puts a discontinuity exactly where a descending truck
+sits.
 
 ### Calibration result
 
@@ -45,7 +102,7 @@ and any production-quality audio model.
 |---|---:|---:|---:|
 | Peak power | 369.2 kW at **1800 rpm** | 375 kW | −1.5% |
 | Peak torque | 2509 N·m at **1000 rpm** | 2500 N·m | +0.4% |
-| Max cylinder pressure | 20.29 MPa | 23 MPa envelope | 12% margin |
+| Max cylinder pressure | 20.31 MPa | 23 MPa envelope | 12% margin |
 | Idle | 560 rpm | 560 rpm | on target |
 | Best fuel consumption | 180 g/kW·h | not published | — |
 
@@ -94,7 +151,7 @@ shows where the energy actually is, which no assertion about sample values can.
 
 | Path | Responsibility |
 |---|---|
-| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, the air path, the exhaust acoustic source, the dynamometer harness, snapshots, native tests. No browser, DOM, audio-device, or filesystem dependency. |
+| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, the air path, the engine brake, the truck driveline, the exhaust acoustic source, the dynamometer harness, snapshots, native tests. No browser, DOM, audio-device, or filesystem dependency. |
 | `crates/sim-wasm` | `wasm-bindgen` adapter. Serialization and boundary only; no physics. |
 | `web/src/worker` | WASM lifecycle, fixed-step scheduling, batching, message protocol. |
 | `web/src` | Svelte UI, input, telemetry rendering, Web Audio orchestration. |
@@ -102,12 +159,13 @@ shows where the energy actually is, which no assertion about sample values can.
 | `scripts/verify-dist.mjs` | Static-build verification. |
 
 `crates/sim-core/data/mercedes-benz-om471-9-m3d-375kw.json` is the engine
-configuration (schema version 3). It is compiled into the WASM module with
+configuration (schema version 4). It is compiled into the WASM module with
 `include_str!`, so the deployed site needs no runtime fetch. Regenerate it with
 `python3 scripts/gen-om471-config.py`, which holds the authoritative provenance
-table; `cargo run --release -p sim-core --example sweep` is the calibration probe
-behind the figures above, and `--example audio_probe` reports exhaust levels and
-where their energy sits.
+table. Three calibration probes sit behind the figures above:
+`cargo run --release -p sim-core --example sweep` for the fuelled peaks,
+`--example brake_sweep` for the engine brake against its published anchors, and
+`--example audio_probe` for exhaust levels and where their energy sits.
 
 ## Commands
 
@@ -155,6 +213,7 @@ Locators used by the published parameters:
 | `GF47.00-W-3013H` — *Fuel high pressure circuit function* (471.9 / MODEL 963, code M5Z) | p. 100 / PDF 103 | injection pressure up to 2100 bar |
 | `GF14.20-W-3000H` — *Exhaust gas recirculation, function* (471.9 / MODEL 963, 964) | p. 66 / PDF 69 | **EGR cooler duty: about 650 °C in, about 170 °C out**; the cooled high-pressure loop and its throttle valve; EGR active across the whole speed range |
 | `GF09.40-W-0001H` — *Boost pressure control and turbocharger protection* | pp. 35–36 / PDF 38–39 | wastegate architecture, boost pressure positioner, charge-air cooler, turbocharger protection function. **No numeric value is taken from this section** |
+| `GF14.15-W-0002H` — *Engine brake, function* (471.9 / MODEL 963, 964, codes M5U and M5V) | pp. 60–65 / PDF 63–68 | the decompression principle and the two-peak brake cam; the three stages and that **stage I acts on cylinders 1–3**; the **1000 rpm** activation floor; **M5U 100 kW at 1300 rpm and 300 kW at 2300 rpm**; that the two variants share hardware and differ only by data record |
 
 The later 390 kW / 2600 N m / 2700 bar OM 471 figures are deliberately **not**
 mixed into this configuration. The published ≈1200 kg complete-engine mass is
@@ -175,11 +234,17 @@ wastegate, MCM, charge-air sensors), the EGR loop *architecture*
 (`GF14.20-W-3000H`: cooled high-pressure recirculation, throttle valve,
 positioner, active across the whole speed range) and the APCRS injection
 *structure* (`GF47.00-W-3013H`: "with or without additional pressure
-amplification", up to 2100 bar, MCM-scheduled quantity and timing). Apart from
-the EGR cooler temperatures, it publishes **no** boost pressure, recirculation
-rate, turbine or compressor geometry, efficiency, inertia, back-pressure,
-injection timing, injection quantity, rate shape, fuel consumption, firing order,
-rotating inertia, valve events, friction map, or the speeds of the M3D peaks.
+amplification", up to 2100 bar, MCM-scheduled quantity and timing). The engine
+brake section (`GF14.15-W-0002H`) is the most detailed of all: it describes the
+two-peak cam and what each peak is for, all three stages, and the operating
+conditions.
+
+Apart from the EGR cooler temperatures and the six engine-brake figures, it
+publishes **no** boost pressure, recirculation rate, turbine or compressor
+geometry, efficiency, inertia, back-pressure, injection timing, injection
+quantity, rate shape, fuel consumption, firing order, rotating inertia, valve
+events, brake cam contour or lift, MCM brake target, friction map, vehicle data,
+or the speeds of the M3D peaks.
 
 Every value below is therefore `calibrated` (or `derived`), carries a stated
 purpose and safe range, and is visible in the UI provenance panel. The published
@@ -194,10 +259,13 @@ structure is what justifies the *shape* of the model; none of it supplies number
 | Turbocharger | 100 mm compressor wheel, 0.72/0.70 compressor/turbine efficiency, 3.5e-5 kg m² shaft inertia, 6.0e-4 m² turbine effective area, 2.5e-3 m² wastegate |
 | Manifold volumes | 0.020 m³ intake, 0.010 m³ exhaust |
 | Charge-air cooler | 0.80 effectiveness against 85 °C coolant |
-| Exhaust restriction | 120 kPa per (kg/s)², about 15 kPa at rated flow — muffler and aftertreatment *can* as a flow resistance only |
+| Exhaust restriction | 120 kPa per (kg/s)², about 15 kPa at rated flow — this is all the muffler and aftertreatment are, a flow resistance and nothing more |
 | **EGR rate** | 0.04–0.14 against speed, ceiling 0.35. Pressure-limited to zero at full load below about 1000 rpm, where the turbine cannot lift exhaust above intake |
 | EGR valve | 4.0e-4 m² fully open, discharge coefficient 0.70 |
 | Exhaust valve | 2.5e-3 m² at full lift, 35° of crank to ramp between shut and full lift |
+| **Brake cam contour** | charging lobe centred 130° BTDC, release lobe 12° BTDC, half-widths 10° each, 1.3e-3 m² at full lift. The manual describes both peaks and their purpose but publishes no contour, lift or timing |
+| **Brake stage air path** | stages I and II leave the wastegate alone; stage III regulates to 2.33 bar absolute with the loop detuned to a tenth of its fuelled gains. The EGR positioner stays shut in every stage |
+| Driveline | 40 t gross combination mass, 0.506 m wheels, Cr 0.006, 6.0 m² drag area, 2.61 final drive, twelve ratios from 14.93:1 to 1.00:1, 0.95 efficiency. The source is an engine manual and publishes nothing at all about the vehicle |
 | Injection timing | 8–15° BTDC against speed, retarded 0.00075 rad/mg with load — the retard is what holds peak pressure inside the 230 bar envelope |
 | Smoke limit | 19.5:1 minimum air/fuel ratio; stoichiometric taken as 14.5:1 |
 | Exhaust acoustics | 20 Hz high pass, 6 kHz two-pole muffler roll-off, soft-clip knee 0.85, gain set so the start transient approaches the knee without saturating |
@@ -234,7 +302,27 @@ structure is what justifies the *shape* of the model; none of it supplies number
   **The model does not predict emissions**, so the benefit EGR buys can only be
   shown indirectly, as a lower combustion temperature.
 - **Audio is basic, per SPEC §2.** Exhaust pulses only: no turbocharger whine, no
-  intake noise, no pipe resonance, no mechanical noise.
+  intake noise, no pipe resonance, no mechanical noise. The engine brake is
+  audible, but only because its release lobe opens a real port onto a real
+  pressure difference — nothing was added to make it bark.
+- **The brake\'s wastegate loop is deliberately slower than the fuelled one.**
+  The brake carries its own positive feedback — more boost packs the cylinder
+  harder, which dumps more energy into the turbine, which makes more boost — and
+  the gains calibrated for the fuelled engine hunt against it above 1800 rpm.
+  Absorbed power at the upper anchor then swung between 282 and 300 kW depending
+  only on where in the oscillation the average landed, and more settling did not
+  help because it was a limit cycle rather than a transient. Commanding a fixed
+  valve position instead is worse still: absorbed power swings roughly threefold
+  between positions 0.35 and 0.25 as the turbine reaches its speed clamp.
+- **Two of the brake\'s three published operating conditions are represented.**
+  A released pedal and the 1000 rpm floor are enforced. The manual also requires
+  the clutch pedal released and ABS not in closed-loop operation; this model
+  carries neither signal, so those conditions are absent rather than
+  approximated.
+- **The driveline coupling is rigid, with no clutch.** Road speed is derived from
+  crank speed rather than integrated, so changing gear changes the truck\'s speed
+  instantly, and neutral disengages the vehicle entirely rather than letting it
+  coast. There is no gear-change logic and no shift-assist braking.
 
 ## Determinism
 

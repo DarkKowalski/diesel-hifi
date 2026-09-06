@@ -96,13 +96,40 @@ pub fn compressor_flow_kg_per_s(
     max_flow * (1.0 - normalised * normalised).max(0.0).sqrt()
 }
 
+/// Tuning of the wastegate loop: the two gains and the actuator rate limit.
+///
+/// Split out from [`Turbo`] because the engine brake runs the same controller
+/// against a very different plant and needs it slowed down. Everything the loop
+/// needs is here, so the caller decides the tuning and the controller stays one
+/// function rather than two that could drift apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WastegateGains {
+    pub p_gain_per_pa: f64,
+    pub i_gain_per_pa_s: f64,
+    pub slew_per_s: f64,
+}
+
+/// The configured wastegate tuning, with every term scaled by `scale`.
+///
+/// `scale` of 1.0 gives the fuelled calibration unchanged. The engine brake
+/// passes something much smaller; see `engine_brake.wastegate_gain_scale` for
+/// the measurement that motivated it.
+#[inline]
+pub fn scaled_wastegate_gains(turbo: &Turbo, scale: f64) -> WastegateGains {
+    WastegateGains {
+        p_gain_per_pa: turbo.wastegate_p_gain_per_pa * scale,
+        i_gain_per_pa_s: turbo.wastegate_i_gain_per_pa_s * scale,
+        slew_per_s: turbo.wastegate_slew_per_s * scale,
+    }
+}
+
 /// Advance the wastegate actuator toward what the boost controller asks for.
 ///
 /// Proportional-integral on boost error, then rate-limited: the vacuum cell and
 /// linkage the manual describes cannot slam from shut to open instantly.
 #[inline]
 pub fn update_wastegate(
-    turbo: &Turbo,
+    gains: &WastegateGains,
     position: f64,
     integral: &mut f64,
     boost_pa: f64,
@@ -113,14 +140,14 @@ pub fn update_wastegate(
 
     // Integrate only while the actuator has somewhere to go, so the term cannot
     // wind up against its own end stops.
-    let candidate = *integral + error_pa * turbo.wastegate_i_gain_per_pa_s * dt;
+    let candidate = *integral + error_pa * gains.i_gain_per_pa_s * dt;
     let unsaturated = (position > 0.0 || error_pa > 0.0) && (position < 1.0 || error_pa < 0.0);
     if unsaturated {
         *integral = candidate.clamp(-1.0, 1.0);
     }
 
-    let demand = (error_pa * turbo.wastegate_p_gain_per_pa + *integral).clamp(0.0, 1.0);
-    let max_move = turbo.wastegate_slew_per_s * dt;
+    let demand = (error_pa * gains.p_gain_per_pa + *integral).clamp(0.0, 1.0);
+    let max_move = gains.slew_per_s * dt;
     position + (demand - position).clamp(-max_move, max_move)
 }
 
@@ -294,7 +321,14 @@ mod tests {
         let mut integral = 0.0;
         let mut position = 0.0;
         for _ in 0..2000 {
-            position = update_wastegate(&t, position, &mut integral, 260_000.0, 200_000.0, 1.0e-3);
+            position = update_wastegate(
+                &scaled_wastegate_gains(&t, 1.0),
+                position,
+                &mut integral,
+                260_000.0,
+                200_000.0,
+                1.0e-3,
+            );
         }
         assert!(
             position > 0.9,
@@ -308,7 +342,14 @@ mod tests {
         let mut integral = 0.0;
         let mut position = 1.0;
         for _ in 0..2000 {
-            position = update_wastegate(&t, position, &mut integral, 120_000.0, 200_000.0, 1.0e-3);
+            position = update_wastegate(
+                &scaled_wastegate_gains(&t, 1.0),
+                position,
+                &mut integral,
+                120_000.0,
+                200_000.0,
+                1.0e-3,
+            );
         }
         assert!(
             position < 0.05,
@@ -321,7 +362,14 @@ mod tests {
         let t = turbo();
         let mut integral = 0.0;
         let dt = 1.0e-3;
-        let moved = update_wastegate(&t, 0.0, &mut integral, 1.0e6, 100_000.0, dt);
+        let moved = update_wastegate(
+            &scaled_wastegate_gains(&t, 1.0),
+            0.0,
+            &mut integral,
+            1.0e6,
+            100_000.0,
+            dt,
+        );
         assert!(
             moved <= t.wastegate_slew_per_s * dt + 1.0e-12,
             "moved {moved} in one step, limit is {}",

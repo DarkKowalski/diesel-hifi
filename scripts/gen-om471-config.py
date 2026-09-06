@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit the schema-3 OM 471.9 M3D configuration document.
+"""Emit the schema-4 OM 471.9 M3D configuration document.
 
 Kept in the repository because the provenance table is the authoritative record
 of which values came from the manual and which are our calibration. Regenerate
@@ -35,6 +35,11 @@ L_EGR = (
     "GF14.20-W-3000H, Exhaust gas recirculation function "
     "(ENGINES 471.9 in MODEL 963, 964), printed page 66 (PDF page 69)"
 )
+L_BRAKE = (
+    "GF14.15-W-0002H, Engine brake function "
+    "(ENGINES 471.9 in MODEL 963, 964, codes M5U and M5V), "
+    "printed pages 60-65 (PDF pages 63-68)"
+)
 
 DEG = math.pi / 180.0
 
@@ -53,8 +58,29 @@ EGR_EFFECTIVENESS = round(
     (EGR_COOLER_IN_K - EGR_COOLER_OUT_K) / (EGR_COOLER_IN_K - COOLANT_K), 7
 )
 
+# The engine brake is fitted in one of two variants. The manual is explicit that
+# "the hardware of the two systems is identical" and that they differ only by "a
+# different code-controlled data record", so the variant selects data here too.
+#
+# M5U, the standard system, is the one fitted to this configuration. M5V's
+# anchors are recorded in the comment below rather than in the document, because
+# a configuration should carry the figures for the variant it actually is:
+#
+#     M5V, high performance:  150 kW at 1300 rpm, 400 kW at 2300 rpm
+#
+# The published anchors are a *validation target*. No solver code may read them,
+# and a test asserts that. A brake permitted to look up its own answer would
+# demonstrate nothing about the physics underneath it.
+BRAKE_VARIANT = "M5U"
+BRAKE_MIN_RPM = 1000.0
+BRAKE_STAGE1_CYLINDERS = 3
+BRAKE_ANCHOR_LOW_RPM = 1300.0
+BRAKE_ANCHOR_LOW_W = 100000.0
+BRAKE_ANCHOR_HIGH_RPM = 2300.0
+BRAKE_ANCHOR_HIGH_W = 300000.0
+
 config = {
-    "schema_version": 3,
+    "schema_version": 4,
     "identity": {
         "id": "mercedes-benz-om471-9-m3d-375kw",
         "display_name": "OM 471.9 M3D 375 kW Reference",
@@ -206,6 +232,50 @@ config = {
         "rate_p_gain": 20.0,
         "rate_i_gain_per_s": 60.0,
         "max_rate": 0.35,
+    },
+    "engine_brake": {
+        "variant": BRAKE_VARIANT,
+        "min_speed_rpm": BRAKE_MIN_RPM,
+        "stage1_cylinder_count": BRAKE_STAGE1_CYLINDERS,
+        "anchor_low_rpm": BRAKE_ANCHOR_LOW_RPM,
+        "anchor_low_power_w": BRAKE_ANCHOR_LOW_W,
+        "anchor_high_rpm": BRAKE_ANCHOR_HIGH_RPM,
+        "anchor_high_power_w": BRAKE_ANCHOR_HIGH_W,
+        "charge_center_rad": rad(-130.0),
+        "release_center_rad": rad(-12.0),
+        "charge_width_rad": rad(10.0),
+        "release_width_rad": rad(10.0),
+        "effective_area_m2": 0.0013,
+        "stage1_boost_target_pa": 101325.0,
+        "stage2_boost_target_pa": 101325.0,
+        "stage3_boost_target_pa": 185000.0,
+        "wastegate_gain_scale": 0.1,
+        "stage1_egr_command": 0.0,
+        "stage2_egr_command": 0.0,
+        "stage3_egr_command": 0.0,
+    },
+    "driveline": {
+        "vehicle_mass_kg": 40000.0,
+        "wheel_radius_m": 0.506,
+        "rolling_resistance_coeff": 0.006,
+        "drag_area_m2": 6.0,
+        "final_drive_ratio": 2.61,
+        "gear_ratios": [
+            14.93,
+            11.64,
+            9.02,
+            7.04,
+            5.64,
+            4.40,
+            3.39,
+            2.65,
+            2.05,
+            1.60,
+            1.28,
+            1.00,
+        ],
+        "driveline_efficiency": 0.95,
+        "max_grade_percent": 15.0,
     },
     "governor": {
         "idle_target_rpm": 560.0,
@@ -898,6 +968,252 @@ provenance = [
         "HC rise when the exhaust proportion is too high.",
         0.0,
         0.5,
+    ),
+    # --- engine brake --------------------------------------------------------
+    #
+    # The manual describes the mechanism in more detail than any other subsystem
+    # in this configuration, and publishes six numbers about it. It publishes no
+    # cam contour, no lift, no timing and no MCM target, so the entire shape of
+    # the braking event below is calibrated.
+    cal(
+        "engine_brake.variant",
+        f"{BRAKE_VARIANT}, the standard system. The manual offers a high "
+        "performance system (M5V) with identical hardware and a different "
+        "code-controlled data record; this configuration is fitted with the "
+        "standard one.",
+        "Names which published anchor pair this configuration is validated "
+        "against, and which per-stage air-path data record it carries.",
+        0.0,
+        0.0,
+    ),
+    pub(
+        "engine_brake.min_speed_rpm",
+        "1000 rpm. The manual lists 'Engine speed > 1000 rpm' among the "
+        "conditions under which the braking system can be activated.",
+        L_BRAKE,
+    ),
+    pub(
+        "engine_brake.stage1_cylinder_count",
+        "3. The manual states 'In brake stage I the brake power is achieved by "
+        "cylinders 1...3', driven by engine brake solenoid valve stage 1 (Y624) "
+        "through the oil duct for cylinders 1 to 3.",
+        L_BRAKE,
+    ),
+    pub(
+        "engine_brake.anchor_low_rpm",
+        f"1300 rpm, the lower speed at which the manual quotes {BRAKE_VARIANT} "
+        "brake power.",
+        L_BRAKE,
+    ),
+    pub(
+        "engine_brake.anchor_low_power_w",
+        f"100 kW at 1300 rpm, published for code {BRAKE_VARIANT}. VALIDATION "
+        "TARGET ONLY: no solver code reads this, and braking torque is derived "
+        "from cylinder pressure through slider-crank geometry like any other "
+        "torque. The manual does not state which brake stage the figure "
+        "describes; this model compares it against stage III, the maximum, and "
+        "that reading is our interpretation rather than published fact.",
+        L_BRAKE,
+    ),
+    pub(
+        "engine_brake.anchor_high_rpm",
+        f"2300 rpm, the upper speed at which the manual quotes {BRAKE_VARIANT} "
+        "brake power.",
+        L_BRAKE,
+    ),
+    pub(
+        "engine_brake.anchor_high_power_w",
+        f"300 kW at 2300 rpm, published for code {BRAKE_VARIANT}. VALIDATION "
+        "TARGET ONLY, on the same terms as the lower anchor.",
+        L_BRAKE,
+    ),
+    cal(
+        "engine_brake.charge_center_rad",
+        "-130 degrees, early in the compression stroke and clear of the intake "
+        "valve, which shuts at -160 degrees. The manual's first brake cam peak, "
+        "which opens the exhaust valve so that 'exhaust flows out of the exhaust "
+        "manifold back into the cylinder due to the head pressure'. " + NOT_PUBLISHED,
+        "Sets how much manifold gas is packed into the cylinder before "
+        "compression, which is most of what determines braking work.",
+        rad(-158.0),
+        rad(-120.0),
+    ),
+    cal(
+        "engine_brake.release_center_rad",
+        "-12 degrees, just before firing TDC. The manual's second brake cam peak: "
+        "'the exhaust valve opens for a brief period shortly before the end of "
+        "the compression stroke. Now part of the compression pressure is "
+        "reduced.' " + NOT_PUBLISHED,
+        "Sets how much of the compression work is thrown away instead of being "
+        "returned to the piston on expansion. Too early wastes compression that "
+        "has not been paid for yet; too late leaves pressure to push back.",
+        rad(-45.0),
+        rad(-2.0),
+    ),
+    cal(
+        "engine_brake.charge_width_rad",
+        "10 degrees of crank either side of the charging peak. " + NOT_PUBLISHED,
+        "Duration of the charging lobe. Narrow, and measurably so: widening it to "
+        "28 degrees LOWERS absorbed power at both anchors, because a lobe still "
+        "open once the piston is rising lets the charge back out again.",
+        rad(2.0),
+        rad(40.0),
+    ),
+    cal(
+        "engine_brake.release_width_rad",
+        "10 degrees of crank either side of the release peak. " + NOT_PUBLISHED,
+        "Duration of the release lobe. Narrow and late, so the cylinder is dumped "
+        "at peak compression rather than part way up it. Widening this measurably "
+        "lowers peak cylinder pressure below the motored trace, which contradicts "
+        "the manual's 'the compression pressure is increased as a result'.",
+        rad(2.0),
+        rad(40.0),
+    ),
+    cal(
+        "engine_brake.effective_area_m2",
+        "1.3e-3 m^2 at full lift, about half the full exhaust port, because the "
+        "manual says 'one of the two exhaust valves is opened', and brake lift is "
+        "short. " + NOT_PUBLISHED,
+        "Flow capacity of the braked valve, which sets how completely the "
+        "cylinder fills and empties in the short time each lobe allows.",
+        1e-05,
+        0.005,
+    ),
+    cal(
+        "engine_brake.stage1_boost_target_pa",
+        "101325 Pa, ambient: in the standard system stages I and II do not lean "
+        "on the air path at all, and the manual introduces the wastegate only "
+        "when it reaches stage III. " + NOT_PUBLISHED,
+        "Wastegate boost setpoint while stage I is engaged.",
+        50000.0,
+        600000.0,
+    ),
+    cal(
+        "engine_brake.stage2_boost_target_pa",
+        "101325 Pa, ambient, for the same reason as stage I. " + NOT_PUBLISHED,
+        "Wastegate boost setpoint while stage II is engaged.",
+        50000.0,
+        600000.0,
+    ),
+    cal(
+        "engine_brake.stage3_boost_target_pa",
+        "185000 Pa absolute. The manual has stage III raising cylinder pressure "
+        "through 'the wastegate valve on the turbocharger', with the MCM using "
+        "boost pressure and turbocharger speed as controlled variables, but "
+        "publishes no target. " + NOT_PUBLISHED,
+        "Wastegate boost setpoint while stage III is engaged; this is what makes "
+        "stage III absorb more than stage II.",
+        50000.0,
+        600000.0,
+    ),
+    cal(
+        "engine_brake.wastegate_gain_scale",
+        "0.1, so the wastegate loop runs at a tenth of its fuelled gains and slew "
+        "rate while braking. Values from 0.05 to 0.15 all converge and agree "
+        "to better than a percent; 0.02 is too slow to hold the setpoint and "
+        "the charge runs away to the temperature limit, so this sits an order "
+        "of magnitude clear of that edge. " + NOT_PUBLISHED,
+        "Stabilises the boost loop against the brake's own positive feedback: "
+        "more boost fills the cylinder harder, which dumps more energy into the "
+        "turbine, which makes more boost. At full gain the loop hunts above 1800 "
+        "rpm and the measured brake power depends on where in the oscillation it "
+        "is sampled.",
+        0.001,
+        1.0,
+    ),
+    cal(
+        "engine_brake.stage1_egr_command",
+        "0.0, valve shut. " + NOT_PUBLISHED,
+        "EGR positioner command while stage I is engaged.",
+        0.0,
+        1.0,
+    ),
+    cal(
+        "engine_brake.stage2_egr_command",
+        "0.0, valve shut. " + NOT_PUBLISHED,
+        "EGR positioner command while stage II is engaged.",
+        0.0,
+        1.0,
+    ),
+    cal(
+        "engine_brake.stage3_egr_command",
+        "0.0, shut. The manual actuates the EGR positioner in stage III 'if "
+        "necessary whereby the fill level of the cylinder is increased again'. In "
+        "this model opening it makes the brake WEAKER, by 8 kW at 2300 rpm at "
+        "half open and 40 kW fully open: the EGR valve bleeds the exhaust "
+        "manifold into the intake, and exhaust manifold pressure is exactly what "
+        "the charging lobe lives on. It is therefore left shut. " + NOT_PUBLISHED,
+        "EGR positioner command while stage III is engaged.",
+        0.0,
+        1.0,
+    ),
+    # --- driveline -----------------------------------------------------------
+    #
+    # The source is an engine manual. It publishes nothing whatsoever about the
+    # vehicle, so every value here is calibrated to a plausible fully-laden
+    # European tractor-trailer.
+    cal(
+        "driveline.vehicle_mass_kg",
+        "40000 kg gross combination mass. " + NOT_PUBLISHED,
+        "Sets both the road load and the inertia the truck reflects onto the "
+        "crankshaft, which is what the engine brake works against.",
+        3000.0,
+        80000.0,
+    ),
+    cal(
+        "driveline.wheel_radius_m",
+        "0.506 m, a laden 315/70 R22.5. " + NOT_PUBLISHED,
+        "Converts between crank speed and road speed, and between road force and "
+        "crank torque.",
+        0.2,
+        1.0,
+    ),
+    cal(
+        "driveline.rolling_resistance_coeff",
+        "0.006, typical of low-rolling-resistance truck tyres. " + NOT_PUBLISHED,
+        "Speed-independent part of the road load.",
+        0.0,
+        0.1,
+    ),
+    cal(
+        "driveline.drag_area_m2",
+        "6.0 m^2 drag area, the product of drag coefficient and frontal area for "
+        "a tractor-trailer. " + NOT_PUBLISHED,
+        "Aerodynamic part of the road load, which grows with the square of road "
+        "speed and dominates at motorway speeds.",
+        0.0,
+        20.0,
+    ),
+    cal(
+        "driveline.final_drive_ratio",
+        "2.61:1. " + NOT_PUBLISHED,
+        "Fixed reduction between gearbox output and wheels.",
+        1.0,
+        10.0,
+    ),
+    cal(
+        "driveline.gear_ratios",
+        "Twelve forward ratios from 14.93:1 to 1.00:1, a conventional heavy-truck "
+        "overdrive-free spread. " + NOT_PUBLISHED,
+        "Selects the operating point the engine sees for a given road speed.",
+        0.0,
+        0.0,
+    ),
+    cal(
+        "driveline.driveline_efficiency",
+        "0.95. " + NOT_PUBLISHED,
+        "Mechanical losses between crankshaft and road. Applied on the tractive "
+        "side, so on overrun this slightly overstates the retarding torque.",
+        0.5,
+        1.0,
+    ),
+    cal(
+        "driveline.max_grade_percent",
+        "15 percent in either direction. " + NOT_PUBLISHED,
+        "Limit on the road grade the controls will accept; steeper than any road "
+        "a laden truck is driven on.",
+        1.0,
+        100.0,
     ),
     # --- governor -----------------------------------------------------------
     pub("governor.idle_target_rpm", "560 rpm idle speed", L_TECH),

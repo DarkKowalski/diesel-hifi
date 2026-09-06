@@ -16,6 +16,9 @@ const SCRIPT: &[(u32, Controls)] = &[
             starter: true,
             ignition: true,
             egr_enabled: true,
+            brake_stage: 0,
+            gear: 0,
+            road_grade_percent: 0.0,
         },
     ),
     // Idle on the governor.
@@ -27,6 +30,9 @@ const SCRIPT: &[(u32, Controls)] = &[
             starter: false,
             ignition: true,
             egr_enabled: true,
+            brake_stage: 0,
+            gear: 0,
+            road_grade_percent: 0.0,
         },
     ),
     // Pull away under load.
@@ -38,6 +44,9 @@ const SCRIPT: &[(u32, Controls)] = &[
             starter: false,
             ignition: true,
             egr_enabled: true,
+            brake_stage: 0,
+            gear: 0,
+            road_grade_percent: 0.0,
         },
     ),
     // Back off.
@@ -49,6 +58,39 @@ const SCRIPT: &[(u32, Controls)] = &[
             starter: false,
             ignition: true,
             egr_enabled: true,
+            brake_stage: 0,
+            gear: 0,
+            road_grade_percent: 0.0,
+        },
+    ),
+    // Crest the hill in gear and start down it, pedal released. The truck now
+    // drives the engine, so the reflected inertia and the road load are both
+    // live.
+    (
+        20_000,
+        Controls {
+            pedal: 0.0,
+            load_torque_nm: 0.0,
+            starter: false,
+            ignition: true,
+            egr_enabled: true,
+            brake_stage: 0,
+            gear: 9,
+            road_grade_percent: -6.0,
+        },
+    ),
+    // Engine brake, all three stages' worth of hardware engaged.
+    (
+        20_000,
+        Controls {
+            pedal: 0.0,
+            load_torque_nm: 0.0,
+            starter: false,
+            ignition: true,
+            egr_enabled: true,
+            brake_stage: 3,
+            gear: 9,
+            road_grade_percent: -6.0,
         },
     ),
 ];
@@ -100,6 +142,7 @@ fn batching_does_not_change_the_result() {
                 starter: true,
                 ignition: true,
                 egr_enabled: true,
+                ..Controls::default()
             })
             .expect("controls accepted");
         let mut remaining = total;
@@ -167,6 +210,7 @@ fn crank_angle_stays_inside_one_four_stroke_cycle() {
             starter: true,
             ignition: true,
             egr_enabled: true,
+            ..Controls::default()
         })
         .expect("controls accepted");
     for _ in 0..40 {

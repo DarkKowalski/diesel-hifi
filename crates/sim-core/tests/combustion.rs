@@ -289,6 +289,7 @@ fn the_running_engine_reports_a_plausible_combustion_chain() {
             starter: true,
             ignition: true,
             egr_enabled: true,
+            ..Controls::default()
         })
         .expect("controls accepted");
 
@@ -303,6 +304,7 @@ fn the_running_engine_reports_a_plausible_combustion_chain() {
                     starter: false,
                     ignition: true,
                     egr_enabled: true,
+                    ..Controls::default()
                 })
                 .expect("controls accepted");
         }
@@ -334,6 +336,7 @@ fn light_load_selects_the_standard_variant() {
             starter: true,
             ignition: true,
             egr_enabled: true,
+            ..Controls::default()
         })
         .expect("controls accepted");
     for tick in 0..90 {
@@ -346,6 +349,7 @@ fn light_load_selects_the_standard_variant() {
                     starter: false,
                     ignition: true,
                     egr_enabled: true,
+                    ..Controls::default()
                 })
                 .expect("controls accepted");
         }

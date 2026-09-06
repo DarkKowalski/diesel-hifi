@@ -8,7 +8,7 @@
 //! them, so nothing here asserts a specific speed as fact. The tests only require
 //! that the peaks land somewhere sane for a heavy-duty truck diesel.
 
-use sim_core::dyno::{self, SweepOptions};
+use sim_core::dyno::{self, PointOptions, SweepOptions};
 use sim_core::{Catalog, EngineConfig, ValidatedConfig};
 
 const PUBLISHED_POWER_W: f64 = 375_000.0;
@@ -209,23 +209,36 @@ fn a_single_operating_point_matches_its_sweep_entry() {
         ..sweep_options()
     };
     let swept = dyno::sweep(&config, options).expect("sweep");
-    let single = dyno::operating_point(
-        &config,
-        1200.0,
-        options.pedal,
-        options.settle_cycles,
-        options.measure_cycles,
-        options.egr_enabled,
-    )
-    .expect("operating point");
+    let single =
+        dyno::operating_point(&config, 1200.0, &options.point_options()).expect("operating point");
     assert_eq!(swept[0], single);
 }
 
 #[test]
 fn part_load_makes_less_torque_than_full_load() {
     let config = config();
-    let full = dyno::operating_point(&config, 1200.0, 1.0, 60, 12, true).expect("full load");
-    let part = dyno::operating_point(&config, 1200.0, 0.4, 60, 12, true).expect("part load");
+    let full = dyno::operating_point(
+        &config,
+        1200.0,
+        &PointOptions {
+            pedal: 1.0,
+            settle_cycles: 60,
+            measure_cycles: 12,
+            ..PointOptions::default()
+        },
+    )
+    .expect("full load");
+    let part = dyno::operating_point(
+        &config,
+        1200.0,
+        &PointOptions {
+            pedal: 0.4,
+            settle_cycles: 60,
+            measure_cycles: 12,
+            ..PointOptions::default()
+        },
+    )
+    .expect("part load");
     assert!(part.brake_torque_nm < full.brake_torque_nm);
     assert!(part.fuel_mg_per_cycle < full.fuel_mg_per_cycle);
     assert!(
