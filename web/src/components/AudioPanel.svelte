@@ -10,6 +10,28 @@
   const levelDb = $derived(snapshot?.audioLevelDb ?? 0);
   const meterPercent = $derived(Math.max(0, Math.min(100, ((levelDb - 40) / 60) * 100)));
 
+  /**
+   * Level measured after everything, including the stage and the volume control.
+   *
+   * The meter above it is the solver's own RMS at the source, which is unmoved
+   * by any of that. Showing both is the point: it is how you can see that the
+   * cockpit stage changes the character rather than simply turning the sound up.
+   */
+  let outputDb = $state<number | null>(null);
+
+  $effect(() => {
+    if (!sim.audioRunning) {
+      outputDb = null;
+      return undefined;
+    }
+    // Ten hertz. This is a readout, not a meter ballistics exercise, and it has
+    // no business on an animation frame.
+    const timer = setInterval(() => {
+      outputDb = sim.readAudioOutputLevelDb();
+    }, 100);
+    return () => clearInterval(timer);
+  });
+
   async function onVolume(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
     sim.setAudioVolume(Number(input.value) / 100);
@@ -39,6 +61,43 @@
     </div>
 
     <SpectrumView />
+
+    <div
+      class="stage"
+      role="group"
+      aria-label="Sound stage"
+      data-testid="audio-stage"
+      data-stage={sim.audioStage}
+    >
+      <button
+        type="button"
+        data-testid="audio-stage-raw"
+        aria-pressed={sim.audioStage === 'raw'}
+        onclick={() => sim.setAudioStage('raw')}
+      >
+        Raw tailpipe
+      </button>
+      <button
+        type="button"
+        data-testid="audio-stage-cockpit"
+        aria-pressed={sim.audioStage === 'cockpit'}
+        onclick={() => sim.setAudioStage('cockpit')}
+      >
+        Truck cockpit
+      </button>
+    </div>
+
+    <p class="muted small">
+      {#if sim.audioStage === 'raw'}
+        The tailpipe signal as the solver produces it, unfiltered. This is the path the spectrum
+        view was built to verify.
+      {:else}
+        The same samples heard from the driver's seat: through the structure, into a small hard box,
+        with the sharp edge of blowdown taken off by insulation and distance. <b>Nothing is added</b>
+        — no road noise, no synthesised rumble. It is a filter, and every value in it is a listening
+        choice, not a measurement. The manual publishes nothing about how this cab sounds.
+      {/if}
+    </p>
 
     <label class="field">
       <span>Volume <b>{(sim.audioVolume * 100).toFixed(0)}%</b></span>
@@ -75,8 +134,14 @@
         <dd data-testid="audio-underruns">{sim.audioUnderruns}</dd>
       </div>
       <div>
-        <dt>Level</dt>
+        <dt>Source level</dt>
         <dd data-testid="audio-level">{levelDb.toFixed(0)} dB</dd>
+      </div>
+      <div>
+        <dt>Output level</dt>
+        <dd data-testid="audio-output-level">
+          {outputDb === null ? '—' : `${outputDb.toFixed(1)} dBFS`}
+        </dd>
       </div>
     </dl>
 
@@ -128,5 +193,17 @@
   }
   button {
     width: 100%;
+  }
+  .stage {
+    display: flex;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+  }
+  .stage button {
+    flex: 1;
+  }
+  .stage button[aria-pressed='true'] {
+    border-color: var(--series-torque, #3987e5);
+    color: var(--series-torque, #3987e5);
   }
 </style>

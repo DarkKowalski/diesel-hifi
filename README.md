@@ -41,7 +41,8 @@ allowed to read its own answer would demonstrate nothing.
 **Out (later milestones):** aftertreatment chemistry, clutch slip and
 gear-change behaviour, the manual's shift-assist and engine-stop-assist brake
 functions, ABS interaction, orifice flow through the *intake* valve, and any
-production-quality audio model.
+production-quality audio *model* — the switchable cockpit stage added since is a
+filter applied to the output, not a second source of sound.
 
 ### Engine brake result
 
@@ -147,6 +148,53 @@ Three things in that chain are easy to get wrong and were:
 The UI carries a spectrum view off the output path for exactly that reason: it
 shows where the energy actually is, which no assertion about sample values can.
 
+### Where you are listening from
+
+That signal is a *tailpipe* signal — what a microphone at the pipe mouth would
+hear. A driver is not at the pipe mouth, so the sound stage is switchable:
+
+| Stage | What it is |
+|---|---|
+| **Raw tailpipe** | The solver's samples, unfiltered. The path the spectrum view was built to verify. |
+| **Truck cockpit** (default) | The same samples heard from the driver's seat. |
+
+The cab is a Web Audio chain in `web/src/lib/cabin.ts` and `audioEngine.ts`, not
+a change to the physics: a 30 Hz high pass, +5 dB of shell boom at 85 Hz, −3 dB
+of boxiness at 380 Hz, a 1.7 kHz low pass for glass and insulation, two early
+reflections at 7.3 and 11.9 ms panned apart, a short generated impulse response
+for the diffuse tail, and a compressor. Both paths always run; switching
+crossfades between them over 40 ms.
+
+**Nothing is added.** No road noise, no synthesised rumble, no samples. Every
+value reaching the speaker is still the solver's cylinder pressure, and a unit
+test asserts the stage builds nothing that can produce sound on its own. The
+impulse response is generated from a seeded PRNG rather than fetched, so the
+build stays self-contained and the room is the same one on every load.
+
+**It is level-matched, and that took two gains rather than one.** A
+post-processing switch that is merely louder wins any comparison for the wrong
+reason. Matched with an output gain alone, the cab sat level with the dry path
+under load and **6.3 dB louder at idle** — the compressor was working at the
+loud end and doing nothing at the quiet end, so one gain could only ever match
+one of them. Trimming ahead of the compressor moves the quiet end nearly decibel
+for decibel and the compressed loud end by much less, so trim-then-make-up
+(0.42 in, 1.50 out) brings both together:
+
+| Measured at the output | Idle | Working: 90% pedal, 300 N·m |
+|---|---:|---:|
+| Cockpit level relative to raw | +0.55 dB | −1.13 dB |
+| 2–8 kHz band | — | −55% |
+| 60–400 Hz band | — | +2% |
+
+Both ends are asserted to within 3 dB by the browser suite, measured through the
+same analyser the spectrum view uses, and repeat to within ±0.05 dB across runs.
+The remaining spread is the compressor doing its job, and closing it entirely
+would mean squashing the engine's dynamics to win an argument about gain.
+
+None of this is published. The manual says nothing about how the engine sounds
+and less about how its cab sounds; these are listening choices, and the UI says
+so where you switch them.
+
 ## Layout
 
 | Path | Responsibility |
@@ -156,6 +204,7 @@ shows where the energy actually is, which no assertion about sample values can.
 | `web/src/worker` | WASM lifecycle, fixed-step scheduling, batching, message protocol. |
 | `web/src` | Svelte UI, input, telemetry rendering, Web Audio orchestration. |
 | `web/src/audio` | The `AudioWorklet` processor: ring buffer, resampler, underrun accounting. Dependency-free plain JavaScript. |
+| `web/src/lib/cabin.ts` | The cockpit listening stage as data: filter table, reflection taps, seeded impulse response. Pure and Web-Audio-free, so it is unit-tested under Node. |
 | `scripts/verify-dist.mjs` | Static-build verification. |
 
 `crates/sim-core/data/mercedes-benz-om471-9-m3d-375kw.json` is the engine
@@ -269,6 +318,7 @@ structure is what justifies the *shape* of the model; none of it supplies number
 | Injection timing | 8–15° BTDC against speed, retarded 0.00075 rad/mg with load — the retard is what holds peak pressure inside the 230 bar envelope |
 | Smoke limit | 19.5:1 minimum air/fuel ratio; stoichiometric taken as 14.5:1 |
 | Exhaust acoustics | 20 Hz high pass, 6 kHz two-pole muffler roll-off, soft-clip knee 0.85, gain set so the start transient approaches the knee without saturating |
+| **Cockpit listening stage** | 30 Hz high pass; +5 dB at 85 Hz, Q 1.1; −3 dB at 380 Hz, Q 1.0; 1.7 kHz low pass; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms of predelay; compressor at −18 dB, ratio 3, 6/180 ms, trimmed 0.42 in and 1.50 out. Presentation only — it is downstream of everything, changes no state, and is bypassable |
 | Nozzle | 8 holes × 175 µm, discharge coefficient 0.75 |
 | Amplified-variant threshold | 120 mg/cycle |
 | Ignition delay | Hardenberg-Hase at cetane number 50 |
@@ -305,6 +355,13 @@ structure is what justifies the *shape* of the model; none of it supplies number
   intake noise, no pipe resonance, no mechanical noise. The engine brake is
   audible, but only because its release lobe opens a real port onto a real
   pressure difference — nothing was added to make it bark.
+- **The cockpit stage is a listening filter, not an audio model.** It says where
+  you are sitting, not what the engine does: it is downstream of the simulation,
+  it has no path back into it, and the snapshot's own level reading is measured
+  at the source and is unmoved by it. The cab's own transfer function was not
+  measured and could not be — there is no such data for this vehicle — so the
+  filter is a plausible one rather than a correct one, and it is bypassable for
+  precisely that reason.
 - **The brake\'s wastegate loop is deliberately slower than the fuelled one.**
   The brake carries its own positive feedback — more boost packs the cylinder
   harder, which dumps more energy into the turbine, which makes more boost — and

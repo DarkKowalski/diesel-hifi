@@ -6,7 +6,7 @@
  * is hard-coded here.
  */
 
-import { AudioEngine, type AudioStatus } from './audioEngine';
+import { AudioEngine, type AudioStage, type AudioStatus } from './audioEngine';
 import { SimClient, SimClientError, type ReadyInfo } from './simClient';
 import {
   DEFAULT_CONTROLS,
@@ -50,6 +50,12 @@ class SimStore {
   audioSampleRateHz = $state(0);
   audioVolume = $state(0.6);
   audioStarting = $state(false);
+  /**
+   * Listening position. `raw` is the tailpipe signal the solver produces;
+   * `cockpit` filters it for the cab. Presentation only — it changes nothing
+   * about the simulation, and the snapshot's own level reading is unaffected.
+   */
+  audioStage = $state<AudioStage>('cockpit');
 
   #client: SimClient | null = null;
   #audio: AudioEngine | null = null;
@@ -134,10 +140,21 @@ class SimStore {
   }
 
   async setControls(patch: Partial<Controls>): Promise<void> {
+    // Merge and apply locally *before* the round trip, not after.
+    //
+    // The controls are a whole struct, so every patch has to send the other
+    // fields too. Waiting for the worker to answer before recording the change
+    // means two inputs moved in quick succession — a pedal and a load, which is
+    // exactly how a truck is driven away — both build their message from the
+    // same stale copy, and the second silently undoes the first. The window is
+    // one worker round trip, and it widens whenever the worker is busy.
+    //
+    // A failed call surfaces as an error rather than as a silently reverted
+    // control, which is the better of the two failures.
     const next = { ...this.controls, ...patch };
+    this.controls = next;
     await this.#withClient(async (client) => {
       await client.setControls(next);
-      this.controls = next;
     });
   }
 
@@ -195,6 +212,9 @@ class SimStore {
         this.audioDeviceRateHz = status.deviceRateHz;
       });
       engine.setVolume(this.audioVolume);
+      // Choose the stage before the graph exists, so the chosen one is in place
+      // the moment sound starts rather than crossfading in after it.
+      engine.setStage(this.audioStage);
       // The solver's own rate; the worklet resamples from it to the device.
       const sourceRateHz = this.audioSampleRateHz || 1 / (this.ready?.fixedStepS ?? 0.000025);
       await engine.start(sourceRateHz);
@@ -224,9 +244,20 @@ class SimStore {
     return this.#audio?.readSpectrum() ?? null;
   }
 
+  /** Level actually leaving the graph, in dBFS. Null when silent. */
+  readAudioOutputLevelDb(): number | null {
+    return this.#audio?.readOutputLevelDb() ?? null;
+  }
+
   setAudioVolume(volume: number): void {
     this.audioVolume = volume;
     this.#audio?.setVolume(volume);
+  }
+
+  /** Switch listening position. Takes effect immediately, crossfaded. */
+  setAudioStage(stage: AudioStage): void {
+    this.audioStage = stage;
+    this.#audio?.setStage(stage);
   }
 
   async resetSimulation(): Promise<void> {

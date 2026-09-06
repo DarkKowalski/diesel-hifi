@@ -59,6 +59,58 @@ async function pullAway(page: Page): Promise<void> {
   await page.getByTestId('load').fill('1800');
 }
 
+/** Bar heights from the spectrum view, which is drawn off the output path. */
+async function spectrumBars(page: Page): Promise<number[]> {
+  return page
+    .getByTestId('spectrum')
+    .locator('rect.bar')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => Number.parseFloat(node.getAttribute('height') ?? '0')),
+    );
+}
+
+/**
+ * Which bar a frequency lands in.
+ *
+ * The axis is logarithmic from 20 Hz to 20 kHz across all the bars, so the
+ * bucket for a frequency f is floor(log10(f/20) / log10(1000) * count).
+ */
+function bucketOf(hz: number, buckets: number): number {
+  return Math.floor((Math.log10(hz / 20) / Math.log10(20_000 / 20)) * buckets);
+}
+
+/** Mean bar height across a frequency band. */
+function bandMean(bars: number[], lowHz: number, highHz: number): number {
+  const slice = bars.slice(bucketOf(lowHz, bars.length), bucketOf(highHz, bars.length));
+  return slice.reduce((sum, height) => sum + height, 0) / Math.max(1, slice.length);
+}
+
+/**
+ * Average the output over a couple of seconds.
+ *
+ * The exhaust is a pulse train, not a tone: any single reading of either the
+ * spectrum or the level is a snapshot of something that moves with every firing
+ * event. Comparing two stages on single readings compares the moment they were
+ * taken in.
+ */
+async function measureOutput(page: Page): Promise<{ low: number; high: number; levelDb: number }> {
+  const lows: number[] = [];
+  const highs: number[] = [];
+  const powers: number[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    await page.waitForTimeout(200);
+    const bars = await spectrumBars(page);
+    lows.push(bandMean(bars, 60, 400));
+    highs.push(bandMean(bars, 2_000, 8_000));
+    const db = Number.parseFloat(await page.getByTestId('audio-output-level').innerText());
+    // Average power, not decibels: the mean of a set of logarithms is not the
+    // logarithm of their mean, and it is loudness that is being compared.
+    powers.push(10 ** (db / 10));
+  }
+  const mean = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / values.length;
+  return { low: mean(lows), high: mean(highs), levelDb: 10 * Math.log10(mean(powers)) };
+}
+
 test('the worker boots and the selector is populated from the real catalog API', async ({
   page,
 }) => {
@@ -330,6 +382,11 @@ test('the exhaust output has energy where a speaker can reproduce it', async ({ 
   await page.getByTestId('enable-audio').click();
   await expect(page.getByTestId('spectrum')).toBeVisible({ timeout: 20_000 });
 
+  // The raw stage on purpose. This asserts something about the signal the
+  // *solver* produces, and measuring it through the cab filter would be
+  // measuring the filter.
+  await page.getByTestId('audio-stage-raw').click();
+
   await pullAway(page);
   await page.waitForTimeout(2_000);
 
@@ -341,30 +398,115 @@ test('the exhaust output has energy where a speaker can reproduce it', async ({ 
   // silent in practice, because all of its energy sits below roughly 150 Hz
   // where ordinary speakers reproduce nothing. Here that shows up as bars only
   // at the far left, and this fails.
-  const heights = await page
-    .getByTestId('spectrum')
-    .locator('rect.bar')
-    .evaluateAll((nodes) =>
-      nodes.map((node) => Number.parseFloat(node.getAttribute('height') ?? '0')),
-    );
+  const heights = await spectrumBars(page);
 
   expect(heights.length).toBeGreaterThan(16);
   const tallest = Math.max(...heights);
   expect(tallest, 'the spectrum should show real output').toBeGreaterThan(1);
 
-  // The axis is logarithmic from 20 Hz to 20 kHz across 64 buckets, so the
-  // bucket for a frequency f is floor(log10(f/20) / log10(1000) * 64).
-  const bucketOf = (hz: number) =>
-    Math.floor((Math.log10(hz / 20) / Math.log10(20_000 / 20)) * heights.length);
-
   const audible = heights
-    .slice(bucketOf(150), bucketOf(4_000))
+    .slice(bucketOf(150, heights.length), bucketOf(4_000, heights.length))
     .reduce((max, h) => Math.max(max, h), 0);
 
   expect(
     audible,
     'most of the exhaust energy must sit above 150 Hz, or nothing will be heard',
   ).toBeGreaterThan(tallest * 0.25);
+});
+
+test('the cockpit stage muffles the top end without simply being louder', async ({ page }) => {
+  const external = await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+
+  await page.getByTestId('enable-audio').click();
+  await expect(page.getByTestId('spectrum')).toBeVisible({ timeout: 20_000 });
+
+  const raw = page.getByTestId('audio-stage-raw');
+  const cockpit = page.getByTestId('audio-stage-cockpit');
+
+  // The cab is the default; raw is one click away.
+  await expect(cockpit).toHaveAttribute('aria-pressed', 'true');
+
+  // Let the start transient go before measuring anything. Starting is the
+  // loudest thing this engine does — louder than the governed rev limit — so a
+  // measurement taken too soon after it is a measurement of the start, and the
+  // two stages are measured seconds apart.
+  await expect
+    .poll(() => rpm(page), { timeout: 20_000, message: 'the engine should settle to idle' })
+    .toBeLessThan(700);
+  await page.waitForTimeout(2_000);
+
+  // Idle first. Level-matching at one operating point is not level-matching:
+  // the compressor in the cab chain works at the loud end and does nothing at
+  // the quiet end, so both ends have to be measured or the match is an
+  // accident of where it was measured.
+  const idleCockpit = await measureOutput(page);
+  await raw.click();
+  await expect(raw).toHaveAttribute('aria-pressed', 'true');
+  await expect(cockpit).toHaveAttribute('aria-pressed', 'false');
+  await page.waitForTimeout(500);
+  const idleRaw = await measureOutput(page);
+
+  // Then working, where there is enough signal above 2 kHz for the spectrum
+  // comparison to be a comparison of content rather than of two noise floors.
+  //
+  // Deliberately not `pullAway`'s full 1800 N·m. This test sits at its working
+  // point for the best part of ten seconds while it measures, and an engine
+  // held at maximum load for that long with no gear to drop into eventually
+  // loses the fight and stalls. That is a truthful thing for the model to do
+  // and a useless thing to try to measure through.
+  await page.getByTestId('pedal').fill('90');
+  await page.getByTestId('load').fill('300');
+  await expect
+    .poll(() => rpm(page), { timeout: 30_000, message: 'the engine should pick up speed' })
+    .toBeGreaterThan(1_400);
+  await page.waitForTimeout(1_500);
+  const loadRaw = await measureOutput(page);
+
+  // Guard the comparison below: two silences compare equal, and a stalled
+  // engine would otherwise fail as an inscrutable 0 against 0.
+  expect(loadRaw.high, 'the raw stage should have content above 2 kHz to compare').toBeGreaterThan(
+    0.5,
+  );
+
+  await cockpit.click();
+  await expect(cockpit).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(500);
+  const loadCockpit = await measureOutput(page);
+
+  // Sitting in a cab takes the sharp edge of blowdown away: glass, insulation
+  // and several metres of air are a low pass, and this is that low pass showing
+  // up in the output rather than in the source.
+  expect(
+    loadCockpit.high,
+    `the cab should roll the top end off (cockpit ${loadCockpit.high.toFixed(1)} vs raw ${loadRaw.high.toFixed(1)})`,
+  ).toBeLessThan(loadRaw.high * 0.75);
+
+  // And it keeps the low end, which is the part of a diesel you feel.
+  expect(loadCockpit.low).toBeGreaterThan(loadRaw.low * 0.75);
+
+  // The switch must not be a volume control in disguise. A post-processing
+  // stage that is merely louder wins any comparison for the wrong reason, so
+  // the two are level-matched and these are the assertions that hold them
+  // there — at both ends of the range.
+  expect(
+    Math.abs(loadCockpit.levelDb - loadRaw.levelDb),
+    `stages should be level-matched under load (cockpit ${loadCockpit.levelDb.toFixed(1)} dBFS, raw ${loadRaw.levelDb.toFixed(1)} dBFS)`,
+  ).toBeLessThan(3);
+  expect(
+    Math.abs(idleCockpit.levelDb - idleRaw.levelDb),
+    `stages should be level-matched at idle (cockpit ${idleCockpit.levelDb.toFixed(1)} dBFS, raw ${idleRaw.levelDb.toFixed(1)} dBFS)`,
+  ).toBeLessThan(3);
+
+  // Sound keeps flowing across the switch, and the generated impulse response
+  // means the cab costs no network request.
+  const received = await numeric(page, 'audio-received');
+  await raw.click();
+  await expect
+    .poll(() => numeric(page, 'audio-received'), { timeout: 10_000 })
+    .toBeGreaterThan(received);
+  expect(external, `unexpected external requests: ${external.join(', ')}`).toEqual([]);
 });
 
 test('a gear and a downhill grade drive the engine, and the brake arrests it', async ({ page }) => {
