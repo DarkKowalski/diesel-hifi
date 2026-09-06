@@ -51,17 +51,27 @@ fn controls(pedal: f64, starter: bool, ignition: bool) -> Controls {
 const PIN_CHUNK: u32 = 100;
 
 fn samples_at_speed(config: ValidatedConfig, rpm: f64, steps: usize) -> Vec<f32> {
+    samples_at(config, rpm, 0.4, 293.15, steps)
+}
+
+fn samples_at(
+    config: ValidatedConfig,
+    rpm: f64,
+    pedal: f64,
+    coolant_temp_k: f64,
+    steps: usize,
+) -> Vec<f32> {
     let mut sim = Simulation::new(
         config,
         ResetOptions {
             seed: 0,
             initial_rpm: rpm,
             initial_crank_rad: 0.0,
-            coolant_temp_k: 293.15,
+            coolant_temp_k,
         },
     )
     .expect("simulation builds");
-    sim.set_controls(controls(0.4, false, true))
+    sim.set_controls(controls(pedal, false, true))
         .expect("controls accepted");
 
     // Settle, discarding the start-up transient.
@@ -584,4 +594,271 @@ fn the_level_meter_rises_once_the_engine_is_running() {
          {silent} dB"
     );
     assert!(running.is_finite() && running > 0.0);
+}
+
+// --- the structural radiation path ---------------------------------------
+//
+// The exhaust is not the only thing an engine radiates from. The premixed burn
+// is a near-step pressure rise inside a stiff iron box, and the box rings: that
+// is combustion noise, it dominates a heavy-duty diesel from roughly 800 Hz to
+// 4 kHz, and it reaches the ear straight off the engine's skin without ever
+// going near the exhaust. These tests exist to prove that path is driven by the
+// combustion model rather than scheduled alongside it.
+
+/// Fraction of a signal's energy surviving a two-pole high pass.
+///
+/// The `audio_probe` example uses a transform for this because it reports
+/// absolute band shares. A test only needs to compare two signals, and a filter
+/// answers that in one pass.
+fn high_band_share(samples: &[f32], cutoff_hz: f64) -> f64 {
+    let dt = 1.0 / 40_000.0;
+    let rc = 1.0 / (std::f64::consts::TAU * cutoff_hz);
+    let alpha = rc / (rc + dt);
+
+    let (mut previous_input, mut stage_one, mut previous_stage_one, mut stage_two) =
+        (0.0, 0.0, 0.0, 0.0);
+    let (mut total, mut high) = (0.0, 0.0);
+    for sample in samples {
+        let x = f64::from(*sample);
+        stage_one = alpha * (stage_one + x - previous_input);
+        previous_input = x;
+        stage_two = alpha * (stage_two + stage_one - previous_stage_one);
+        previous_stage_one = stage_one;
+        total += x * x;
+        high += stage_two * stage_two;
+    }
+    if total <= 0.0 {
+        0.0
+    } else {
+        high / total
+    }
+}
+
+/// The shipped configuration with its `audio` section altered.
+fn config_with_audio(mutate: impl FnOnce(&mut serde_json::Value)) -> ValidatedConfig {
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    mutate(&mut document["audio"]);
+    EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect("mutated config validates")
+}
+
+#[test]
+fn the_structural_path_is_what_puts_energy_above_the_firing_harmonics() {
+    // Silence the modal bank and the top end goes with it. This is the whole
+    // claim of the structural path stated as a difference rather than as an
+    // absolute number, so it does not depend on how the bank happens to be
+    // calibrated today.
+    let with = samples_at(config(), 1_000.0, 0.4, 293.15, 40_000);
+    let without = samples_at(
+        config_with_audio(|audio| audio["structural_gain"] = serde_json::json!(0.0)),
+        1_000.0,
+        0.4,
+        293.15,
+        40_000,
+    );
+
+    let with_share = high_band_share(&with, 500.0);
+    let without_share = high_band_share(&without, 500.0);
+    assert!(
+        with_share > without_share * 4.0,
+        "the modal bank should dominate above 500 Hz: {with_share:.4} with it \
+         against {without_share:.4} without, which is not a large enough difference \
+         to be the mechanism this path claims to be"
+    );
+}
+
+#[test]
+fn the_modal_bank_only_rings_where_it_is_told_to() {
+    // Move every mode down an octave and the energy must follow. If it does not,
+    // the top end is coming from something other than the configured bank —
+    // clipping, say, or the exhaust path's own edges — and the configuration is
+    // decorative.
+    let high = samples_at(config(), 1_000.0, 0.4, 293.15, 40_000);
+    let low = samples_at(
+        config_with_audio(|audio| {
+            for mode in audio["structural_modes"]
+                .as_array_mut()
+                .expect("modes are an array")
+            {
+                let hz = mode["frequency_hz"].as_f64().expect("frequency");
+                mode["frequency_hz"] = serde_json::json!(hz * 0.5);
+            }
+        }),
+        1_000.0,
+        0.4,
+        293.15,
+        40_000,
+    );
+
+    let high_share = high_band_share(&high, 2_000.0);
+    let low_share = high_band_share(&low, 2_000.0);
+    assert!(
+        high_share > low_share * 1.5,
+        "halving every mode frequency should move energy out of the 2 kHz band, \
+         but the share went {high_share:.4} -> {low_share:.4}"
+    );
+}
+
+#[test]
+fn the_clatter_is_load_dependent_without_a_clatter_schedule() {
+    // Ignition delay lengthens when the cylinder is cold and lightly loaded, a
+    // longer delay means a larger premixed fraction, and a larger premixed
+    // fraction means a sharper pressure rise. So a lightly loaded engine must
+    // clatter harder *in proportion* than a hard-working one, and it must do so
+    // because the combustion model says so: there is no load term anywhere in
+    // the audio path to arrange it.
+    let speed = 1_200.0;
+    let light = samples_at(config(), speed, 0.08, 293.15, 40_000);
+    let heavy = samples_at(config(), speed, 1.0, 293.15, 40_000);
+
+    let light_share = high_band_share(&light, 1_500.0);
+    let heavy_share = high_band_share(&heavy, 1_500.0);
+    assert!(
+        light_share > heavy_share,
+        "at {speed:.0} rpm a lightly loaded engine should be proportionally \
+         rattlier than a fully loaded one, got {light_share:.4} light against \
+         {heavy_share:.4} heavy"
+    );
+}
+
+#[test]
+fn the_engine_brake_barks_harder_than_the_same_engine_coasting() {
+    // The release lobe cracks a valve at the top of compression, which is the
+    // fastest pressure event the model produces anywhere. It drives the modal
+    // bank harder than anything else the engine does, and it does so without a
+    // line of brake-specific code in the audio path.
+    //
+    // The comparison that means something is against the *same* engine coasting:
+    // no fuel either way, brake the only difference. Comparing a braking engine
+    // to a fuelled one instead would be comparing two different amounts of
+    // energy in the system and would say nothing about the release lobe — a
+    // fuelled engine is burning, and burning is loud.
+    let speed = 1_600.0;
+
+    let run = |stage: u8| {
+        let mut sim = Simulation::new(
+            config(),
+            ResetOptions {
+                seed: 0,
+                initial_rpm: speed,
+                initial_crank_rad: 0.0,
+                coolant_temp_k: 293.15,
+            },
+        )
+        .expect("simulation builds");
+        sim.set_controls(Controls {
+            pedal: 0.0,
+            ignition: false,
+            brake_stage: stage,
+            ..Controls::default()
+        })
+        .expect("controls accepted");
+
+        let mut sink = vec![0.0f32; PIN_CHUNK as usize];
+        for _ in 0..1_200 {
+            sim.advance(PIN_CHUNK).expect("advance");
+            sim.pin_speed_rpm(speed).expect("pin");
+            sim.drain_audio(&mut sink);
+        }
+        let mut out = vec![0.0f32; 40_000];
+        let mut written = 0;
+        while written < out.len() {
+            let batch = PIN_CHUNK.min((out.len() - written) as u32);
+            sim.advance(batch).expect("advance");
+            sim.pin_speed_rpm(speed).expect("pin");
+            written += sim.drain_audio(&mut out[written..]);
+        }
+        out
+    };
+
+    let coasting = run(0);
+    let braking = run(3);
+
+    // Absolute upper-band energy, not a share: the brake makes the engine
+    // louder up there, and a share would hide that behind the low end rising
+    // with it.
+    let energy = |samples: &[f32]| {
+        high_band_share(samples, 1_500.0)
+            * samples
+                .iter()
+                .map(|s| f64::from(*s) * f64::from(*s))
+                .sum::<f64>()
+    };
+    let braking_energy = energy(&braking);
+    let coasting_energy = energy(&coasting);
+    assert!(
+        braking_energy > coasting_energy * 4.0,
+        "the release lobe should dominate the upper band: {braking_energy:.4e} \
+         braking against {coasting_energy:.4e} coasting"
+    );
+}
+
+#[test]
+fn the_four_cylinder_fixture_drives_its_own_modal_bank() {
+    // The fixture carries a different bank — three modes rather than four, and
+    // higher, because a smaller block rings higher. If the solver knew anything
+    // about the OM 471's bank this would not hold.
+    let fixture = fixture_config();
+    let modes = &fixture.config().audio.structural_modes;
+    assert_eq!(
+        modes.len(),
+        3,
+        "the fixture defines its own number of modes"
+    );
+
+    let with = samples_at(fixture.clone(), 1_000.0, 0.4, 293.15, 40_000);
+    let share = high_band_share(&with, 500.0);
+    assert!(
+        share > 0.05,
+        "the fixture's own bank must actually ring, got a share of {share:.4}"
+    );
+    for sample in &with {
+        assert!(
+            sample.is_finite() && sample.abs() <= 1.0,
+            "fixture sample out of range: {sample}"
+        );
+    }
+}
+
+#[test]
+fn an_unstable_modal_bank_is_rejected_rather_than_run() {
+    // A two-pole resonator is stable only while `r = 1 - pi f dt / Q` stays
+    // inside (0, 1). A high frequency with a low Q pushes it out, and an
+    // unstable pole in the hot loop grows without bound where nothing can
+    // recover it. It has to be refused at the door.
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["audio"]["structural_modes"] = serde_json::json!([
+        { "frequency_hz": 18_000.0, "q": 0.5, "gain": 1.0 }
+    ]);
+    let error = EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect_err("an unstable mode must be rejected");
+    assert!(
+        error.message.contains("stable resonator"),
+        "the rejection should name the stability condition, got: {}",
+        error.message
+    );
+}
+
+#[test]
+fn a_modal_bank_above_nyquist_is_rejected() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["audio"]["structural_modes"] = serde_json::json!([
+        { "frequency_hz": 25_000.0, "q": 40.0, "gain": 1.0 }
+    ]);
+    let error = EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect_err("a mode above Nyquist must be rejected");
+    assert!(
+        error.message.contains("Nyquist"),
+        "the rejection should name Nyquist, got: {}",
+        error.message
+    );
 }

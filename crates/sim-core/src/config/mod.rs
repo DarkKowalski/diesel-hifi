@@ -475,12 +475,33 @@ pub struct Solver {
     pub max_steps_per_batch: u32,
 }
 
-/// Exhaust acoustic model.
+/// One structural mode of the engine's outer surface.
 ///
-/// The source is the computed blowdown through the exhaust ports; these values
-/// shape it into a signal. All calibrated: the manual publishes nothing about
-/// how the engine sounds.
+/// A near-step pressure rise inside a stiff iron box excites bending and
+/// breathing modes of the block, head, and covers. They ring for a few
+/// milliseconds and radiate straight off the engine's skin, by a path that never
+/// goes near the exhaust. That is combustion noise, and it is what makes the ear
+/// say *diesel* rather than *engine*.
+///
+/// Each mode is one two-pole resonator. Nothing here is published: the manual
+/// says nothing about how the engine sounds, let alone about its mode shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StructuralMode {
+    /// Ring frequency.
+    pub frequency_hz: f64,
+    /// Sharpness. Higher rings longer; an iron structure is in the tens.
+    pub q: f64,
+    /// Weight of this mode in the summed structural signal.
+    pub gain: f64,
+}
+
+/// Engine acoustic model.
+///
+/// Two radiating paths. The exhaust source is the computed blowdown through the
+/// exhaust ports; the structural source is the computed cylinder pressure
+/// shaking the engine's outer surface. These values shape both into one signal.
+/// All calibrated: the manual publishes nothing about how the engine sounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioCalibration {
     pub reference_spl_db: f64,
     pub exhaust_gain: f64,
@@ -490,6 +511,10 @@ pub struct AudioCalibration {
     pub lowpass_cutoff_hz: f64,
     /// Soft-clip knee keeping samples inside [-1, 1] without hard clipping.
     pub soft_clip_knee: f64,
+    /// Level of the structural path against the exhaust path.
+    pub structural_gain: f64,
+    /// Modal bank the cylinder-pressure rise rings.
+    pub structural_modes: Vec<StructuralMode>,
 }
 
 /// Published rated output.
@@ -547,8 +572,9 @@ impl EngineConfig {
     /// Scalar value at a dotted parameter path, if that path names a number.
     ///
     /// Returns `None` for known non-scalar paths (firing order, gear ratios,
-    /// schedules, the brake variant code, and the heat-transfer enable flag) and
-    /// for unknown paths. Provenance range-containment is skipped for those.
+    /// schedules, the structural mode bank, the brake variant code, and the
+    /// heat-transfer enable flag) and for unknown paths. Provenance
+    /// range-containment is skipped for those.
     pub fn value_at(&self, path: &str) -> Option<f64> {
         let v = match path {
             "geometry.cylinders" => self.geometry.cylinders as f64,
@@ -718,6 +744,8 @@ impl EngineConfig {
             "audio.highpass_cutoff_hz" => self.audio.highpass_cutoff_hz,
             "audio.lowpass_cutoff_hz" => self.audio.lowpass_cutoff_hz,
             "audio.soft_clip_knee" => self.audio.soft_clip_knee,
+            "audio.structural_gain" => self.audio.structural_gain,
+            "audio.structural_modes" => return None,
 
             "rated.max_power_w" => self.rated.max_power_w,
             "rated.max_power_hp" => self.rated.max_power_hp,

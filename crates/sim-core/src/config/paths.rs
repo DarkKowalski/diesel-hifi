@@ -139,6 +139,8 @@ pub const PARAMETER_PATHS: &[&str] = &[
     "audio.highpass_cutoff_hz",
     "audio.lowpass_cutoff_hz",
     "audio.soft_clip_knee",
+    "audio.structural_gain",
+    "audio.structural_modes",
     "rated.max_power_w",
     "rated.max_power_hp",
     "rated.max_torque_nm",

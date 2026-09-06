@@ -251,10 +251,33 @@
   },
   "audio": {
     "reference_spl_db": 94.0,
-    "exhaust_gain": 12000.0,
+    "exhaust_gain": 6000.0,
     "highpass_cutoff_hz": 20.0,
     "lowpass_cutoff_hz": 6000.0,
-    "soft_clip_knee": 0.85
+    "soft_clip_knee": 0.85,
+    "structural_gain": 3.0,
+    "structural_modes": [
+      {
+        "frequency_hz": 900.0,
+        "q": 15.0,
+        "gain": 1.0
+      },
+      {
+        "frequency_hz": 1600.0,
+        "q": 20.0,
+        "gain": 4.0
+      },
+      {
+        "frequency_hz": 2600.0,
+        "q": 22.0,
+        "gain": 6.0
+      },
+      {
+        "frequency_hz": 3800.0,
+        "q": 25.0,
+        "gain": 11.0
+      }
+    ]
   },
   "rated": {
     "max_power_w": 375000.0,
@@ -1491,8 +1514,8 @@
     {
       "path": "audio.exhaust_gain",
       "status": "calibrated",
-      "value_note": "12000. The acoustic source is a per-step difference of open exhaust port area times the cylinder-to-manifold pressure difference, scaled by ambient pressure. That is a small number, so the scaling is correspondingly large. The source manual does not publish this.",
-      "purpose": "Brings the radiated exhaust signal to a usable level before the soft clipper. Set so the loudest realistic condition \u2014 the start transient, which is louder than full load \u2014 approaches the knee without sitting on it. Driving it far past the knee flat-tops the waveform, and a flat-topped wave is full of high harmonics: an audible buzz, not a louder engine.",
+      "value_note": "6000. The acoustic source is a per-step difference of open exhaust port area times the cylinder-to-manifold pressure difference, scaled by ambient pressure. That is a small number, so the scaling is correspondingly large. Halved from 12000 when the structural path was added: two summed sources against one clipper need the staging re-done, or full load sits on the knee. The source manual does not publish this.",
+      "purpose": "Brings the radiated exhaust signal to a usable level before the soft clipper. Set so the loudest realistic condition — the start transient, which is louder than full load — approaches the knee without sitting on it. Driving it far past the knee flat-tops the waveform, and a flat-topped wave is full of high harmonics: an audible buzz, not a louder engine.",
       "safe_range": [
         0.0,
         1000000.0
@@ -1526,6 +1549,26 @@
       "safe_range": [
         0.1,
         1.0
+      ]
+    },
+    {
+      "path": "audio.structural_gain",
+      "status": "calibrated",
+      "value_note": "3.0. Calibrated against the audio_probe band shares, with the ceiling set by the soft clipper rather than by taste: above roughly ten the summed signal lives on the knee at load, and the saturation then manufactures its own harmonics in the same band this path exists to supply. The source manual does not publish this.",
+      "purpose": "Sets the level of the structural radiation path against the exhaust path. The structural path is combustion noise: the premixed pressure rise ringing the block, head and covers, which is what makes a diesel identifiable as one rather than as a generic engine. Too low and the engine is a low-frequency drone; too high and the clatter both swamps the exhaust note and drives the sum into the soft-clip knee, where saturation invents harmonics in the band being measured and the improvement becomes an artefact of clipping rather than of the model.",
+      "safe_range": [
+        0.0,
+        100.0
+      ]
+    },
+    {
+      "path": "audio.structural_modes",
+      "status": "calibrated",
+      "value_note": "Four modes at 900, 1600, 2600 and 3800 Hz with Q of 15, 20, 22 and 25, weighted 1.0, 4.0, 6.0 and 11.0. Plausible for the block, head and covers of an engine of this size and nothing more than that. The source manual publishes no mode shapes, no frequencies and no damping. The weights ascend with frequency, which is the opposite of the radiating physics and is deliberate: the premixed Wiebe rise starts with zero slope, so the model's burn onset is smoother than a real one and drives the upper modes weakly. The ascending weights compensate for that shortfall in the drive, not for a belief that an engine radiates more at 3.8 kHz than at 900 Hz.",
+      "purpose": "The modal bank the cylinder-pressure rise rings. Each mode is one two-pole resonator standing for a bending or breathing mode of the engine's outer surface, which radiates straight to air rather than down the exhaust. The frequencies set where the clatter sits and the Q values set how long it rings; an iron structure rings for a few milliseconds, which is Q in the tens. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
+      "safe_range": [
+        0.0,
+        20000.0
       ]
     },
     {

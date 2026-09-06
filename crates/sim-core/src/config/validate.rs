@@ -592,6 +592,45 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         au.soft_clip_knee > 0.0 && au.soft_clip_knee <= 1.0,
         "audio.soft_clip_knee must fall in (0, 1]",
     )?;
+    require(
+        au.structural_gain.is_finite() && au.structural_gain >= 0.0,
+        "audio.structural_gain must be finite and not negative",
+    )?;
+    require(
+        !au.structural_modes.is_empty(),
+        "audio.structural_modes must name at least one mode",
+    )?;
+    let nyquist_hz = 0.5 / config.solver.fixed_step_s;
+    for (index, mode) in au.structural_modes.iter().enumerate() {
+        finite_positive(
+            mode.frequency_hz,
+            &format!("audio.structural_modes[{index}].frequency_hz"),
+        )?;
+        finite_positive(mode.q, &format!("audio.structural_modes[{index}].q"))?;
+        require(
+            mode.gain.is_finite() && mode.gain >= 0.0,
+            "audio.structural_modes gains must be finite and not negative",
+        )?;
+        require(
+            mode.frequency_hz < nyquist_hz,
+            "audio.structural_modes frequencies must stay below the Nyquist \
+             frequency of the solver step",
+        )?;
+        // Stability of the two-pole resonator, which is the whole reason this
+        // check exists rather than a bare range on `q`. The pole radius is
+        // `r = 1 - theta / (2 Q)` with `theta = 2 pi f dt`; the filter is stable
+        // only for `0 < r < 1`. A high frequency paired with a low Q drives `r`
+        // negative or past zero and the mode would grow without bound in the hot
+        // loop, where nothing can recover it. Reject it here instead.
+        let theta = std::f64::consts::TAU * mode.frequency_hz * config.solver.fixed_step_s;
+        let r = 1.0 - theta / (2.0 * mode.q);
+        require(
+            r > 0.0 && r < 1.0,
+            "audio.structural_modes must give a stable resonator: the pole radius \
+             1 - pi f dt / Q must fall in (0, 1), so a high frequency needs a \
+             correspondingly high Q",
+        )?;
+    }
 
     let gov = &config.governor;
     finite_positive(gov.idle_target_rpm, "governor.idle_target_rpm")?;

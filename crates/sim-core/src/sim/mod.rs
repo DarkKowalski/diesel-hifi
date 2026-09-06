@@ -398,7 +398,11 @@ impl Simulation {
             wastegate_flow_kg_per_s: 0.0,
             egr_flow_kg_per_s: 0.0,
             engine_flow_kg_per_s: 0.0,
-            acoustics: Acoustics::new(config.config().solver.max_steps_per_batch as usize),
+            acoustics: Acoustics::new(
+                config.config().solver.max_steps_per_batch as usize,
+                &config.config().audio.structural_modes,
+                config.config().solver.fixed_step_s,
+            ),
             brake: brake::Command::default(),
             driveline: driveline::Output::default(),
             fuel_demand_mg: 0.0,

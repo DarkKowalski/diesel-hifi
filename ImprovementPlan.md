@@ -353,6 +353,59 @@ compensate. If the top end proves too quiet, the correct response is to reconsid
 premixed onset in `heat_release.rs` — where the smoothness actually originates — and not
 to bolt a noise source onto the audio path.
 
+#### 5.1.1 What building it changed — implemented at step 1
+
+Four corrections, all found by tests rather than by reading.
+
+**The resonator needs zeros, not just poles.** §5.1 specifies the bare all-pole form
+`y[n] = 2r·cos(θ)·y[n−1] − r²·y[n−2] + x[n]`. That form has a DC gain of
+`1/(1 − a1 − a2)`, which for these pole radii is about 50 — and a real mechanical mode
+has *zero* response at DC, because a static pressure does not radiate. The consequence
+was immediate and measurable: a stopped engine's trapped charge warms against the
+cylinder walls at a bit over a pascal per step, and that genuine DC drift came through
+the bank as a standing offset, breaking `a_reset_engine_is_silent` at 3.3 × 10⁻⁵ against
+a 10⁻⁵ threshold. Adding zeros at `z = ±1` puts an exact null at DC and another at
+Nyquist. The second null was unplanned and turned out to be worth as much as the first:
+it dropped the near-Nyquist residue of §3.1 from 3.73% to 0.18% at idle, because the
+bank now refuses to amplify the limit cycle.
+
+**The peak response must be normalised.** Raw peak magnitude across this bank runs from
+about 80 at 3800 Hz to 210 at 900 Hz, so an unnormalised `gain` is entangled with both
+`q` and `frequency_hz` and retuning one mode silently retunes the others. Dividing the
+exact `|H(e^{jθ})|` out at construction makes `gain` mean weight-at-resonance and
+nothing else.
+
+**Two seeded steps, not one.** The existing exhaust path seeds one predecessor because
+it differences once. The structural path differences *twice* — once for `dp/dt`, once
+more in the resonator zeros — so it needs two, and seeding only one leaves the thermal
+drift arriving as an edge that the bank rings for tens of milliseconds. This is the same
+argument `acoustics.rs` already makes about the reset click, applied one level deeper.
+
+**The mode gains ascend with frequency, and §5.1's table is wrong to say otherwise.**
+Shipped weights are 1.0, 4.0, 6.0, 11.0 for the four modes. §5.1 calls for weights
+"descending with frequency" on radiation grounds and then separately predicts mode 4
+"will have to be large to compensate" — those two statements cannot both be honoured,
+and the measurement settles it: the drive falls off faster than the radiation weight
+does, so the configured weights have to rise. With all four weights at 1.0 the 2–15 kHz
+band sat at 0.88% against a 5% target; the ascending weights bring it to 9.72%. The
+provenance entry says plainly that this compensates for a shortfall in the drive and is
+not a claim that an engine radiates more at 3.8 kHz than at 900 Hz. The plan's own
+prescription stands: this is evidence about `heat_release.rs`, and if the weights ever
+need to be more extreme than this it should be pursued there.
+
+**Gain staging was needed, exactly as §5.1 said it would be.** `exhaust_gain` is halved
+from 12000 to 6000 and `structural_gain` set to 3.0; full load then peaks at 0.818
+against the 0.85 knee. Left alone, the two summed sources put full load at 0.85 dead on
+the knee and `the_output_keeps_headroom_across_the_operating_range` failed.
+
+**One consequence deferred to step 5, and it is not small.** `cabin.ts` lowpasses at
+1.7 kHz, so the cab stage — which is the *default* listening position — now discards
+most of what P1 adds. It showed up as the wet path losing about 3 dB against the raw
+path at both idle and load, breaking the end-to-end level-match assertion. Step 1 raises
+`dynamics.makeupGain` from 1.5 to 2.1, which restores the level match and deliberately
+does not address the real problem. Step 5 must raise that lowpass: as it stands, P1 is
+audible on the raw stage and largely thrown away on the one a user hears first.
+
 ### 5.2 P2 — a one-dimensional exhaust duct
 
 **Where it lives: `sim-core`. Decided.** A duct driven by real mass flow at the gas
@@ -633,13 +686,19 @@ criterion it is not signal for.
 
 Baseline for each, from step 0, so the improvement is legible rather than asserted:
 
-| Criterion | Target | Baseline at step 0 |
-|---|---:|---:|
-| Idle, 500 Hz–15 kHz | ≥ 15% | 0.91% |
-| Idle, 2–15 kHz | ≥ 5% | 0.03% |
-| Full load, 500 Hz–15 kHz | ≥ 10% | 1.36% |
-| `80–300 Hz`, any point | ≤ ~55% | 82.0% (idle) |
-| `<80 Hz`, any point | ≤ 35% | 10.4% (idle) |
+| Criterion | Target | Baseline at step 0 | After step 1 |
+|---|---:|---:|---:|
+| Idle, 500 Hz–15 kHz | ≥ 15% | 0.91% | **27.37%** |
+| Idle, 2–15 kHz | ≥ 5% | 0.03% | **9.72%** |
+| Full load, 500 Hz–15 kHz | ≥ 10% | 1.36% | **51.29%** |
+| `80–300 Hz`, any point | ≤ ~55% | 82.0% (idle) | **39.2%** (idle) |
+| `<80 Hz`, any point | ≤ 35% | 10.4% (idle) | **1.4%** (idle) |
+
+All five hold after step 1, and full load peaks at 0.818 against the 0.85 knee, so the
+improvement is not the clipper's doing — which §10 warns is the way to "succeed" here
+dishonestly. The near-Nyquist residue of §3.1 also fell from 3.73% to 0.18% at idle,
+because the modal bank's zeros sit at DC *and* at Nyquist and it therefore refuses to
+amplify the limit cycle.
 
 The idle `500 Hz–15 kHz` baseline is 0.91%, not the 4.6% a band running to Nyquist
 would report, because 3.73% of that figure is residue. Only `<80 Hz` passes today, and
@@ -661,8 +720,17 @@ Behavioural, as new tests:
   anywhere in the code.
 - **Changing `geometry.firing_order` changes the output waveform.** Impossible today.
 - The pipe resonance moves with exhaust temperature.
-- The engine brake's upper-band energy exceeds that of the fuelled engine at the same
-  speed — the bark comes from the model, not from a layer.
+- ~~The engine brake's upper-band energy exceeds that of the fuelled engine at the same
+  speed~~ — **corrected in step 1: this comparison is wrong and does not hold.** Measured
+  at 1600 rpm, upper-band RMS is 0.079 braking against 0.112 for a fuelled engine at
+  pedal 0.4. That is not a failure of the brake path; it is a badly chosen comparison. A
+  fuelled engine is *burning*, and burning is loud, so the two cases differ by how much
+  energy is in the system rather than by what the release lobe does. The comparison that
+  isolates the lobe is against the **same engine coasting** — no fuel either way, brake
+  the only difference — and there the brake wins decisively: 0.079 against 0.025, a
+  factor of 3.2 in upper-band RMS and better than 4× in energy. That is the assertion
+  now in the suite, and it still says what this criterion meant to say: the bark comes
+  from the model, not from a layer.
 - The inline-four fixture still sounds at its own firing frequency and still exercises
   every new parameter.
 

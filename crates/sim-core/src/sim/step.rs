@@ -262,6 +262,12 @@ pub(super) fn step(
     let mut donor_temperature_sum = 0.0;
     let mut donor_weight = 0.0;
 
+    // Summed cylinder pressure, which drives the structural radiation path.
+    // Every cylinder counts here, open or shut: the block is shaken by the
+    // pressure inside it whether or not a valve happens to be off its seat.
+    // That is exactly what distinguishes this path from the exhaust one.
+    let mut cylinder_pressure_sum_pa = 0.0;
+
     for index in 0..count {
         let mut c = state.cylinders[index];
         let psi_old = cylinder::signed_cycle_angle(theta_old, c.phase_offset_rad);
@@ -559,6 +565,8 @@ pub(super) fn step(
             &exhaust_port,
             brake_area_m2,
         );
+        cylinder_pressure_sum_pa += c.pressure_pa;
+
         if phase_new == Phase::Exhaust {
             let weight = exhaust_port.area_m2(psi_new);
             donor_temperature_sum += weight * c.temperature_k;
@@ -595,8 +603,19 @@ pub(super) fn step(
             .clamp(0.0, 1.0);
     }
 
-    // --- exhaust acoustic sample, one per step ---
-    state.acoustics.push(&cfg.audio, acoustic_source, dt);
+    // --- acoustic sample, one per step, both radiating paths ---
+    //
+    // Normalising by ambient makes the structural forcing dimensionless, which
+    // is the same thing `cylinder_source` does for the exhaust term, and keeps
+    // the calibrated gain from carrying a unit conversion inside it.
+    let structural_forcing = if ambient_pa > 0.0 {
+        cylinder_pressure_sum_pa / ambient_pa
+    } else {
+        0.0
+    };
+    state
+        .acoustics
+        .push(&cfg.audio, acoustic_source, structural_forcing, dt);
 
     state.peak_pressure_pa_cycle = state.peak_pressure_pa_cycle.max(step_peak_pressure_pa);
     state.peak_pressure_pa_session = state.peak_pressure_pa_session.max(step_peak_pressure_pa);

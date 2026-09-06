@@ -145,7 +145,25 @@
     "exhaust_gain": 1.0,
     "highpass_cutoff_hz": 25.0,
     "lowpass_cutoff_hz": 5000.0,
-    "soft_clip_knee": 0.8
+    "soft_clip_knee": 0.8,
+    "structural_gain": 3.0,
+    "structural_modes": [
+      {
+        "frequency_hz": 1100.0,
+        "q": 14.0,
+        "gain": 1.0
+      },
+      {
+        "frequency_hz": 2000.0,
+        "q": 18.0,
+        "gain": 4.0
+      },
+      {
+        "frequency_hz": 3200.0,
+        "q": 20.0,
+        "gain": 8.0
+      }
+    ]
   },
   "rated": {
     "max_power_w": 250000.0,
@@ -1232,6 +1250,26 @@
       "safe_range": [
         -1.8,
         4.2
+      ]
+    },
+    {
+      "path": "audio.structural_gain",
+      "status": "calibrated",
+      "value_note": "invented test value for `audio.structural_gain`",
+      "purpose": "Sets the level of the structural radiation path against the exhaust path. The structural path is combustion noise: the premixed pressure rise ringing the block, head and covers, which is what makes a diesel identifiable as one rather than as a generic engine. Too low and the engine is a low-frequency drone; too high and the clatter both swamps the exhaust note and drives the sum into the soft-clip knee, where saturation invents harmonics in the band being measured and the improvement becomes an artefact of clipping rather than of the model.",
+      "safe_range": [
+        0.0,
+        100.0
+      ]
+    },
+    {
+      "path": "audio.structural_modes",
+      "status": "calibrated",
+      "value_note": "invented test values for `audio.structural_modes`: three modes at 1100, 2000 and 3200 Hz weighted 1.0, 4.0 and 8.0. Three rather than four, and higher, because a smaller block rings higher. Different from the OM 471 bank on purpose, so this fixture proves the modal path is driven by configuration rather than by anything engine-specific in the solver.",
+      "purpose": "The modal bank the cylinder-pressure rise rings. Each mode is one two-pole resonator standing for a bending or breathing mode of the engine's outer surface, which radiates straight to air rather than down the exhaust. The frequencies set where the clatter sits and the Q values set how long it rings; an iron structure rings for a few milliseconds, which is Q in the tens. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
+      "safe_range": [
+        0.0,
+        20000.0
       ]
     },
     {

@@ -158,7 +158,14 @@ export const CABIN_SPEC: CabinSpec = {
     ratio: 3,
     attackS: 0.006,
     releaseS: 0.18,
-    makeupGain: 1.5,
+    // 2.1, raised from 1.5 when the structural radiation path landed. The cab
+    // chain's low pass sits at 1.7 kHz, so the combustion noise added above it
+    // is removed here rather than heard, and the wet path lost about 3 dB
+    // against the raw one at both idle and load. This restores the level match
+    // the stage switch depends on; it does not address the deeper point, which
+    // is that a driver does hear clatter and this low pass is currently
+    // throwing most of it away.
+    makeupGain: 2.1,
   },
   crossfadeS: 0.04,
 };
