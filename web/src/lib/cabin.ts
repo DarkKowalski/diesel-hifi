@@ -115,15 +115,26 @@ export interface CabinSpec {
  *     reproduces it, so it is headroom spent on nothing, and spending it here is
  *     worse than usual because the compressor downstream would duck the audible
  *     band to make room for it.
- *   - **+5 dB at 85 Hz.** The boom. A cab is a panelled box on air springs with a
+ *   - **+6 dB at 85 Hz.** The boom. A cab is a panelled box on air springs with a
  *     low fundamental, and it is the one part of an engine you hear as much
- *     through the seat as through the air.
- *   - **−3 dB at 380 Hz.** Boxiness. Everything with a hard mid resonance sounds
- *     like a cardboard tube until this is pulled down.
- *   - **1.7 kHz low pass.** Glass, insulation, and several metres of air. The
- *     sharp crack of blowdown is the first thing the structure takes away, and
- *     leaving it in is what makes cab sound in games read as "engine recording
- *     played in a room" rather than as being inside the truck.
+ *     through the seat as through the air. Raised from +5 dB because the source
+ *     is no longer low-heavy: combustion noise now carries most of the output at
+ *     load and the exhaust fundamental is a small share of it, so the box has
+ *     less to reinforce and has to reinforce it harder.
+ *   - **−1.5 dB at 380 Hz.** Boxiness. Everything with a hard mid resonance
+ *     sounds like a cardboard tube until this is pulled down. Halved from −3 dB
+ *     for the same reason: that cut was set against a spectrum that was four
+ *     fifths low-mid, and against one that is not it removes body the signal no
+ *     longer has to spare.
+ *   - **2.6 kHz low pass.** Glass, insulation, and several metres of air.
+ *
+ *     This was 1.7 kHz, and it was chosen when the solver produced nothing above
+ *     it — which made it free. It is not free now. The structural radiation path
+ *     puts real content at 2.6 and 3.8 kHz, and clatter is emphatically audible
+ *     from a truck's driver seat, especially at idle. A cab takes the sharp edge
+ *     off the exhaust; it does not silence the engine two feet away through the
+ *     bulkhead, and a figure that did was describing the glass rather than what
+ *     a driver hears.
  *
  * The two taps are the screen and the door: the first strong reflections in a
  * box this size arrive within about 15 ms, and they are what make the difference
@@ -134,9 +145,9 @@ export interface CabinSpec {
 export const CABIN_SPEC: CabinSpec = {
   filters: [
     { type: 'highpass', frequencyHz: 30, q: 0.7, gainDb: 0 },
-    { type: 'peaking', frequencyHz: 85, q: 1.1, gainDb: 5 },
-    { type: 'peaking', frequencyHz: 380, q: 1.0, gainDb: -3 },
-    { type: 'lowpass', frequencyHz: 1700, q: 0.7, gainDb: 0 },
+    { type: 'peaking', frequencyHz: 85, q: 1.1, gainDb: 6 },
+    { type: 'peaking', frequencyHz: 380, q: 1.0, gainDb: -1.5 },
+    { type: 'lowpass', frequencyHz: 2600, q: 0.7, gainDb: 0 },
   ],
   directGain: 0.75,
   taps: [
@@ -165,7 +176,7 @@ export const CABIN_SPEC: CabinSpec = {
     // the stage switch depends on; it does not address the deeper point, which
     // is that a driver does hear clatter and this low pass is currently
     // throwing most of it away.
-    makeupGain: 2.1,
+    makeupGain: 1.9,
   },
   crossfadeS: 0.04,
 };

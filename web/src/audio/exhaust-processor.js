@@ -14,9 +14,18 @@
  * Two jobs beyond buffering:
  *
  *   - **Resample.** The solver's rate is fixed by its physics; the device's rate
- *     is whatever the browser gives us. Linear interpolation between the two is
- *     ample for this signal and needs no configuration, which is why the graph
- *     never asks for a particular `sampleRate`.
+ *     is whatever the browser gives us. Linear interpolation between the two
+ *     needs no configuration, which is why the graph never asks for a particular
+ *     `sampleRate`.
+ *
+ *     It was worth rechecking once the solver gained real content above 2 kHz,
+ *     because an interpolator that was ample for a signal stopping at 500 Hz need
+ *     not stay ample. Measured at 40 kHz to 48 kHz, the worst imaging product is
+ *     −65 dBc for a 900 Hz input, −46 dBc at 2.6 kHz and −38.5 dBc at 3.8 kHz —
+ *     the last landing at 11.8 kHz, where the cab stage's low pass takes another
+ *     20-odd dB off it. That is well under the engine it sits beneath, so linear
+ *     interpolation stays. The measurement is recorded here because the next
+ *     person to add top end should repeat it rather than trust it.
  *   - **Underrun honestly.** If the simulation stalls, output silence and count
  *     it. Repeating the last block would paper over a real stall, and the sound
  *     glitching when the simulation glitches is correct — the audio *is* the

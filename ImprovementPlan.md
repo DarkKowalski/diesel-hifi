@@ -708,6 +708,60 @@ Once there is content above 1 kHz, revisit in this order:
 
 Doing any of this before P1 and P2 is retuning against a signal that is about to change.
 
+#### 5.6.1 What retuning found — implemented at step 5
+
+Taken in the order §5.6 sets out.
+
+**1. `CABIN_SPEC.filters`.** The 1.7 kHz low pass goes to **2.6 kHz**, the −3 dB at
+380 Hz is halved to **−1.5 dB**, and the 85 Hz boost goes from +5 to **+6 dB**.
+
+3.5 kHz was tried first and failed the end-to-end assertion that the cab rolls the top
+end off — it left the 2–8 kHz band at 0.85 of the raw stage against a 0.75 ceiling, which
+is a cab that has stopped being a cab. 2.6 kHz lands at 0.67 and still keeps far more of
+the modal bank than 1.7 kHz ever did: the 2.6 kHz mode sits at the corner rather than 8 dB
+down, and the 3.8 kHz mode is attenuated rather than removed.
+
+The other two follow from the source no longer being low-heavy. The 380 Hz cut was set
+against a spectrum that was four fifths low-mid; against one that is not, it removes body
+the signal no longer has to spare. The 85 Hz boost is raised for the same reason and for
+one more: §5.2.1's unresolved balance leaves the exhaust fundamental a small share of the
+output at load, and reinforcing it in the cab is a legitimate thing for a panelled box on
+air springs to do — and is declared as the listening choice it is.
+
+**2. Gain staging.** No change, and the reason is §5.2.1: the binding constraint is not
+the clipper. Full load peaks at 0.829 against the 0.85 knee, which is approaching it
+without living on it, and the knee has headroom to spare. Raising `soft_clip_knee` would
+not help, because what blocks a louder exhaust is the *spectral* criteria at idle, not
+saturation.
+
+**3. `CABIN_SPEC.dynamics`.** No change to the compressor, and this is a conclusion rather
+than an omission. The concern in §5.6 is that a 6 ms attack behaves differently against
+transients with real high-frequency content. It does, and desirably: each burn's first
+6 ms passes at full gain, which preserves the crack. Pumping was the risk worth checking
+and it does not arise — the 180 ms release is far longer than the firing period at any
+speed the engine runs at (8.3 ms at 1200 rpm), so the compressor sees a near-continuous
+signal rather than a train it can chase. The level match confirms it end to end: after the
+filter change the cab sits 1.2 dB above the raw stage at idle and 1.2 dB below it at load,
+so the input trim and makeup are still doing their job across the whole range.
+`makeupGain` moves 2.1 → **1.9**, undoing most of the step 1 compensation now that the cab
+is no longer throwing the clatter away.
+
+**4. The resampler — measured, and not needed.** §5.6 gates this on evidence, so here is
+the evidence. Linear interpolation from 40 kHz to 48 kHz, worst imaging product:
+
+| Input | Worst artifact | Lands at |
+|---:|---:|---:|
+| 900 Hz | −64.8 dBc | 8.9 kHz |
+| 2.6 kHz | −45.6 dBc | 10.6 kHz |
+| 3.8 kHz | −38.5 dBc | 11.8 kHz |
+
+The worst case is −38.5 dBc on a mode that is itself a small share of the output, and it
+lands at 11.8 kHz where the cab's low pass takes another twenty-odd decibels off it. Well
+under the engine it sits beneath. The interpolator stays, and the measurement is recorded
+in the worklet so the next person to add top end repeats it rather than trusting it.
+
+---
+
 ---
 
 ## 6. Invariants that must not be broken
