@@ -1,4 +1,4 @@
-//! Catalog acceptance tests (SPEC section 10: list, active ID, unknown ID,
+//! Catalog acceptance tests (README "Acceptance criteria": list, active ID, unknown ID,
 //! select, and deterministic reset).
 //!
 //! Only one engine ships, so every one of these goes through the real API

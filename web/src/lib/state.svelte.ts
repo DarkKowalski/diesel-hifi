@@ -41,7 +41,8 @@ class SimStore {
   sweepDone = $state(0);
   sweepTotal = $state(0);
 
-  // Exhaust audio. Starts only from an explicit user action (SPEC section 8).
+  // Exhaust audio. Starts only from an explicit user action (README "WASM and worker
+  // API").
   audioRunning = $state(false);
   audioBuffered = $state(0);
   audioUnderruns = $state(0);
@@ -196,7 +197,8 @@ class SimStore {
   /**
    * Start exhaust audio.
    *
-   * Must be called from a user gesture handler: SPEC section 8 requires an
+   * Must be called from a user gesture handler: README "WASM and worker API" requires
+   * an
    * explicit user action before Web Audio starts, and browsers enforce it.
    */
   async enableAudio(): Promise<void> {

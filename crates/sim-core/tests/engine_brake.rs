@@ -1,4 +1,4 @@
-//! Staged decompression engine brake (SPEC section 9, Milestone 4).
+//! Staged decompression engine brake (README "Milestones", Milestone 4).
 //!
 //! The published anchors are the acceptance criterion. They are compared against
 //! here and read *nowhere else*: no solver source may consult them, which

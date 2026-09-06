@@ -3,7 +3,8 @@
 //! This crate contains no physics and no validation of its own. It translates
 //! between `JsValue` and `sim-core` types, and nothing more.
 //!
-//! The boundary is deliberately coarse (SPEC section 7): set controls once, then
+//! The boundary is deliberately coarse (README "WASM and worker API"): set controls
+//! once, then
 //! advance a whole batch of fixed steps and return a single compact snapshot.
 //! There is no per-step call into JavaScript. All simulation memory is owned by
 //! the WASM module; JavaScript holds only the [`SimHandle`] pointer and receives

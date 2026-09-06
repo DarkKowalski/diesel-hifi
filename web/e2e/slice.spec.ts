@@ -3,7 +3,7 @@ import { expect, test, type Page, type Request } from '@playwright/test';
 /**
  * End-to-end coverage of the vertical slice, run against the built static site.
  *
- * Covers SPEC section 10: WASM loads and advances in a browser through the
+ * Covers README "Acceptance criteria": WASM loads and advances in a browser through the
  * worker; the UI stays responsive while the simulation runs and takes its
  * selector entries from the real API; and the build makes no external requests.
  *
@@ -343,7 +343,8 @@ test('switching EGR off changes what reaches the cylinders', async ({ page }) =>
 test('sound starts only from an explicit action and then really plays', async ({ page }) => {
   await bootstrap(page);
 
-  // SPEC section 8: nothing audio-related exists before the user asks for it.
+  // README "WASM and worker API": nothing audio-related exists before the user asks for
+  // it.
   await expect(page.getByTestId('audio-status')).toHaveCount(0);
   await expect(
     page.evaluate(() => (window as unknown as { AudioContext?: unknown }).AudioContext !== undefined),

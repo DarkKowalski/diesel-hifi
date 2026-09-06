@@ -1,7 +1,7 @@
 /**
  * Web Audio orchestration.
  *
- * SPEC section 8 requires an explicit user action before audio starts, so
+ * README "WASM and worker API" requires an explicit user action before audio starts, so
  * `start()` must only ever be called from inside a real gesture handler — that
  * is the whole reason `AudioContext` construction lives here rather than at
  * module load.

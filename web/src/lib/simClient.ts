@@ -212,7 +212,7 @@ export class SimClient {
   /**
    * Start or stop exhaust audio production in the worker.
    *
-   * Enable this only once an `AudioContext` exists, which SPEC section 8
+   * Enable this only once an `AudioContext` exists, which README "WASM and worker API"
    * requires to come from an explicit user action.
    */
   async setAudio(enabled: boolean): Promise<void> {

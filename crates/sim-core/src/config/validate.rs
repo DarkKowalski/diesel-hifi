@@ -2,7 +2,7 @@
 //!
 //! Nothing reaches the solver without passing through here. Validation covers
 //! schema version, physical ranges, numerical finiteness, and the provenance
-//! rules from SPEC section 5.
+//! rules from README "Configuration and provenance".
 
 use std::collections::BTreeSet;
 use std::f64::consts::PI;

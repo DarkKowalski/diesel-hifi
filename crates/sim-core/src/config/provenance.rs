@@ -1,6 +1,7 @@
 //! Per-parameter provenance and source records.
 //!
-//! SPEC section 5: every configuration parameter must be labelled `published`,
+//! README "Configuration and provenance": every configuration parameter must be
+//! labelled `published`,
 //! `derived`, or `calibrated`. Published values must name a source record and a
 //! locator. Derived values must state their formula and inputs. Calibrated
 //! values must state their purpose and safe range.

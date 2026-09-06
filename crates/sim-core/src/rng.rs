@@ -1,6 +1,7 @@
 //! A small explicitly seeded PRNG.
 //!
-//! Milestone 1 has no stochastic term, but SPEC section 6 requires that any
+//! Milestone 1 has no stochastic term, but README "Simulation invariants" requires that
+//! any
 //! randomness be seeded explicitly and that stepping stay deterministic. The
 //! generator is carried in simulation state and reset from [`crate::sim::ResetOptions::seed`]
 //! so that later cycle-to-cycle variation cannot be added without a seed.

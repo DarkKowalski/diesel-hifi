@@ -2,7 +2,7 @@
 //!
 //! All simulation inputs live here. The solver reads only [`ValidatedConfig`];
 //! it never embeds engine-specific calibration and never branches on an engine
-//! ID (SPEC section 5).
+//! ID (README "Configuration and provenance").
 //!
 //! # Schema history
 //!
@@ -224,7 +224,7 @@ pub struct AirPath {
     ///
     /// This stands for the muffler and the aftertreatment can as a flow
     /// resistance only. No DPF loading, SCR, dosing, or regeneration is
-    /// modelled; SPEC section 3 excludes complete aftertreatment from the MVP.
+    /// modelled; README "Architecture" excludes complete aftertreatment from the MVP.
     pub exhaust_restriction_pa_per_kg2_s2: f64,
     /// Pressure on the underside of the piston, used for the net gas force.
     pub crankcase_pressure_pa: f64,
@@ -466,7 +466,7 @@ pub struct Friction {
 }
 
 /// Rotating inertia. The published complete-engine mass is metadata only and is
-/// never used as flywheel or rotating inertia (SPEC section 4).
+/// never used as flywheel or rotating inertia (README "Reference engine and sources").
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Inertia {
     pub rotating_inertia_kg_m2: f64,

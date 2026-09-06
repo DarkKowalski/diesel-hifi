@@ -3,7 +3,7 @@
 //! The catalog is data-driven: configurations are parsed from embedded JSON
 //! documents, not constructed in code. Only one diesel engine ships today, but
 //! list, active-ID, select-by-ID, and reset all go through the same API that a
-//! multi-configuration build would use (SPEC section 5).
+//! multi-configuration build would use (README "Configuration and provenance").
 //!
 //! Selecting *any* configuration, including the one already active, performs a
 //! documented deterministic reset.

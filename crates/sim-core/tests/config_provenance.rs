@@ -1,4 +1,5 @@
-//! Configuration and provenance acceptance tests (SPEC sections 4, 5 and 10).
+//! Configuration and provenance acceptance tests (README "Reference engine and
+//! sources", "Configuration and provenance" and "Acceptance criteria").
 //!
 //! These tests are the guard against an estimate ever being presented as OEM
 //! data: every published figure must round-trip unchanged and name a locator,
@@ -118,7 +119,7 @@ fn published_values_carry_the_published_classification() {
 #[test]
 fn values_absent_from_the_manual_are_never_classified_as_published() {
     let config = parsed();
-    // SPEC section 4 "Data gaps": the manual publishes none of these.
+    // README "Data gaps": the manual publishes none of these.
     for path in [
         "geometry.firing_order",
         "valvetrain.intake_valve_close_rad",
@@ -264,7 +265,8 @@ fn the_engine_brake_publishes_exactly_six_figures() {
 ///
 /// The manual publishes 150 kW / 400 kW for the high performance system. This
 /// engine carries the standard M5U record, and mixing the two would be exactly
-/// the kind of cross-contamination SPEC section 4 forbids for the later 390 kW
+/// the kind of cross-contamination README "Reference engine and sources" forbids for
+/// the later 390 kW
 /// figures.
 #[test]
 fn the_high_performance_brake_figures_do_not_leak_into_the_standard_variant() {
@@ -489,7 +491,8 @@ fn the_source_record_identifies_the_om471_manual() {
 
 #[test]
 fn later_om471_figures_are_not_present() {
-    // SPEC section 4: do not mix the later 390 kW / 2600 Nm / 2700 bar figures in.
+    // README "Reference engine and sources": do not mix the later 390 kW / 2600 Nm /
+    // 2700 bar figures in.
     let config = parsed();
     assert_ne!(config.rated.max_power_w, 390_000.0);
     assert_ne!(config.rated.max_torque_nm, 2600.0);

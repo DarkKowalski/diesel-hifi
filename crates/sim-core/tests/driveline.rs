@@ -1,4 +1,4 @@
-//! Truck driveline and road load (SPEC section 9, Milestone 4).
+//! Truck driveline and road load (README "Milestones", Milestone 4).
 //!
 //! Nothing here is published — the source is an engine manual, and it says
 //! nothing about the vehicle. These tests therefore check *behaviour and

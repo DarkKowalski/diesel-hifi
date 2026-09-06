@@ -3,7 +3,7 @@
 ## Project Rules
 
 - Build only diesel truck engines. Do not add gasoline support or a generic multi-fuel framework.
-- Product requirements and acceptance criteria live in `SPEC.md`. Read it before planning a feature; report conflicts instead of silently changing the specification.
+- `README.md` is the single source of truth: requirements, acceptance criteria, results, and every assumption the model makes. Read it before planning a feature; report conflicts instead of silently changing it. Keep it current when behaviour or a calibrated value changes.
 - The initial engine ID is `mercedes-benz-om471-9-m3d-375kw`. Keep engine discovery and selection data-driven even while only one configuration exists.
 
 ## Architecture
@@ -27,6 +27,6 @@
 - Before editing, inspect relevant files, tests, and `git status --short`.
 - Make the smallest coherent change and add focused tests for changed behavior.
 - Use pnpm exclusively for JavaScript dependencies. Preserve unrelated changes and existing licenses.
-- Run the relevant checks documented in `SPEC.md`; never claim a check passed unless it was run successfully.
+- Run the relevant checks from `README.md` "Commands"; never claim a check passed unless it was run successfully.
 - Do not commit, push, rewrite history, change licenses, or add major dependencies unless explicitly requested.
 - Finish with changed behavior, files, exact verification results, and known limitations.

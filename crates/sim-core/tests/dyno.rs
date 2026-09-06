@@ -1,4 +1,4 @@
-//! Calibration acceptance tests (SPEC section 9, Milestone 2).
+//! Calibration acceptance tests (README "Milestones", Milestone 2).
 //!
 //! "Calibrate the published maximum power and torque magnitudes without claiming
 //! unpublished RPM locations as OEM facts."

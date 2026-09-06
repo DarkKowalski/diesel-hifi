@@ -1,4 +1,4 @@
-//! Determinism acceptance tests (SPEC section 10).
+//! Determinism acceptance tests (README "Acceptance criteria").
 //!
 //! "Native Rust tests are deterministic for identical configuration, seed,
 //! inputs, and step count." These comparisons are bit-exact, not approximate.

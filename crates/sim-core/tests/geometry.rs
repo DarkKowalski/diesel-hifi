@@ -1,4 +1,4 @@
-//! Geometry acceptance tests (SPEC section 10).
+//! Geometry acceptance tests (README "Acceptance criteria").
 
 use std::f64::consts::PI;
 

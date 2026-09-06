@@ -1,4 +1,4 @@
-//! Envelope and rejection acceptance tests (SPEC section 10).
+//! Envelope and rejection acceptance tests (README "Acceptance criteria").
 //!
 //! "Nominal tests stay below the 23 MPa combustion-pressure envelope and reject
 //! invalid/non-finite state."

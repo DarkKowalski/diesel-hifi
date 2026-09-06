@@ -1,4 +1,5 @@
-//! SPEC section 5: "Solver code must not branch on the OM 471 ID."
+//! README "Configuration and provenance": "Solver code must not branch on the OM 471
+//! ID."
 //!
 //! This is a source-level guard. The solver modules are compiled into the test
 //! binary as text and checked for engine-specific identifiers. If someone adds

@@ -8,7 +8,8 @@ use std::fmt;
 
 /// Stable machine-readable error codes.
 ///
-/// These strings are part of the public API surface (SPEC section 7, "Return
+/// These strings are part of the public API surface (README "WASM and worker API",
+/// "Return
 /// structured errors"). Do not rename an existing variant's string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ErrorCode {
