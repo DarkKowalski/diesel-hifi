@@ -522,6 +522,63 @@ firing order has stopped being decorative.
 Best done together with P2 — both are delay lines feeding the same junction, and doing
 them separately means building the junction twice.
 
+#### 5.2.1 / 5.3.1 What building them changed — implemented at step 4
+
+**The firing order was already audible before this step, by accident.** §5.3 offers
+"1-5-3-6-2-4 and 1-2-3-4-5-6 must produce different waveforms" as an assertion "impossible
+to satisfy today". It became satisfiable at **step 2**, not step 4: P5's per-cylinder
+trims are indexed by cylinder, so permuting the firing order permutes which trim fires
+when. The headline assertion therefore passes, but it no longer isolates the runners.
+`collapsing_the_runner_span_makes_the_firing_order_inert_again` zeroes both build spreads
+as well as narrowing the span, so that the runners are the only thing left that can tell
+one cylinder from another — and that test is what found the overlap.
+
+**The aftertreatment box is an added length, not a shunt filter.** §5.2 calls for "a
+lumped compliance shunted across the duct". Taken literally that is a first-order lowpass
+whose corner is `S·c/(π·V)` — about 40 Hz for a 12-litre box on a 100 mm pipe — which
+would silence the exhaust entirely. The lumped model is a low-frequency one, and the
+low-frequency behaviour of a compliance on a duct is an **equivalent added length** of
+`V/S`. So the box lengthens the pipe acoustically instead of filtering it. This keeps the
+volume meaning a volume, needs no floor or fudge to stay stable, and makes the box do
+something plainly audible: 12 litres on 0.008 m² adds 1.5 m to a 3.5 m tailpipe.
+
+**A duct needs an area, so there are nine paths rather than eight.**
+`exhaust_system.duct_area_m2` is not in §5.2's list, and without it the box's volume
+cannot say anything about the pipe at all.
+
+**The manifold-end reflection is a module constant, not configuration.** A turbine outlet
+is acoustically near a closed end, and the returning wave has to be turned around for a
+standing wave to exist at all. The value is generic duct acoustics rather than anything
+about this engine, so it sits in `exhaust.rs` at 0.9 — and it is the other half of the
+loop gain, which is why validation requiring `open_end_reflection` inside `(-1, 0)` is
+sufficient for stability.
+
+**Gain staging did not have a solution this time, and that is the honest result.** The
+duct plus 14 dB of turbine loss cut the exhaust path hard: at the step 3 gain the
+80–300 Hz band fell from 36.1% to 9.2% at full load. Raising `exhaust_gain` to restore it
+was swept at 60, 100, 150 and 400, with the turbine shelf softened to 10 dB at 800 Hz and
+`structural_gain` reduced to compensate. **Every combination failed the idle criteria** —
+the exhaust note is concentrated at 80–300 Hz, so making it louder floods the low band and
+pushes the idle 500 Hz–15 kHz and 2–15 kHz shares under their floors. The shipped
+calibration is therefore unchanged from step 3 (`exhaust_gain` 20, `structural_gain` 3.0,
+turbine 14 dB at 400 Hz), which meets all five criteria, and full load is simply dominated
+by combustion noise rather than by the exhaust. That is defensible — §4/P1 says combustion
+noise dominates a heavy-duty diesel from 800 Hz to 4 kHz — but it is a balance to revisit
+at step 5 rather than a result to be pleased with.
+
+**Four exhaust-path tests had to silence the modal bank to mean anything.** At full load
+the bank carries most of the output, so a change to the duct or the turbine is a few
+percent of the total, and an assertion about it would really be an assertion about the
+bank.
+
+**One plausible test turned out to be false, and is recorded rather than asserted.** A
+longer pipe does *not* hold a larger share of low-frequency energy here: the radiation
+loss is taken once per round trip, so a short pipe reflects far more often per second and
+accumulates far more of it. A long pipe rings lower *and* brighter. That is a property of
+this loss model rather than a robust fact about pipes, so the resonance claim is asserted
+where it can be measured cleanly — against the round trip, in `exhaust.rs` — and the
+integration test only requires that length reaches the output.
+
 ### 5.4 P4 — radiate the flow that was actually applied
 
 Have `flow::exchange` return the net mass transferred alongside the resulting `Charge`,
@@ -760,15 +817,21 @@ Baseline for each, from step 0, so the improvement is legible rather than assert
 
 | Criterion | Target | Baseline at step 0 | After step 1 |
 |---|---:|---:|---:|
-| Idle, 500 Hz–15 kHz | ≥ 15% | 0.91% | **19.39%** |
-| Idle, 2–15 kHz | ≥ 5% | 0.03% | **6.60%** |
-| Full load, 500 Hz–15 kHz | ≥ 10% | 1.36% | **55.83%** |
-| `80–300 Hz`, any point | ≤ ~55% | 82.0% (idle) | **36.1%** (full) |
-| `<80 Hz`, any point | ≤ 35% | 10.4% (idle) | **1.0%** (idle) |
+| Idle, 500 Hz–15 kHz | ≥ 15% | 0.91% | **24.39%** |
+| Idle, 2–15 kHz | ≥ 5% | 0.03% | **8.72%** |
+| Full load, 500 Hz–15 kHz | ≥ 10% | 1.36% | **74.66%** |
+| `80–300 Hz`, any point | ≤ ~55% | 82.0% (idle) | **30.3%** (idle) |
+| `<80 Hz`, any point | ≤ 35% | 10.4% (idle) | **2.4%** (idle) |
 
-("After" now reports the state at step 3. At step 1 the same columns read 27.37%, 9.72%,
-51.29%, 39.2% and 1.4%; radiating the applied flow at step 3 moved them, because the
-exhaust term changed both shape and weight.)
+("After" reports the state at step 4. The same columns read 27.37 / 9.72 / 51.29 / 39.2 /
+1.4 at step 1 and 19.39 / 6.60 / 55.83 / 36.1 / 1.0 at step 3. They move at every step
+because the exhaust term keeps changing shape and weight underneath them, which is why
+§5.6 insists on retuning the listening stages last.)
+
+One number is worth watching rather than celebrating: the `80–300 Hz` band at **full
+load** is 9.2%. The criterion is an upper bound and it passes comfortably, but a truck at
+full load with almost no low-end thrum is not obviously right. See §5.2.1 — every attempt
+to raise it broke the idle criteria.
 
 All five still hold after step 3, and full load peaks at 0.819 against the 0.85 knee, so the
 improvement is not the clipper's doing — which §10 warns is the way to "succeed" here

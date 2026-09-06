@@ -489,6 +489,55 @@ pub struct Solver {
     pub max_steps_per_batch: u32,
 }
 
+/// The exhaust system downstream of the manifold.
+///
+/// A 0-D lumped manifold is where the gas path ends and where the acoustic path
+/// used to end with it. Downstream of that a real truck has a turbine, a
+/// downpipe, a DPF/SCR box of some tens of litres, and metres of tailpipe — and
+/// an exhaust note is very largely the standing-wave behaviour of that duct.
+///
+/// All calibrated. The manual describes the aftertreatment architecture in
+/// detail and publishes nothing at all about its acoustics or its dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ExhaustSystem {
+    /// Tailpipe length. With the speed of sound this sets the pipe resonance.
+    pub tailpipe_length_m: f64,
+    /// Cross-sectional area of the duct.
+    ///
+    /// Needed for the aftertreatment box to mean anything: a compliance behaves
+    /// like an added length of `volume / area`, so a duct with a length and no
+    /// area cannot say what the box does to it.
+    pub duct_area_m2: f64,
+    /// Reflection coefficient at the open tip. Negative, magnitude below one.
+    ///
+    /// An open end is a pressure node, so the reflected wave changes sign. The
+    /// magnitude must stay below unity or the duct's feedback loop grows without
+    /// bound, and validation enforces that rather than trusting it.
+    pub open_end_reflection: f64,
+    /// One-pole loss applied to the reflected wave.
+    ///
+    /// A pipe mouth radiates poorly at low frequency and well high up, so what
+    /// comes back is low-passed. This is why a real pipe rings sharply low down
+    /// and is damped higher.
+    pub radiation_cutoff_hz: f64,
+    /// Free acoustic volume of the DPF and SCR box.
+    pub aftertreatment_volume_m3: f64,
+    /// Broadband attenuation across the turbine, in decibels.
+    ///
+    /// Acoustically a turbine is a large silencer. This is the term that makes
+    /// the engine read as turbocharged rather than as open-piped.
+    pub turbine_insertion_loss_db: f64,
+    /// Corner above which the turbine's attenuation applies.
+    pub turbine_loss_cutoff_hz: f64,
+    /// Shortest exhaust manifold runner.
+    ///
+    /// A span rather than a length per cylinder, so this section carries no
+    /// cylinder count and a four-cylinder configuration uses it unchanged.
+    pub runner_length_min_m: f64,
+    /// Longest exhaust manifold runner.
+    pub runner_length_max_m: f64,
+}
+
 /// One structural mode of the engine's outer surface.
 ///
 /// A near-step pressure rise inside a stiff iron box excites bending and
@@ -521,8 +570,6 @@ pub struct AudioCalibration {
     pub exhaust_gain: f64,
     /// Removes the standing pressure offset, leaving the pulses.
     pub highpass_cutoff_hz: f64,
-    /// Muffler roll-off.
-    pub lowpass_cutoff_hz: f64,
     /// Soft-clip knee keeping samples inside [-1, 1] without hard clipping.
     pub soft_clip_knee: f64,
     /// Level of the structural path against the exhaust path.
@@ -565,6 +612,7 @@ pub struct EngineConfig {
     pub inertia: Inertia,
     pub limits: Limits,
     pub solver: Solver,
+    pub exhaust_system: ExhaustSystem,
     pub audio: AudioCalibration,
     pub rated: RatedOutput,
     pub sources: Vec<SourceRecord>,
@@ -755,10 +803,23 @@ impl EngineConfig {
             "solver.fixed_step_s" => self.solver.fixed_step_s,
             "solver.max_steps_per_batch" => f64::from(self.solver.max_steps_per_batch),
 
+            "exhaust_system.tailpipe_length_m" => self.exhaust_system.tailpipe_length_m,
+            "exhaust_system.duct_area_m2" => self.exhaust_system.duct_area_m2,
+            "exhaust_system.open_end_reflection" => self.exhaust_system.open_end_reflection,
+            "exhaust_system.radiation_cutoff_hz" => self.exhaust_system.radiation_cutoff_hz,
+            "exhaust_system.aftertreatment_volume_m3" => {
+                self.exhaust_system.aftertreatment_volume_m3
+            }
+            "exhaust_system.turbine_insertion_loss_db" => {
+                self.exhaust_system.turbine_insertion_loss_db
+            }
+            "exhaust_system.turbine_loss_cutoff_hz" => self.exhaust_system.turbine_loss_cutoff_hz,
+            "exhaust_system.runner_length_min_m" => self.exhaust_system.runner_length_min_m,
+            "exhaust_system.runner_length_max_m" => self.exhaust_system.runner_length_max_m,
+
             "audio.reference_spl_db" => self.audio.reference_spl_db,
             "audio.exhaust_gain" => self.audio.exhaust_gain,
             "audio.highpass_cutoff_hz" => self.audio.highpass_cutoff_hz,
-            "audio.lowpass_cutoff_hz" => self.audio.lowpass_cutoff_hz,
             "audio.soft_clip_knee" => self.audio.soft_clip_knee,
             "audio.structural_gain" => self.audio.structural_gain,
             "audio.structural_modes" => return None,

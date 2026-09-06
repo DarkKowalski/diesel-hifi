@@ -572,19 +572,55 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         "solver.fixed_step_s must fall in (0, 1e-3] seconds",
     )?;
 
+    let ex = &config.exhaust_system;
+    finite_positive(ex.tailpipe_length_m, "exhaust_system.tailpipe_length_m")?;
+    finite_positive(ex.duct_area_m2, "exhaust_system.duct_area_m2")?;
+    finite_positive(ex.radiation_cutoff_hz, "exhaust_system.radiation_cutoff_hz")?;
+    finite_positive(
+        ex.turbine_loss_cutoff_hz,
+        "exhaust_system.turbine_loss_cutoff_hz",
+    )?;
+    require(
+        ex.aftertreatment_volume_m3.is_finite() && ex.aftertreatment_volume_m3 >= 0.0,
+        "exhaust_system.aftertreatment_volume_m3 must be finite and not negative",
+    )?;
+    require(
+        ex.turbine_insertion_loss_db.is_finite() && ex.turbine_insertion_loss_db >= 0.0,
+        "exhaust_system.turbine_insertion_loss_db must be finite and not negative",
+    )?;
+    // Duct stability. The tip reflection is half of the waveguide's loop gain -
+    // the manifold end supplies the rest - so a magnitude at or above unity is a
+    // loop that grows without bound in the hot loop, where nothing can recover
+    // it. An open end is a pressure node, so the sign must be negative as well.
+    require(
+        ex.open_end_reflection.is_finite()
+            && ex.open_end_reflection < 0.0
+            && ex.open_end_reflection > -1.0,
+        "exhaust_system.open_end_reflection must fall in (-1, 0): an open end inverts the \
+         wave, and a magnitude of one or more makes the duct unstable",
+    )?;
+    finite_positive(ex.runner_length_min_m, "exhaust_system.runner_length_min_m")?;
+    require(
+        ex.runner_length_max_m > ex.runner_length_min_m,
+        "exhaust_system.runner_length_max_m must exceed runner_length_min_m; a manifold \
+         whose runners are all the same length cannot make the firing order audible",
+    )?;
+    // Both duct buffers are sized from these at construction, so an absurd
+    // length is a memory question as much as a physical one.
+    require(
+        ex.tailpipe_length_m <= 20.0 && ex.runner_length_max_m <= 5.0,
+        "exhaust_system lengths must stay within 20 m of duct and 5 m of runner",
+    )?;
+
     let au = &config.audio;
     require(
         au.exhaust_gain >= 0.0,
         "audio.exhaust_gain must not be negative",
     )?;
     require(
-        au.highpass_cutoff_hz > 0.0 && au.highpass_cutoff_hz < au.lowpass_cutoff_hz,
-        "audio.highpass_cutoff_hz must be positive and below audio.lowpass_cutoff_hz",
-    )?;
-    // Both filters must stay under Nyquist for the solver's own sample rate.
-    require(
-        au.lowpass_cutoff_hz < 0.5 / config.solver.fixed_step_s,
-        "audio.lowpass_cutoff_hz must stay below the Nyquist frequency of the solver step",
+        au.highpass_cutoff_hz > 0.0 && au.highpass_cutoff_hz < 0.5 / config.solver.fixed_step_s,
+        "audio.highpass_cutoff_hz must be positive and below the Nyquist frequency of the \
+         solver step",
     )?;
     // The knee is also the ceiling the soft clipper saturates at, so keeping it
     // at or below unity is what guarantees samples stay inside [-1, 1].

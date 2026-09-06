@@ -634,6 +634,19 @@ fn high_band_share(samples: &[f32], cutoff_hz: f64) -> f64 {
     }
 }
 
+/// Absolute energy above a cutoff, rather than its share of the total.
+///
+/// The distinction matters once there are two radiating paths and a duct: a
+/// share moves when either path changes level, so a claim about how much energy
+/// is up there has to be measured as energy.
+fn high_band_energy(samples: &[f32], cutoff_hz: f64) -> f64 {
+    high_band_share(samples, cutoff_hz)
+        * samples
+            .iter()
+            .map(|s| f64::from(*s) * f64::from(*s))
+            .sum::<f64>()
+}
+
 /// The shipped configuration with its `audio` section altered.
 fn config_with_audio(mutate: impl FnOnce(&mut serde_json::Value)) -> ValidatedConfig {
     let mut document: serde_json::Value =
@@ -660,18 +673,16 @@ fn the_structural_path_is_what_puts_energy_above_the_firing_harmonics() {
         40_000,
     );
 
-    let with_share = high_band_share(&with, 500.0);
-    let without_share = high_band_share(&without, 500.0);
-    // The margin is 2x rather than the 4x it was when the modal bank landed,
-    // and the reason is a real improvement rather than a regression: radiating
-    // the applied port flow instead of an `area * pressure difference` proxy
-    // sharpened the blowdown edge, so the exhaust path now carries genuine top
-    // end of its own. The structural path is still the majority of what is up
-    // there, which is what this test is for.
+    // Energy rather than share. A share is a ratio against the total, and the
+    // total collapses when the modal bank is silenced, so the exhaust path's
+    // *share* of its own much smaller output can look large while the energy up
+    // there is negligible. The claim being made is about how much is up there.
+    let with_energy = high_band_energy(&with, 500.0);
+    let without_energy = high_band_energy(&without, 500.0);
     assert!(
-        with_share > without_share * 2.0,
-        "the modal bank should dominate above 500 Hz: {with_share:.4} with it \
-         against {without_share:.4} without, which is not a large enough difference \
+        with_energy > without_energy * 4.0,
+        "the modal bank should dominate above 500 Hz: {with_energy:.4e} with it \
+         against {without_energy:.4e} without, which is not a large enough difference \
          to be the mechanism this path claims to be"
     );
 }
@@ -709,24 +720,85 @@ fn the_modal_bank_only_rings_where_it_is_told_to() {
 }
 
 #[test]
-fn the_clatter_is_load_dependent_without_a_clatter_schedule() {
-    // Ignition delay lengthens when the cylinder is cold and lightly loaded, a
-    // longer delay means a larger premixed fraction, and a larger premixed
-    // fraction means a sharper pressure rise. So a lightly loaded engine must
-    // clatter harder *in proportion* than a hard-working one, and it must do so
-    // because the combustion model says so: there is no load term anywhere in
-    // the audio path to arrange it.
+fn the_clatter_tracks_the_premixed_burn_and_not_the_fuel() {
+    // Ignition delay lengthens when the cylinder is lightly loaded, a longer
+    // delay means a larger premixed fraction, and a larger premixed fraction
+    // means a sharper pressure rise. So a lightly loaded engine must be rattly
+    // out of proportion to how little fuel it is burning - and it must be so
+    // because the combustion model says so, since there is no load term anywhere
+    // in the audio path to arrange it.
+    //
+    // Stated per milligram of fuel, deliberately. In absolute terms a fully
+    // loaded engine clatters *more*, which is both what this model produces and
+    // what a real one does: the premixed fraction collapses under load but the
+    // premixed *mass* barely changes, and it burns into a much denser charge. The
+    // plan's original phrasing - upper-band energy at light load exceeding that
+    // at full load - is not true here and should not be.
     let speed = 1_200.0;
-    let light = samples_at(config(), speed, 0.08, 293.15, 40_000);
-    let heavy = samples_at(config(), speed, 1.0, 293.15, 40_000);
 
-    let light_share = high_band_share(&light, 1_500.0);
-    let heavy_share = high_band_share(&heavy, 1_500.0);
+    // The exhaust path is silenced for this measurement and only this one. It has
+    // a strong load dependence of its own, more fuel being more gas through the
+    // port, which has nothing to do with combustion noise. Nothing is added to
+    // the structural path to make this pass.
+    let structural_only = config_with_audio(|audio| audio["exhaust_gain"] = serde_json::json!(0.0));
+
+    let measure = |pedal: f64| {
+        let mut sim = Simulation::new(
+            structural_only.clone(),
+            ResetOptions {
+                seed: 0,
+                initial_rpm: speed,
+                initial_crank_rad: 0.0,
+                coolant_temp_k: 293.15,
+            },
+        )
+        .expect("simulation builds");
+        sim.set_controls(controls(pedal, false, true))
+            .expect("controls accepted");
+        let mut sink = vec![0.0f32; PIN_CHUNK as usize];
+        for _ in 0..1_200 {
+            sim.advance(PIN_CHUNK).expect("advance");
+            sim.pin_speed_rpm(speed).expect("pin");
+            sim.drain_audio(&mut sink);
+        }
+        let snapshot = sim.snapshot();
+        let mut out = vec![0.0f32; 40_000];
+        let mut written = 0;
+        while written < out.len() {
+            let batch = PIN_CHUNK.min((out.len() - written) as u32);
+            sim.advance(batch).expect("advance");
+            sim.pin_speed_rpm(speed).expect("pin");
+            written += sim.drain_audio(&mut out[written..]);
+        }
+        (
+            snapshot.premixed_fraction,
+            snapshot.fuel_per_cycle_mg,
+            high_band_energy(&out, 1_500.0),
+        )
+    };
+
+    let (light_premixed, light_fuel, light_energy) = measure(0.08);
+    let (heavy_premixed, heavy_fuel, heavy_energy) = measure(1.0);
+
+    // The mechanism itself, named rather than inferred.
     assert!(
-        light_share > heavy_share,
-        "at {speed:.0} rpm a lightly loaded engine should be proportionally \
-         rattlier than a fully loaded one, got {light_share:.4} light against \
-         {heavy_share:.4} heavy"
+        light_premixed > heavy_premixed * 3.0,
+        "the premixed fraction should collapse under load: {light_premixed:.3} light \
+         against {heavy_premixed:.3} heavy"
+    );
+    assert!(
+        light_fuel < heavy_fuel * 0.25,
+        "the light case should be burning far less fuel: {light_fuel:.1} mg against \
+         {heavy_fuel:.1} mg"
+    );
+
+    // And its consequence: clatter per milligram, not clatter per se.
+    let light_per_mg = light_energy / light_fuel;
+    let heavy_per_mg = heavy_energy / heavy_fuel;
+    assert!(
+        light_per_mg > heavy_per_mg * 2.0,
+        "a lightly loaded engine should rattle out of proportion to its fuel: \
+         {light_per_mg:.4} per mg light against {heavy_per_mg:.4} per mg heavy"
     );
 }
 
@@ -1016,6 +1088,267 @@ fn an_implausibly_wide_build_tolerance_is_rejected() {
         .expect_err("a negative build tolerance must be rejected");
     assert!(
         error.message.contains("exhaust_area_spread"),
+        "the rejection should name the field, got: {}",
+        error.message
+    );
+}
+
+// --- the exhaust system: duct, turbine, box, runners ----------------------
+
+/// The shipped configuration with its `exhaust_system` section altered, and the
+/// structural path silenced.
+///
+/// These are tests of the exhaust path, and the modal bank is loud: at full load
+/// it carries most of the output, so a change to the duct or the turbine is a
+/// few percent of the total and any assertion about it would really be an
+/// assertion about the bank. Silencing the bank measures the thing being named.
+fn config_with_exhaust(mutate: impl FnOnce(&mut serde_json::Value)) -> ValidatedConfig {
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["audio"]["structural_gain"] = serde_json::json!(0.0);
+    mutate(&mut document["exhaust_system"]);
+    EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect("mutated config validates")
+}
+
+#[test]
+fn changing_the_firing_order_changes_the_waveform() {
+    // The assertion this whole step exists to make possible.
+    //
+    // `geometry.firing_order` has always been in the configuration, always been
+    // validated as a permutation, and always derived the cylinder phase offsets
+    // — and until the runners landed it could not change one sample of output.
+    // Six evenly spaced cylinders discharging into a single lumped node sum to
+    // the same signal whichever cylinder is assigned to which slot. Runner
+    // lengths differ by cylinder position, so the order in which the cylinders
+    // fire is now the order in which different delays are exercised.
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    assert_eq!(
+        document["geometry"]["firing_order"],
+        serde_json::json!([1, 5, 3, 6, 2, 4]),
+        "this test is written against the shipped firing order"
+    );
+    document["geometry"]["firing_order"] = serde_json::json!([1, 2, 3, 4, 5, 6]);
+    let reordered = EngineConfig::from_json(&document.to_string())
+        .expect("reordered config parses")
+        .validate()
+        .expect("reordered config validates");
+
+    let shipped = samples_at(config(), 1_200.0, 0.5, 293.15, 40_000);
+    let sequential = samples_at(reordered, 1_200.0, 0.5, 293.15, 40_000);
+
+    assert_ne!(
+        shipped, sequential,
+        "1-5-3-6-2-4 and 1-2-3-4-5-6 must not produce the same waveform; if they \
+         do, the firing order is decorative again"
+    );
+
+    // Different, and audibly so rather than in the last bit.
+    let difference: f64 = shipped
+        .iter()
+        .zip(&sequential)
+        .map(|(a, b)| {
+            let d = f64::from(*a) - f64::from(*b);
+            d * d
+        })
+        .sum();
+    let energy: f64 = shipped.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
+    assert!(
+        difference > energy * 0.01,
+        "the two firing orders differ by only {:.4}% of the signal energy, which is \
+         not a difference anyone could hear",
+        100.0 * difference / energy
+    );
+}
+
+#[test]
+fn collapsing_the_runner_span_makes_the_firing_order_inert_again() {
+    // The converse, and the proof that the runners are the mechanism rather than
+    // something incidental: with every runner nearly the same length, permuting
+    // the firing order should stop mattering nearly as much.
+    // The build scatter has to be zeroed as well, and finding that out was the
+    // point of writing this test. P5's per-cylinder trims are indexed by
+    // cylinder, so permuting the firing order already changed which trim fired
+    // when — meaning the firing order became audible one step earlier than the
+    // plan expected, by a mechanism the plan did not intend. With the trims off,
+    // the runners are the only thing left that can tell one cylinder from
+    // another.
+    let narrow = |order: serde_json::Value| {
+        let mut document: serde_json::Value =
+            serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+        document["geometry"]["firing_order"] = order;
+        document["valvetrain"]["exhaust_area_spread"] = serde_json::json!(0.0);
+        document["injection"]["cylinder_delivery_spread"] = serde_json::json!(0.0);
+        document["exhaust_system"]["runner_length_min_m"] = serde_json::json!(0.30);
+        document["exhaust_system"]["runner_length_max_m"] = serde_json::json!(0.3001);
+        EngineConfig::from_json(&document.to_string())
+            .expect("config parses")
+            .validate()
+            .expect("config validates")
+    };
+
+    let a = samples_at(
+        narrow(serde_json::json!([1, 5, 3, 6, 2, 4])),
+        1_200.0,
+        0.5,
+        293.15,
+        40_000,
+    );
+    let b = samples_at(
+        narrow(serde_json::json!([1, 2, 3, 4, 5, 6])),
+        1_200.0,
+        0.5,
+        293.15,
+        40_000,
+    );
+
+    let difference: f64 = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| {
+            let d = f64::from(*x) - f64::from(*y);
+            d * d
+        })
+        .sum();
+    let energy: f64 = a.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
+    assert!(
+        difference < energy * 0.01,
+        "with all runners the same length the firing order should barely matter, \
+         but the two differ by {:.2}% of the signal energy",
+        100.0 * difference / energy
+    );
+}
+
+#[test]
+fn the_pipe_resonance_moves_with_exhaust_temperature() {
+    // `c = sqrt(gamma R T)`, so a hot duct rings higher than a cold one. Nothing
+    // schedules this: the duct reads the exhaust temperature the solver
+    // integrates, and the resonance follows.
+    //
+    // Measured through the duct alone rather than through a running engine,
+    // because an engine hot enough to shift the resonance is also an engine
+    // making a different sound for a dozen other reasons.
+    use sim_core::sim::exhaust::speed_of_sound_m_per_s;
+    let gas = config().config().gas;
+    let cold = speed_of_sound_m_per_s(&gas, 450.0);
+    let hot = speed_of_sound_m_per_s(&gas, 900.0);
+    assert!(
+        hot > cold * 1.3,
+        "doubling the exhaust temperature should raise the speed of sound by about \
+         40%: {hot:.0} m/s against {cold:.0} m/s"
+    );
+}
+
+#[test]
+fn the_tailpipe_length_reaches_the_output() {
+    // The duct has a pitch of its own, independent of firing frequency, and
+    // length is what sets it. If length did not reach the output the pipe would
+    // be a tone control again.
+    //
+    // Where the resonance *lands* is asserted in `exhaust.rs`, against the round
+    // trip, because that is where it can be measured without a transform. Note
+    // that the obvious integration-level test - a longer pipe having a larger
+    // share of low-frequency energy - is false here, and instructively so: the
+    // radiation loss is taken once per round trip, so a short pipe reflects far
+    // more often per second and accumulates far more of it. A long pipe rings
+    // lower *and* brighter. That is a property of this loss model rather than a
+    // robust fact about pipes, so it is recorded here and not asserted.
+    let short = samples_at(
+        config_with_exhaust(|ex| ex["tailpipe_length_m"] = serde_json::json!(1.5)),
+        1_200.0,
+        0.5,
+        293.15,
+        40_000,
+    );
+    let long = samples_at(
+        config_with_exhaust(|ex| ex["tailpipe_length_m"] = serde_json::json!(8.0)),
+        1_200.0,
+        0.5,
+        293.15,
+        40_000,
+    );
+    assert_ne!(short, long, "the duct length must reach the output");
+
+    let difference: f64 = short
+        .iter()
+        .zip(&long)
+        .map(|(a, b)| {
+            let d = f64::from(*a) - f64::from(*b);
+            d * d
+        })
+        .sum();
+    let energy: f64 = short.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
+    assert!(
+        difference > energy * 0.1,
+        "1.5 m and 8 m of pipe should sound plainly different, but differ by only \
+         {:.2}% of the signal energy",
+        100.0 * difference / energy
+    );
+}
+
+#[test]
+fn the_turbine_insertion_loss_reaches_the_output() {
+    // The term that makes the engine read as turbocharged rather than open-piped.
+    let muted = samples_at(
+        config_with_exhaust(|ex| ex["turbine_insertion_loss_db"] = serde_json::json!(30.0)),
+        1_200.0,
+        0.5,
+        293.15,
+        40_000,
+    );
+    let open = samples_at(
+        config_with_exhaust(|ex| ex["turbine_insertion_loss_db"] = serde_json::json!(0.0)),
+        1_200.0,
+        0.5,
+        293.15,
+        40_000,
+    );
+    assert!(
+        high_band_energy(&open, 500.0) > high_band_energy(&muted, 500.0) * 2.0,
+        "30 dB of turbine loss should plainly quieten the top of the exhaust note: \
+         {:.4e} open against {:.4e} muted",
+        high_band_energy(&open, 500.0),
+        high_band_energy(&muted, 500.0)
+    );
+}
+
+#[test]
+fn an_unstable_duct_is_rejected_rather_than_run() {
+    // The waveguide is a feedback loop and this is the coefficient that bounds
+    // its gain. A magnitude of one or more grows without bound in the hot loop,
+    // where nothing can recover it.
+    for bad in [-1.0, -1.5, 0.8, 0.0] {
+        let mut document: serde_json::Value =
+            serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+        document["exhaust_system"]["open_end_reflection"] = serde_json::json!(bad);
+        let error = EngineConfig::from_json(&document.to_string())
+            .expect("mutated config parses")
+            .validate()
+            .expect_err("an unstable or wrong-signed reflection must be rejected");
+        assert!(
+            error.message.contains("open_end_reflection"),
+            "the rejection should name the coefficient, got: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn a_manifold_with_no_runner_spread_is_rejected() {
+    // A span of zero is a manifold that cannot make the firing order audible,
+    // which is a configuration mistake rather than a valid choice.
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["exhaust_system"]["runner_length_max_m"] = serde_json::json!(0.10);
+    let error = EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect_err("a zero runner span must be rejected");
+    assert!(
+        error.message.contains("runner_length_max_m"),
         "the rejection should name the field, got: {}",
         error.message
     );

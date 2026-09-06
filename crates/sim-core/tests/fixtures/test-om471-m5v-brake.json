@@ -251,11 +251,21 @@
     "fixed_step_s": 2.5e-05,
     "max_steps_per_batch": 20000
   },
+  "exhaust_system": {
+    "tailpipe_length_m": 3.5,
+    "duct_area_m2": 0.008,
+    "open_end_reflection": -0.8,
+    "radiation_cutoff_hz": 2000.0,
+    "aftertreatment_volume_m3": 0.012,
+    "turbine_insertion_loss_db": 14.0,
+    "turbine_loss_cutoff_hz": 400.0,
+    "runner_length_min_m": 0.1,
+    "runner_length_max_m": 0.7
+  },
   "audio": {
     "reference_spl_db": 94.0,
     "exhaust_gain": 20.0,
     "highpass_cutoff_hz": 20.0,
-    "lowpass_cutoff_hz": 6000.0,
     "soft_clip_knee": 0.85,
     "structural_gain": 3.0,
     "structural_modes": [
@@ -1514,6 +1524,96 @@
       ]
     },
     {
+      "path": "exhaust_system.tailpipe_length_m",
+      "status": "calibrated",
+      "value_note": "3.5 m. Not published, and it drives an audible resonance, so it is exactly the kind of value that has to be declared rather than assumed. Plausible for a tractor unit with a vertical stack; the manual gives no exhaust geometry whatsoever.",
+      "purpose": "Sets the pipe resonance together with the speed of sound: the quarter-wave sits at c / 4L and the odd harmonics above it land among the firing orders, which is what gives the exhaust a pitch of its own independent of engine speed. Longer is deeper. Both duct delay buffers are sized from this at construction.",
+      "safe_range": [
+        0.5,
+        20.0
+      ]
+    },
+    {
+      "path": "exhaust_system.duct_area_m2",
+      "status": "calibrated",
+      "value_note": "0.008 m^2, about a 100 mm bore. Not published.",
+      "purpose": "Cross-section of the duct. The aftertreatment box is a compliance, and a compliance behaves like an added duct length of volume over area, so without an area the box cannot say what it does to the pipe. Larger area means the same box lengthens the duct less.",
+      "safe_range": [
+        0.0001,
+        1.0
+      ]
+    },
+    {
+      "path": "exhaust_system.open_end_reflection",
+      "status": "calibrated",
+      "value_note": "-0.8. Not published, and not measurable from anything the manual contains.",
+      "purpose": "Reflection coefficient at the pipe mouth. Negative because an open end is a pressure node and inverts the wave. Its magnitude is how much of each pulse is returned to form a standing wave rather than radiated away: nearer zero is a duct with no note, nearer one is a duct that rings too long and too evenly. It is also half the waveguide's loop gain, so validation requires it to stay inside (-1, 0) or the duct is unstable.",
+      "safe_range": [
+        -0.99,
+        -0.01
+      ]
+    },
+    {
+      "path": "exhaust_system.radiation_cutoff_hz",
+      "status": "calibrated",
+      "value_note": "2000 Hz. Not published.",
+      "purpose": "One-pole loss on the reflected wave, standing for the fact that a pipe mouth radiates poorly at low frequency and well high up. It is why a real pipe's low resonances are sharp and its high ones are damped. Lower values damp the pipe more and make the note duller and shorter.",
+      "safe_range": [
+        50.0,
+        20000.0
+      ]
+    },
+    {
+      "path": "exhaust_system.aftertreatment_volume_m3",
+      "status": "calibrated",
+      "value_note": "0.012 m^3, twelve litres of free acoustic volume. The manual describes the DPF and SCR architecture at length and publishes no dimensions at all; this is the gas space, not the package size, and most of a real box is substrate rather than air.",
+      "purpose": "The box is a compliance shunted on the duct, which at the wavelengths that set the first few resonances behaves like an extra length of volume over area. So it lowers the pipe's resonance rather than filtering it. The approximation is a low-frequency one and stops describing the box once a wavelength is comparable with the box's own dimensions; nothing in the audible exhaust note is up there.",
+      "safe_range": [
+        0.0,
+        0.2
+      ]
+    },
+    {
+      "path": "exhaust_system.turbine_insertion_loss_db",
+      "status": "calibrated",
+      "value_note": "14 dB. Turbines are commonly quoted as giving order 10 to 20 dB; the manual gives no figure for this one.",
+      "purpose": "Broadband attenuation across the turbine, applied above the corner below. Acoustically a turbine is a large silencer, and this is the term that makes the engine read as turbocharged rather than as open-piped. Too little and the exhaust is raw and sharp; too much and the exhaust note disappears behind the block noise.",
+      "safe_range": [
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "path": "exhaust_system.turbine_loss_cutoff_hz",
+      "status": "calibrated",
+      "value_note": "400 Hz. Not published.",
+      "purpose": "Corner above which the turbine's insertion loss applies. Below it the pulse passes; above it the loss is taken. Moving it down mutes more of the pulse's edge and leaves more of its fundamental.",
+      "safe_range": [
+        20.0,
+        20000.0
+      ]
+    },
+    {
+      "path": "exhaust_system.runner_length_min_m",
+      "status": "calibrated",
+      "value_note": "0.10 m, the runner nearest the turbine on a log manifold. Not published.",
+      "purpose": "Shortest exhaust manifold runner. With the longest it sets the spread of arrival times at the turbine, which is what makes an inline six sound like an inline six rather than like six identical pops - and what makes geometry.firing_order audible at all rather than merely validated.",
+      "safe_range": [
+        0.01,
+        5.0
+      ]
+    },
+    {
+      "path": "exhaust_system.runner_length_max_m",
+      "status": "calibrated",
+      "value_note": "0.70 m, the runner furthest from the turbine. Not published.",
+      "purpose": "Longest exhaust manifold runner. Given as a span with the minimum rather than a length per cylinder, so this section carries no cylinder count and a configuration with a different number of cylinders uses it unchanged. Validation requires it to exceed the minimum: a manifold whose runners are all one length cannot make the firing order audible.",
+      "safe_range": [
+        0.01,
+        5.0
+      ]
+    },
+    {
       "path": "audio.reference_spl_db",
       "status": "calibrated",
       "value_note": "94 dB reference for the reported exhaust level. The source manual does not publish this.",
@@ -1541,16 +1641,6 @@
       "safe_range": [
         1.0,
         200.0
-      ]
-    },
-    {
-      "path": "audio.lowpass_cutoff_hz",
-      "status": "calibrated",
-      "value_note": "6000 Hz, two poles. The source manual does not publish this.",
-      "purpose": "Muffler roll-off. Without it the blowdown edge is far harsher than any real exhaust system sounds.",
-      "safe_range": [
-        100.0,
-        19000.0
       ]
     },
     {

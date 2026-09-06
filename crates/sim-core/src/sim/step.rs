@@ -8,7 +8,7 @@
 //!
 //! The loop allocates nothing, logs nothing, and performs no I/O.
 
-use crate::config::validate::{ValidatedConfig, CYCLE_RAD};
+use crate::config::validate::{ValidatedConfig, CYCLE_RAD, MAX_CYLINDERS};
 use crate::error::{ErrorCode, Result, SimError};
 use crate::geometry::SliderCrank;
 use crate::sim::cylinder::{self, Phase};
@@ -263,7 +263,10 @@ pub(super) fn step(
     // exhaust manifold.
     //
     // The source is the mass flow the port *actually passed* this step, in kg/s,
-    // taken from `flow::exchange` rather than recomputed beside it. It is
+    // taken from `flow::exchange` rather than recomputed beside it. It is kept
+    // per cylinder rather than summed here, because each cylinder's pulse
+    // reaches the turbine down a runner of its own length, and that difference
+    // in arrival time is what makes the firing order audible. It is
     // therefore the clamped and settled flow: the unclamped orifice relation
     // carries a two-sample limit cycle near equilibrium that `flow.rs` documents
     // at length, and the radiation derivative amplifies with frequency, so
@@ -271,7 +274,7 @@ pub(super) fn step(
     // inaudible. A cylinder that is exchanging no gas contributes nothing, which
     // is what it should do: however high its pressure climbs, a shut cylinder
     // makes no sound at the tailpipe.
-    let mut acoustic_source = 0.0;
+    let mut cylinder_flow_kg_per_s = [0.0f64; MAX_CYLINDERS];
     let mut donor_temperature_sum = 0.0;
     let mut donor_weight = 0.0;
 
@@ -281,6 +284,11 @@ pub(super) fn step(
     // That is exactly what distinguishes this path from the exhaust one.
     let mut cylinder_pressure_sum_pa = 0.0;
 
+    // Indexed rather than iterated: the body reads and writes `state.cylinders`
+    // and writes `cylinder_flow_kg_per_s`, and borrowing two collections through
+    // one iterator would mean restructuring the loop around the borrow checker
+    // rather than around the physics.
+    #[allow(clippy::needless_range_loop)]
     for index in 0..count {
         let mut c = state.cylinders[index];
         let psi_old = cylinder::signed_cycle_angle(theta_old, c.phase_offset_rad);
@@ -497,7 +505,7 @@ pub(super) fn step(
                         // top of it — and why it cannot end up on a different
                         // scale from the blowdown, as it would if the two were
                         // computed by separate means.
-                        acoustic_source += after.net_out_kg / dt;
+                        cylinder_flow_kg_per_s[index] += after.net_out_kg / dt;
                     }
                 }
                 Phase::Intake => {
@@ -543,7 +551,7 @@ pub(super) fn step(
                     c.pressure_pa = after.charge.pressure_pa;
                     c.motored_pressure_pa = c.pressure_pa;
 
-                    acoustic_source += after.net_out_kg / dt;
+                    cylinder_flow_kg_per_s[index] += after.net_out_kg / dt;
                 }
             }
         }
@@ -636,9 +644,22 @@ pub(super) fn step(
     } else {
         0.0
     };
+
+    // The exhaust pulses now have somewhere to go. Runner delays, the turbine's
+    // insertion loss, the aftertreatment box and the tailpipe all sit between
+    // the ports and the listener, and the speed of sound through them comes from
+    // the exhaust temperature this step just integrated — so the pipe resonance
+    // shifts as the engine heats without anything scheduling it.
+    let radiated = state.exhaust_system.advance(
+        &cfg.exhaust_system,
+        gas_props,
+        &cylinder_flow_kg_per_s[..count],
+        state.exhaust.temperature_k,
+        dt,
+    );
     state
         .acoustics
-        .push(&cfg.audio, acoustic_source, structural_forcing, dt);
+        .push(&cfg.audio, radiated, structural_forcing, dt);
 
     state.peak_pressure_pa_cycle = state.peak_pressure_pa_cycle.max(step_peak_pressure_pa);
     state.peak_pressure_pa_session = state.peak_pressure_pa_session.max(step_peak_pressure_pa);

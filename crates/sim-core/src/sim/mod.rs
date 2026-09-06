@@ -15,6 +15,7 @@ pub mod brake;
 pub mod cylinder;
 pub mod driveline;
 pub mod egr;
+pub mod exhaust;
 pub mod flow;
 pub mod gas;
 pub mod governor;
@@ -37,6 +38,7 @@ use crate::snapshot::{RunState, SimFault, Snapshot, SNAPSHOT_VERSION};
 
 use acoustics::Acoustics;
 use cylinder::{CylinderState, Phase};
+use exhaust::ExhaustSystem;
 use governor::{rad_per_s_to_rpm, rpm_to_rad_per_s, GovernorState};
 
 /// Explicit initial conditions for a deterministic reset.
@@ -336,6 +338,7 @@ pub struct SimState {
 
     /// Exhaust acoustic source: filters and the produced-sample ring buffer.
     pub(crate) acoustics: Acoustics,
+    pub(crate) exhaust_system: ExhaustSystem,
 
     /// Engine brake and driveline results from the most recent step. Both are
     /// resolved fresh every step from the controls, so neither is integrated
@@ -401,6 +404,11 @@ impl Simulation {
             acoustics: Acoustics::new(
                 config.config().solver.max_steps_per_batch as usize,
                 &config.config().audio.structural_modes,
+                config.config().solver.fixed_step_s,
+            ),
+            exhaust_system: ExhaustSystem::new(
+                &config.config().exhaust_system,
+                MAX_CYLINDERS,
                 config.config().solver.fixed_step_s,
             ),
             brake: brake::Command::default(),
@@ -476,6 +484,7 @@ impl Simulation {
         state.egr_flow_kg_per_s = 0.0;
         state.engine_flow_kg_per_s = 0.0;
         state.acoustics.reset();
+        state.exhaust_system.reset();
         state.brake = brake::Command::default();
         state.driveline = driveline::Output::default();
         state.fuel_demand_mg = 0.0;

@@ -8,8 +8,8 @@
 //! Two paths radiate, and they are summed at the end rather than in series:
 //!
 //! ```text
-//! source     = sum over cylinders of  net port mass flow, kg/s
-//! exhaust    = lowpass(lowpass(highpass(d(source)/dt)))    out of the pipe
+//! source     = the wave leaving the tailpipe mouth, from `exhaust.rs`
+//! exhaust    = highpass(d(source)/dt)                      out of the pipe
 //! forcing    = d( sum over cylinders of p_cyl / p_ambient )/dt
 //! structural = sum over modes of  gain_k * resonator_k(forcing)   off the iron
 //! sample     = softclip(g_exh * exhaust + g_str * structural)
@@ -55,10 +55,19 @@
 //! ## Why the structural path is summed last
 //!
 //! The block radiates straight to air. It does not go out of the tailpipe.
-//! Putting the structural term through the muffler lowpass would filter it with
-//! a transfer function that does not apply to it, and would attenuate precisely
-//! the band it exists to supply. So the two paths are filtered separately and
-//! summed after, before the clipper.
+//! Putting the structural term through the exhaust system would filter it with a
+//! transfer function that does not apply to it — a turbine and several metres of
+//! pipe are between the exhaust pulse and the listener, and nothing at all is
+//! between the block and the listener — and would attenuate precisely the band
+//! it exists to supply. So the two paths are shaped separately and summed after,
+//! before the clipper.
+//!
+//! Until Milestone 5 the exhaust path's shaping was a two-pole lowpass called
+//! `audio.lowpass_cutoff_hz`, standing in for an entire exhaust system. That is
+//! a tone control, and `exhaust.rs` replaces it with a duct. The parameter is
+//! gone rather than left in place doing nothing: one that no longer affects the
+//! output but still carries a provenance entry claiming to be the muffler
+//! roll-off is worse than no parameter at all.
 //!
 //! ## Why no gate around the burn
 //!
@@ -315,8 +324,6 @@ pub struct Acoustics {
     previous_source: f64,
     highpass_previous_input: f64,
     highpass_previous_output: f64,
-    lowpass_stage_one: f64,
-    lowpass_stage_two: f64,
 
     /// Previous normalised cylinder-pressure sum, for the structural forcing.
     previous_pressure_sum: f64,
@@ -346,8 +353,6 @@ impl Acoustics {
             previous_source: 0.0,
             highpass_previous_input: 0.0,
             highpass_previous_output: 0.0,
-            lowpass_stage_one: 0.0,
-            lowpass_stage_two: 0.0,
             previous_pressure_sum: 0.0,
             resonators: modes.iter().map(|m| Resonator::new(m, dt)).collect(),
             buffer: vec![0.0; capacity],
@@ -365,8 +370,6 @@ impl Acoustics {
         self.previous_source = 0.0;
         self.highpass_previous_input = 0.0;
         self.highpass_previous_output = 0.0;
-        self.lowpass_stage_one = 0.0;
-        self.lowpass_stage_two = 0.0;
         self.previous_pressure_sum = 0.0;
         // The modes keep their tuning but lose their ringing. A bank still
         // carrying the last burn across a reset would sound it out into a
@@ -459,11 +462,6 @@ impl Acoustics {
         self.highpass_previous_input = radiated;
         self.highpass_previous_output = highpassed;
 
-        // Two cascaded one-pole low passes.
-        let lp_alpha = pole(audio.lowpass_cutoff_hz, dt);
-        self.lowpass_stage_one += (highpassed - self.lowpass_stage_one) * lp_alpha;
-        self.lowpass_stage_two += (self.lowpass_stage_one - self.lowpass_stage_two) * lp_alpha;
-
         // --- structural path ---
         //
         // The premixed burn is a near-step pressure rise inside a stiff iron
@@ -488,7 +486,7 @@ impl Acoustics {
         }
 
         let sample = soft_clip(
-            audio.exhaust_gain * self.lowpass_stage_two + audio.structural_gain * structural,
+            audio.exhaust_gain * highpassed + audio.structural_gain * structural,
             audio.soft_clip_knee,
         );
 
@@ -558,7 +556,6 @@ mod tests {
             reference_spl_db: 90.0,
             exhaust_gain: 0.35,
             highpass_cutoff_hz: 25.0,
-            lowpass_cutoff_hz: 4_000.0,
             soft_clip_knee: 0.9,
             structural_gain: 0.02,
             structural_modes: modes(),
