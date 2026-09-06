@@ -1,5 +1,8 @@
 # Diesel Truck Engine Simulator
 
+- You MUST NOT correct yourself in the doc, keep it clean, concise and up to date
+- Doc-only modification doest't require a full test run
+
 ## Project Rules
 
 - Build only diesel truck engines. Do not add gasoline support or a generic multi-fuel framework.
