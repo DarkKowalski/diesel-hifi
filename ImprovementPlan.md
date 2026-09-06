@@ -1,15 +1,27 @@
 # Audio Realism — Analysis and Improvement Plan
 
-Status: proposal, not implemented — re-audited against the tree at `da3e286` and confirmed
+Status: **implemented**, steps 0 through 5, one commit each
 Scope: the exhaust/engine acoustic source in `sim-core`, and the listening stages downstream of it
 Relates to: SPEC §6 (simulation model), SPEC §10 (acceptance criteria), Milestone 3
 
 **Decisions taken.** The tailpipe duct belongs in `sim-core` — see §5.2. It is
 simulation, not presentation, and is owned beside the manifold it is driven by.
 
-This document records what is wrong with the sound the simulator currently produces,
-why, and what to do about it. Nothing here has been implemented. No configuration,
-solver, or web code has been changed.
+This document began as a proposal and is now a record. §1 through §4 are the original
+analysis, left as written so the reasoning that motivated the work is still legible.
+§5 keeps each proposal and adds a `x.y.1` subsection to it saying what building the thing
+actually changed — including, in several places, that the proposal was wrong. Those
+subsections are the useful part: the plan was written from reading the code and the
+measurements disagreed with it more than once.
+
+Where a proposal and its outcome conflict, **the outcome is what shipped**. The most
+consequential disagreements: the modal resonator needed zeros the plan did not specify
+(§5.1.1); its mode weights ascend with frequency where the plan says they descend
+(§5.1.1); the firing order became audible one step earlier than intended, by a mechanism
+the plan did not intend (§5.2.1/§5.3.1); the aftertreatment box had to become an added
+length rather than the shunt filter proposed, because the shunt would have silenced the
+exhaust (§5.2.1); and two acceptance criteria in §9 were simply false and are struck
+through with the measurements that killed them.
 
 **Nothing in this document is published data.** The source manual says nothing about
 how this engine sounds. Every value proposed below is `calibrated` and must be declared

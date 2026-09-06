@@ -119,14 +119,36 @@ remains a little optimistic and is reported rather than tuned away.
 
 ### Sound
 
-The exhaust note is not synthesised. The solver's fixed step is 25 µs — a 40 kHz
+The engine note is not synthesised. The solver's fixed step is 25 µs — a 40 kHz
 sample rate — and it runs about 58× faster than real time, so it emits **one
-audio sample per solver step**, taken from the computed pressure difference
-across the exhaust ports. What you hear is the same cylinder pressure that drives
-the crank, and the firing frequency falls out of the firing order rather than
-being programmed.
+audio sample per solver step**, taken from quantities it already integrates. What
+you hear is the same cylinder pressure that drives the crank, and the firing
+frequency falls out of the firing order rather than being programmed.
 
-Three things in that chain are easy to get wrong and were:
+There are two radiating paths, because a diesel has two:
+
+- **The exhaust.** The net mass flow the exhaust ports actually passed — the same
+  clamped, settled flow `flow::exchange` applies to the gas, not a separate
+  estimate of it — sent down per-cylinder manifold runners, through the
+  turbine's insertion loss, and into a tailpipe modelled as a waveguide with a
+  reflecting, lossy open end.
+- **The engine itself.** The premixed burn is a near-step pressure rise inside a
+  stiff iron box, and the box rings. A bank of four resonators standing for
+  bending and breathing modes of the block, head and covers turns cylinder
+  pressure into combustion noise, which radiates straight to air and never goes
+  near the exhaust. This is the part that makes the ear say *diesel* rather than
+  *engine*, and for a heavy-duty one it dominates from roughly 800 Hz to 4 kHz.
+
+Neither has a schedule. The engine rattles hard at light load and mellows under
+it because ignition delay lengthens when the cylinder is lightly loaded, which
+raises the premixed fraction, which sharpens the pressure rise. The engine brake
+barks because its release lobe cracks a valve at the top of compression, the
+fastest pressure event the model produces anywhere. The pipe's resonance shifts
+as the exhaust heats because the speed of sound is taken from the temperature the
+solver integrates. None of that is written down anywhere as a rule; all of it
+falls out.
+
+Five things in that chain are easy to get wrong and were:
 
 - **A boundary condition cannot make a sound.** Milestone 2 clamped cylinder
   pressure to the manifold during the exhaust stroke, which makes the pressure
@@ -141,9 +163,24 @@ Three things in that chain are easy to get wrong and were:
   is starting — not against steady running.** A start transient is louder than
   the governed rev limit. Set the gain on cruise and the transient drives the
   soft clipper flat, and a flat-topped waveform is full of high harmonics: heard
-  as a buzz near the filter cutoff rather than as a louder engine. Idle now sits
-  around −33 dBFS and the start transient near −3, with no sample against the
-  ceiling.
+  as a buzz near the filter cutoff rather than as a louder engine.
+- **Radiating a proxy for a quantity you have already solved.** The exhaust
+  source was once port area times pressure difference, computed beside the call
+  that solved the real orifice flow. Real flow goes as the square root of the
+  difference and saturates once the throat chokes, so the proxy exaggerated the
+  blowdown peak and changed shape against the truth through the choked-to-
+  subsonic transition. The pulse shape is the timbre.
+- **A resonator with poles and no zeros passes DC.** A real mechanical mode has
+  no response to a static pressure. Without zeros, the fraction of a pascal per
+  step that a stopped engine's trapped charge gains against its walls came
+  through the modal bank as a standing offset — an engine that was quiet rather
+  than silent.
+
+An `audio_probe` example reports where the energy sits, band by band and octave
+by octave. Its band shares sum to 100% as a self-check, and it reports energy
+above 15 kHz separately, because the explicit port transfer leaves a two-sample
+limit cycle near Nyquist that is arithmetic rather than sound and must not be
+counted as content.
 
 The UI carries a spectrum view off the output path for exactly that reason: it
 shows where the energy actually is, which no assertion about sample values can.
@@ -159,11 +196,16 @@ hear. A driver is not at the pipe mouth, so the sound stage is switchable:
 | **Truck cockpit** (default) | The same samples heard from the driver's seat. |
 
 The cab is a Web Audio chain in `web/src/lib/cabin.ts` and `audioEngine.ts`, not
-a change to the physics: a 30 Hz high pass, +5 dB of shell boom at 85 Hz, −3 dB
-of boxiness at 380 Hz, a 1.7 kHz low pass for glass and insulation, two early
+a change to the physics: a 30 Hz high pass, +6 dB of shell boom at 85 Hz, −1.5 dB
+of boxiness at 380 Hz, a 2.6 kHz low pass for glass and insulation, two early
 reflections at 7.3 and 11.9 ms panned apart, a short generated impulse response
 for the diffuse tail, and a compressor. Both paths always run; switching
 crossfades between them over 40 ms.
+
+That low pass was 1.7 kHz while the solver produced nothing above it, which made
+it free. It is not free now: clatter is emphatically audible from a driver's
+seat, and a cab that removed it would be describing the glass rather than what a
+driver hears.
 
 **Nothing is added.** No road noise, no synthesised rumble, no samples. Every
 value reaching the speaker is still the solver's cylinder pressure, and a unit
@@ -178,13 +220,18 @@ under load and **6.3 dB louder at idle** — the compressor was working at the
 loud end and doing nothing at the quiet end, so one gain could only ever match
 one of them. Trimming ahead of the compressor moves the quiet end nearly decibel
 for decibel and the compressed loud end by much less, so trim-then-make-up
-(0.42 in, 1.50 out) brings both together:
+(0.42 in, 1.90 out) brings both together:
 
 | Measured at the output | Idle | Working: 90% pedal, 300 N·m |
 |---|---:|---:|
-| Cockpit level relative to raw | +0.55 dB | −1.13 dB |
-| 2–8 kHz band | — | −55% |
-| 60–400 Hz band | — | +2% |
+| Cockpit level relative to raw | +1.17 dB | −1.22 dB |
+| 2–8 kHz band | — | −33% |
+| 60–400 Hz band | — | +5% |
+
+The 2–8 kHz figure was −55% while the cab's low pass sat at 1.7 kHz and the
+solver put almost nothing up there. Both numbers have moved for the same reason:
+there is now real content in that band, and the cab attenuates it rather than
+removing it.
 
 Both ends are asserted to within 3 dB by the browser suite, measured through the
 same analyser the spectrum view uses, and repeat to within ±0.05 dB across runs.
@@ -199,7 +246,7 @@ so where you switch them.
 
 | Path | Responsibility |
 |---|---|
-| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, the air path, the engine brake, the truck driveline, the exhaust acoustic source, the dynamometer harness, snapshots, native tests. No browser, DOM, audio-device, or filesystem dependency. |
+| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, the air path, the engine brake, the truck driveline, the exhaust and structural acoustic sources, the exhaust duct, the dynamometer harness, snapshots, native tests. No browser, DOM, audio-device, or filesystem dependency. |
 | `crates/sim-wasm` | `wasm-bindgen` adapter. Serialization and boundary only; no physics. |
 | `web/src/worker` | WASM lifecycle, fixed-step scheduling, batching, message protocol. |
 | `web/src` | Svelte UI, input, telemetry rendering, Web Audio orchestration. |
@@ -308,7 +355,7 @@ structure is what justifies the *shape* of the model; none of it supplies number
 | Turbocharger | 100 mm compressor wheel, 0.72/0.70 compressor/turbine efficiency, 3.5e-5 kg m² shaft inertia, 6.0e-4 m² turbine effective area, 2.5e-3 m² wastegate |
 | Manifold volumes | 0.020 m³ intake, 0.010 m³ exhaust |
 | Charge-air cooler | 0.80 effectiveness against 85 °C coolant |
-| Exhaust restriction | 120 kPa per (kg/s)², about 15 kPa at rated flow — this is all the muffler and aftertreatment are, a flow resistance and nothing more |
+| Exhaust restriction | 120 kPa per (kg/s)², about 15 kPa at rated flow. This is what the aftertreatment is to the *gas path* — a flow resistance. What it is to the acoustic path is a separate matter and is modelled separately, below |
 | **EGR rate** | 0.04–0.14 against speed, ceiling 0.35. Pressure-limited to zero at full load below about 1000 rpm, where the turbine cannot lift exhaust above intake |
 | EGR valve | 4.0e-4 m² fully open, discharge coefficient 0.70 |
 | Exhaust valve | 2.5e-3 m² at full lift, 35° of crank to ramp between shut and full lift |
@@ -317,8 +364,11 @@ structure is what justifies the *shape* of the model; none of it supplies number
 | Driveline | 40 t gross combination mass, 0.506 m wheels, Cr 0.006, 6.0 m² drag area, 2.61 final drive, twelve ratios from 14.93:1 to 1.00:1, 0.95 efficiency. The source is an engine manual and publishes nothing at all about the vehicle |
 | Injection timing | 8–15° BTDC against speed, retarded 0.00075 rad/mg with load — the retard is what holds peak pressure inside the 230 bar envelope |
 | Smoke limit | 19.5:1 minimum air/fuel ratio; stoichiometric taken as 14.5:1 |
-| Exhaust acoustics | 20 Hz high pass, 6 kHz two-pole muffler roll-off, soft-clip knee 0.85, gain set so the start transient approaches the knee without saturating |
-| **Cockpit listening stage** | 30 Hz high pass; +5 dB at 85 Hz, Q 1.1; −3 dB at 380 Hz, Q 1.0; 1.7 kHz low pass; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms of predelay; compressor at −18 dB, ratio 3, 6/180 ms, trimmed 0.42 in and 1.50 out. Presentation only — it is downstream of everything, changes no state, and is bypassable |
+| Exhaust acoustics | 20 Hz high pass, soft-clip knee 0.85, gain set so the start transient approaches the knee without saturating. There is no longer a muffler roll-off parameter: a two-pole low pass standing in for an entire exhaust system is a tone control, and the duct below replaced it |
+| **Exhaust system** | 3.5 m tailpipe of 0.008 m² section; open-end reflection −0.8 with a 2 kHz radiation loss; 12 litres of free aftertreatment volume, which acts as 1.5 m of added acoustic length rather than as a filter; 14 dB of turbine insertion loss above 400 Hz; manifold runners spanning 100–700 mm. **None of this geometry is published.** The manual describes the aftertreatment architecture in detail and gives no dimensions and no acoustics whatever |
+| **Combustion noise** | Four structural modes at 900, 1600, 2600 and 3800 Hz, Q 15/20/22/25, weighted 1.0/4.0/6.0/11.0, at an overall gain of 3.0. Plausible for the block, head and covers of an engine this size and nothing more than that. The weights ascend with frequency, which is the opposite of the radiating physics: the model's premixed rise starts with zero slope and so drives the upper modes weakly, and the weights compensate for that shortfall in the drive rather than claiming an engine radiates more at 3.8 kHz than at 900 Hz |
+| **Cylinder build scatter** | ±2% on exhaust port area, ±1.5% on injector delivery, drawn once per cylinder at reset from the reset seed and never per step. Six bit-identical cylinders sum to a pure harmonic comb that the ear hears as synthesised; real injectors are matched to a tolerance rather than to each other. Deliberately far too small to move any calibration result, and a test asserts peak power and torque are unchanged by it |
+| **Cockpit listening stage** | 30 Hz high pass; +6 dB at 85 Hz, Q 1.1; −1.5 dB at 380 Hz, Q 1.0; 2.6 kHz low pass; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms of predelay; compressor at −18 dB, ratio 3, 6/180 ms, trimmed 0.42 in and 1.90 out. Presentation only — it is downstream of everything, changes no state, and is bypassable |
 | Nozzle | 8 holes × 175 µm, discharge coefficient 0.75 |
 | Amplified-variant threshold | 120 mg/cycle |
 | Ignition delay | Hardenberg-Hase at cetane number 50 |
