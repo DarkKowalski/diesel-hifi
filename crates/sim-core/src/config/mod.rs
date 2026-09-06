@@ -50,7 +50,7 @@ pub use schedule::Schedule;
 pub use validate::ValidatedConfig;
 
 /// The only configuration schema version understood by this build.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Identity and display metadata. Manufacturer names are factual references only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -522,6 +522,17 @@ pub struct ExhaustSystem {
     pub radiation_cutoff_hz: f64,
     /// Free acoustic volume of the DPF and SCR box.
     pub aftertreatment_volume_m3: f64,
+    /// Wave amplitude surviving one pass through the aftertreatment substrate.
+    ///
+    /// The volume above makes the box a *compliance* — it lengthens the duct.
+    /// A real box is also the most dissipative thing in the system: a wall-flow
+    /// filter drives the gas through porous ceramic, which is a flow resistance
+    /// and therefore broadband. Without it the duct is a lossless organ pipe
+    /// whose only damping is at the mouth, and it rings on one note.
+    ///
+    /// One means a box that only lengthens the pipe; smaller values damp its
+    /// resonances. It applies once per traverse, so twice per round trip.
+    pub aftertreatment_transmission: f64,
     /// Broadband attenuation across the turbine, in decibels.
     ///
     /// Acoustically a turbine is a large silencer. This is the term that makes

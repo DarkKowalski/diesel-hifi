@@ -11,9 +11,15 @@
 //! per cylinder:   q_i                     net port mass flow, kg/s
 //! runners:        q = sum of delay(q_i, L_i / c)    P3, see below
 //! turbine:        shelf(q)                 insertion loss, rising with frequency
-//! duct:           waveguide of length L + V/S, tip reflection, radiation loss
-//! out:            the wave leaving the pipe mouth
+//! duct:           waveguide of length L + V/S, substrate loss per traverse,
+//!                 tip reflection, radiation loss
+//! out:            the volume velocity at the pipe mouth, p+ - p-
 //! ```
+//!
+//! What leaves at the end is the mouth's *flow*, not the pressure there. An open
+//! end is a pressure node: the incident and reflected waves very nearly cancel,
+//! so `p+ + p-` tends to zero at low frequency by construction and is not what
+//! reaches a listener. See the comment on the return value.
 //!
 //! # Why this is simulation and not presentation
 //!
@@ -296,9 +302,23 @@ impl ExhaustSystem {
         // fresh pulse plus whatever came back and was turned around again; it
         // travels `L / c` to the tip, reflects there with a negative coefficient
         // because an open end is a pressure node, and comes back.
+        //
+        // The substrate loss is taken on each traverse, because the box is
+        // inside the length being traversed. The volume above already made the
+        // box a compliance that lengthens the duct; this is the other half of
+        // what a box is. A wall-flow filter pushes the gas through porous
+        // ceramic, and a flow resistance is broadband, so it is a scalar rather
+        // than another corner frequency.
+        //
+        // Without it the only damping in the whole duct is at the mouth, and a
+        // pipe damped only at its mouth is an organ pipe: a loop gain of 0.72 per
+        // round trip is a T60 near 360 ms, long enough that whichever firing
+        // order lands on a resonance swallows the rest of the note and the engine
+        // drones on one pitch instead of thrumming.
         let delay = self.acoustic_length_m / c * sample_rate_hz;
+        let substrate = config.aftertreatment_transmission;
         let into_pipe = drive + self.returning * MANIFOLD_REFLECTION;
-        let at_tip = self.forward.tick(into_pipe, delay);
+        let at_tip = self.forward.tick(into_pipe, delay) * substrate;
 
         // Radiation loss: a pipe mouth is a poor radiator at low frequency and a
         // good one high up, so what comes *back* is low-passed. This is why a
@@ -306,10 +326,22 @@ impl ExhaustSystem {
         let radiation_pole = pole(config.radiation_cutoff_hz.max(1.0e-6), dt);
         self.radiation += (at_tip - self.radiation) * radiation_pole;
         let reflected = config.open_end_reflection * self.radiation;
-        self.returning = self.backward.tick(reflected, delay);
+        self.returning = self.backward.tick(reflected, delay) * substrate;
 
-        // What leaves the mouth is what arrives minus what turns back.
-        let radiated = at_tip + reflected;
+        // What radiates is the mouth's *volume velocity*, not the pressure there.
+        //
+        // This line carries pressure waves — that is the convention both
+        // reflection coefficients are written in — and at an open end the two
+        // travelling components very nearly cancel, because an open end is a
+        // pressure node. So `p+ + p-` tends to zero at low frequency by
+        // definition, and it is not what a listener hears. The mouth's volume
+        // velocity is `S (p+ - p-) / (rho c)`, which is at a maximum exactly
+        // where the pressure is at a minimum, and it is that flow which
+        // `acoustics.rs` differentiates into far-field pressure.
+        //
+        // The constant `S / (rho c)` is absorbed into the calibrated exhaust
+        // gain, as the radiation derivative's own constant already is.
+        let radiated = at_tip - reflected;
         if radiated.is_finite() {
             radiated
         } else {
@@ -340,6 +372,7 @@ mod tests {
             open_end_reflection: -0.8,
             radiation_cutoff_hz: 2_000.0,
             aftertreatment_volume_m3: 0.012,
+            aftertreatment_transmission: 0.61,
             turbine_insertion_loss_db: 14.0,
             turbine_loss_cutoff_hz: 400.0,
             runner_length_min_m: 0.10,
@@ -516,6 +549,100 @@ mod tests {
         }
         system.reset();
         assert_eq!(system, ExhaustSystem::new(&config(), 6, DT));
+    }
+
+    #[test]
+    fn a_lossy_substrate_shortens_the_ring() {
+        // The box's volume makes it a compliance that lengthens the duct. Its
+        // substrate makes it a resistance, and that is where a real exhaust
+        // system's damping lives: a duct damped only at its mouth is an organ
+        // pipe, and an organ pipe droning on whichever firing order lands on a
+        // resonance is not what a truck sounds like.
+        //
+        // Measured as ring-down against the direct pulse, which is the thing the
+        // ear actually reacts to. The windows are in round trips: at 700 K the
+        // duct's is about 770 samples, so the first covers the pulse and its
+        // first couple of returns and the second covers the tail.
+        let tail = |transmission: f64| {
+            let cfg = ExhaustConfig {
+                aftertreatment_transmission: transmission,
+                ..config()
+            };
+            let mut system = ExhaustSystem::new(&cfg, 6, DT);
+            let mut flows = [0.0; 6];
+            flows[0] = 1.0;
+            let (mut early, mut late) = (0.0f64, 0.0f64);
+            for step in 0..6_000 {
+                let out = system.advance(&cfg, &gas(), &flows, 700.0, DT);
+                flows[0] = 0.0;
+                if step < 2_000 {
+                    early += out * out;
+                } else {
+                    late += out * out;
+                }
+            }
+            late / early.max(1.0e-30)
+        };
+
+        let lossless = tail(1.0);
+        let lossy = tail(0.61);
+        assert!(
+            lossy < lossless * 0.25,
+            "the substrate must damp the duct: a lossless box left {lossless:.4} of its \
+             energy in the tail and a lossy one {lossy:.4}, which is not enough of a \
+             difference to be the mechanism this parameter claims to be"
+        );
+    }
+
+    #[test]
+    fn a_hard_open_end_does_not_silence_the_low_end() {
+        // The mistake this catches cost the model every bit of its bottom.
+        //
+        // An open end is a pressure node: the incident and reflected waves
+        // cancel there, so `p+ + p-` tends to zero at low frequency however hard
+        // the engine is driving the pipe. That quantity is *not* what radiates.
+        // The mouth's volume velocity is `p+ - p-`, which is at a maximum
+        // precisely where the pressure is at a minimum, and radiating the sum
+        // instead of the difference put a factor of `(1 + R) / (1 - R)` on the
+        // whole exhaust path below the radiation corner - about -19 dB at the
+        // shipped -0.8, which is most of what a truck sounds like.
+        //
+        // Measured against a nearly anechoic termination at the same frequency,
+        // so the duct's own response, the turbine shelf and the runner delay all
+        // cancel in the ratio - the trick the turbine test below uses for the
+        // same reason. The pipe is short and the frequency low, so this sits far
+        // below the first quarter-wave resonance and is not measuring one.
+        let peak_at = |open_end_reflection: f64| {
+            let cfg = ExhaustConfig {
+                tailpipe_length_m: 0.35,
+                aftertreatment_volume_m3: 0.0,
+                open_end_reflection,
+                ..config()
+            };
+            let mut system = ExhaustSystem::new(&cfg, 1, DT);
+            let mut peak = 0.0f64;
+            for step in 0..40_000 {
+                let t = step as f64 * DT;
+                let drive = (std::f64::consts::TAU * 40.0 * t).sin();
+                let out = system.advance(&cfg, &gas(), &[drive], 700.0, DT);
+                if step > 24_000 {
+                    peak = peak.max(out.abs());
+                }
+            }
+            peak
+        };
+
+        // Quasi-statically the loop gives `(1 - R) / (1 - 0.9 R)`, so a hard end
+        // is very slightly *louder* at the mouth than an open one, not quieter.
+        // Radiating the sum gives `(1 + R) / (1 - 0.9 R)` instead, which lands
+        // near 0.12 here.
+        let ratio = peak_at(-0.8) / peak_at(-0.01);
+        assert!(
+            ratio > 0.5,
+            "a pressure-release end must not stop the pipe radiating at 40 Hz: a hard \
+             end came out {ratio:.3} of an anechoic one, which means the mouth's \
+             pressure is being radiated rather than its flow"
+        );
     }
 
     #[test]

@@ -584,6 +584,17 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         ex.aftertreatment_volume_m3.is_finite() && ex.aftertreatment_volume_m3 >= 0.0,
         "exhaust_system.aftertreatment_volume_m3 must be finite and not negative",
     )?;
+    // The substrate loss is the other half of the box, and it is a transmission
+    // rather than a gain: above one it would add energy on every traverse, which
+    // is a duct that plays itself. Zero is allowed and means a box that stops the
+    // wave dead - useless, but not unstable.
+    require(
+        ex.aftertreatment_transmission.is_finite()
+            && ex.aftertreatment_transmission >= 0.0
+            && ex.aftertreatment_transmission <= 1.0,
+        "exhaust_system.aftertreatment_transmission must fall in [0, 1]: a substrate \
+         attenuates the wave passing through it and cannot amplify it",
+    )?;
     require(
         ex.turbine_insertion_loss_db.is_finite() && ex.turbine_insertion_loss_db >= 0.0,
         "exhaust_system.turbine_insertion_loss_db must be finite and not negative",

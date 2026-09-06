@@ -647,6 +647,38 @@ fn high_band_energy(samples: &[f32], cutoff_hz: f64) -> f64 {
             .sum::<f64>()
 }
 
+/// Absolute energy in a narrow band around one frequency.
+///
+/// A one-pole cascade cannot answer a question about *where* a resonance sits.
+/// Its skirts are 6 dB per octave per pole, so a loud band on the wrong side of
+/// the corner leaks through in quantity — and when the thing under test moves,
+/// that leak moves with it in the opposite direction and cancels the effect
+/// being measured. A high pass at 5 kHz reads a bank at 3.8 kHz as almost the
+/// same as a bank at 5.7 kHz, which is the reverse of the truth.
+///
+/// So this is a resonator, the same two-pole two-zero form the solver's own modal
+/// bank uses, run as a bandpass. Zeros at DC and Nyquist, poles at the frequency
+/// of interest. It is selective enough to say which side of it a mode is on.
+fn tone_energy(samples: &[f32], centre_hz: f64, q: f64) -> f64 {
+    let theta = std::f64::consts::TAU * centre_hz / 40_000.0;
+    let r = 1.0 - theta / (2.0 * q);
+    let a1 = 2.0 * r * theta.cos();
+    let a2 = -(r * r);
+
+    let (mut y1, mut y2, mut x1, mut x2) = (0.0, 0.0, 0.0, 0.0);
+    let mut energy = 0.0;
+    for sample in samples {
+        let x = f64::from(*sample);
+        let y = a1 * y1 + a2 * y2 + (x - x2);
+        x2 = x1;
+        x1 = x;
+        y2 = y1;
+        y1 = y;
+        energy += y * y;
+    }
+    energy
+}
+
 /// The shipped configuration with its `audio` section altered.
 fn config_with_audio(mutate: impl FnOnce(&mut serde_json::Value)) -> ValidatedConfig {
     let mut document: serde_json::Value =
@@ -689,19 +721,25 @@ fn the_structural_path_is_what_puts_energy_above_the_firing_harmonics() {
 
 #[test]
 fn the_modal_bank_only_rings_where_it_is_told_to() {
-    // Move every mode down an octave and the energy must follow. If it does not,
-    // the top end is coming from something other than the configured bank —
+    // Move every mode up by half and the energy must follow it up. If it does
+    // not, the top end is coming from something other than the configured bank —
     // clipping, say, or the exhaust path's own edges — and the configuration is
     // decorative.
-    let high = samples_at(config(), 1_000.0, 0.4, 293.15, 40_000);
-    let low = samples_at(
+    //
+    // *Up*, not down, which is the direction that makes this test honest. The
+    // drive falls steeply with frequency, so a bank moved down is driven harder
+    // and gets louder; a bank moved up is driven more weakly and has to prove
+    // itself against a headwind. Testing downward lets the drive supply the
+    // difference the bank is supposed to.
+    let shipped_bank = samples_at(config(), 1_000.0, 0.4, 293.15, 40_000);
+    let raised_bank = samples_at(
         config_with_audio(|audio| {
             for mode in audio["structural_modes"]
                 .as_array_mut()
                 .expect("modes are an array")
             {
                 let hz = mode["frequency_hz"].as_f64().expect("frequency");
-                mode["frequency_hz"] = serde_json::json!(hz * 0.5);
+                mode["frequency_hz"] = serde_json::json!(hz * 1.5);
             }
         }),
         1_000.0,
@@ -710,12 +748,26 @@ fn the_modal_bank_only_rings_where_it_is_told_to() {
         40_000,
     );
 
-    let high_share = high_band_share(&high, 2_000.0);
-    let low_share = high_band_share(&low, 2_000.0);
+    // Measured at 5.7 kHz, where the raised bank's top mode lands and the shipped
+    // one has nothing, with a resonator rather than a high pass.
+    //
+    // This test used to compare the *share* above 2 kHz after halving the bank,
+    // and both halves of that were wrong once the exhaust path was radiating
+    // properly. A share is a ratio against a total the exhaust now dominates, so
+    // moving the bank moved the denominator with the numerator and the reading
+    // barely twitched — the same share-versus-energy distinction
+    // `the_structural_path_is_what_puts_energy_above_the_firing_harmonics` draws
+    // above. And a one-pole corner is far too gentle to say which side of it a
+    // mode is on: with a high pass at 5 kHz, a bank at 3.8 kHz and a bank at
+    // 5.7 kHz read within a factor of two of each other, because the 2.5-5 kHz
+    // band leaks through in quantity and moves the opposite way. A resonator
+    // sees the 31x difference that is actually there.
+    let shipped = tone_energy(&shipped_bank, 5_700.0, 8.0);
+    let raised = tone_energy(&raised_bank, 5_700.0, 8.0);
     assert!(
-        high_share > low_share * 1.5,
-        "halving every mode frequency should move energy out of the 2 kHz band, \
-         but the share went {high_share:.4} -> {low_share:.4}"
+        raised > shipped * 4.0,
+        "moving every mode up by half should put the top one at 5.7 kHz, but the \
+         energy there went {shipped:.4e} -> {raised:.4e}"
     );
 }
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "identity": {
     "id": "test-om471-m5v-brake",
     "display_name": "OM 471.9 M3D with M5V high performance brake (test fixture)",
@@ -257,6 +257,7 @@
     "open_end_reflection": -0.8,
     "radiation_cutoff_hz": 2000.0,
     "aftertreatment_volume_m3": 0.012,
+    "aftertreatment_transmission": 0.61,
     "turbine_insertion_loss_db": 14.0,
     "turbine_loss_cutoff_hz": 400.0,
     "runner_length_min_m": 0.1,
@@ -264,11 +265,16 @@
   },
   "audio": {
     "reference_spl_db": 94.0,
-    "exhaust_gain": 20.0,
+    "exhaust_gain": 26.0,
     "highpass_cutoff_hz": 20.0,
     "soft_clip_knee": 0.85,
-    "structural_gain": 3.0,
+    "structural_gain": 2.2,
     "structural_modes": [
+      {
+        "frequency_hz": 480.0,
+        "q": 11.0,
+        "gain": 0.55
+      },
       {
         "frequency_hz": 900.0,
         "q": 15.0,
@@ -1546,8 +1552,8 @@
     {
       "path": "exhaust_system.open_end_reflection",
       "status": "calibrated",
-      "value_note": "-0.8. Not published, and not measurable from anything the manual contains.",
-      "purpose": "Reflection coefficient at the pipe mouth. Negative because an open end is a pressure node and inverts the wave. Its magnitude is how much of each pulse is returned to form a standing wave rather than radiated away: nearer zero is a duct with no note, nearer one is a duct that rings too long and too evenly. It is also half the waveguide's loop gain, so validation requires it to stay inside (-1, 0) or the duct is unstable.",
+      "value_note": "-0.8. Not published, and not measurable from anything the manual contains. Left where it was when the substrate loss was added: a real unflanged pipe mouth returns nearly all of a 200 Hz wave, so the damping a truck exhaust actually has belongs to the box and not to the mouth, and moving it here to quiet the duct would have been misattributing it.",
+      "purpose": "Reflection coefficient at the pipe mouth. Negative because an open end is a pressure node and inverts the wave. Its magnitude is how much of each pulse is returned to form a standing wave rather than radiated away, and it also sets how much reaches a listener: what radiates is the mouth's volume velocity, which goes as 1 - R, so a harder end is a stronger velocity antinode and a louder pipe. Together with the manifold reflection and the substrate transmission it is part of the waveguide's loop gain, and validation requires it to stay inside (-1, 0) or the duct is unstable.",
       "safe_range": [
         -0.99,
         -0.01
@@ -1571,6 +1577,16 @@
       "safe_range": [
         0.0,
         0.2
+      ]
+    },
+    {
+      "path": "exhaust_system.aftertreatment_transmission",
+      "status": "calibrated",
+      "value_note": "0.61, about -4.3 dB of wave amplitude per pass and -8.6 dB per round trip. The manual describes the DPF and SCR architecture at length and publishes no acoustic figure for it; wall-flow filters are commonly credited with insertion losses of order 10 to 15 dB, so this is a conservative reading of that.",
+      "purpose": "Fraction of the wave surviving one traverse of the aftertreatment substrate, taken once each way and so twice per round trip. The volume above makes the box a compliance that lengthens the duct; this is the other half of what a box is, and it is where a real exhaust system's damping actually lives. A wall-flow filter forces the gas through porous ceramic, which is a flow resistance and therefore broadband, so it is a scalar rather than another corner frequency. One means a lossless box and leaves the duct damped only at its mouth: an organ pipe with a round-trip gain of 0.72 and a T60 near 360 ms, in which whichever firing order lands on a resonance swallows the rest of the note and the engine drones on one pitch. Lower values shorten the ring and spread the exhaust into a harmonic series; too low and the pipe has no note left at all.",
+      "safe_range": [
+        0.0,
+        1.0
       ]
     },
     {
@@ -1626,8 +1642,8 @@
     {
       "path": "audio.exhaust_gain",
       "status": "calibrated",
-      "value_note": "20. The acoustic source is the net mass flow the exhaust port actually passed, in kg/s, taken from the same `flow::exchange` call that moves the gas rather than recomputed beside it. Reduced from 6000 when the source changed from an `area * pressure difference` proxy to real flow: the proxy was a small dimensionless number and needed a large scaling, whereas a mass flow in kg/s is of order one and does not. The source manual does not publish this.",
-      "purpose": "Brings the radiated exhaust signal to a usable level before the soft clipper. Set so the loudest realistic condition — the start transient, which is louder than full load — approaches the knee without sitting on it. Driving it far past the knee flat-tops the waveform, and a flat-topped wave is full of high harmonics: an audible buzz, not a louder engine.",
+      "value_note": "26. The acoustic source is the net mass flow the exhaust port actually passed, in kg/s, taken from the same `flow::exchange` call that moves the gas rather than recomputed beside it. Raised from 20 when the duct stopped radiating the pressure at its mouth and started radiating the flow there, which cost it about 4 dB of level while returning about 19 dB of everything below the radiation corner; the substrate loss added below took a further 4 dB. The source manual does not publish this.",
+      "purpose": "Brings the radiated exhaust signal to a usable level before the soft clipper, and sets the exhaust against the block. Set so the loudest realistic condition — the start transient, which is louder than full load — approaches the knee without sitting on it. Driving it far past the knee flat-tops the waveform, and a flat-topped wave is full of high harmonics: an audible buzz, not a louder engine.",
       "safe_range": [
         0.0,
         1000000.0
@@ -1656,7 +1672,7 @@
     {
       "path": "audio.structural_gain",
       "status": "calibrated",
-      "value_note": "3.0. Calibrated against the audio_probe band shares, with the ceiling set by the soft clipper rather than by taste: above roughly ten the summed signal lives on the knee at load, and the saturation then manufactures its own harmonics in the same band this path exists to supply. The source manual does not publish this.",
+      "value_note": "2.2, reduced from 3.0. The ceiling is still set by the soft clipper rather than by taste, but the floor moved: with the exhaust radiating correctly the block no longer has to carry the whole signal, and at 3.0 it buried the firing orders it used to be compensating for. The source manual does not publish this.",
       "purpose": "Sets the level of the structural radiation path against the exhaust path. The structural path is combustion noise: the premixed pressure rise ringing the block, head and covers, which is what makes a diesel identifiable as one rather than as a generic engine. Too low and the engine is a low-frequency drone; too high and the clatter both swamps the exhaust note and drives the sum into the soft-clip knee, where saturation invents harmonics in the band being measured and the improvement becomes an artefact of clipping rather than of the model.",
       "safe_range": [
         0.0,
@@ -1666,7 +1682,7 @@
     {
       "path": "audio.structural_modes",
       "status": "calibrated",
-      "value_note": "Four modes at 900, 1600, 2600 and 3800 Hz with Q of 15, 20, 22 and 25, weighted 1.0, 4.0, 6.0 and 11.0. Plausible for the block, head and covers of an engine of this size and nothing more than that. The source manual publishes no mode shapes, no frequencies and no damping. The weights ascend with frequency, which is the opposite of the radiating physics and is deliberate: the premixed Wiebe rise starts with zero slope, so the model's burn onset is smoother than a real one and drives the upper modes weakly. The ascending weights compensate for that shortfall in the drive, not for a belief that an engine radiates more at 3.8 kHz than at 900 Hz.",
+      "value_note": "Five modes at 480, 900, 1600, 2600 and 3800 Hz with Q of 11, 15, 20, 22 and 25, weighted 0.55, 1.0, 4.0, 6.0 and 11.0. Plausible for the block, head and covers of an engine of this size and nothing more than that. The source manual publishes no mode shapes, no frequencies and no damping. The 480 Hz mode is the block's own bending mode: a 12.8 L iron structure bends in the low hundreds of hertz, and a bank whose lowest mode was 900 Hz left an audible hole between the exhaust orders and the clatter once the exhaust was radiating properly. Its Q is the lowest in the bank because a whole-block mode is the most heavily damped one. The four weights above it ascend with frequency, which is the opposite of the radiating physics and is deliberate: the premixed Wiebe rise starts with zero slope, so the model's burn onset is smoother than a real one and drives the upper modes weakly. The ascending weights compensate for that shortfall in the drive, not for a belief that an engine radiates more at 3.8 kHz than at 900 Hz.",
       "purpose": "The modal bank the cylinder-pressure rise rings. Each mode is one two-pole resonator standing for a bending or breathing mode of the engine's outer surface, which radiates straight to air rather than down the exhaust. The frequencies set where the clatter sits and the Q values set how long it rings; an iron structure rings for a few milliseconds, which is Q in the tens. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
       "safe_range": [
         0.0,

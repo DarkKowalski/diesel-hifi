@@ -1,11 +1,11 @@
 /**
  * The truck cockpit as a filter.
  *
- * Everything the solver produces is a tailpipe signal: `Acoustics::push` takes
- * the pressure difference across the exhaust ports and radiates it. That is what
- * a microphone at the pipe mouth would hear, and it is deliberately flat, because
- * the spectrum view has to be able to prove the energy is where a speaker can
- * reproduce it.
+ * Everything the solver produces is a tailpipe signal: `Acoustics::push` radiates
+ * the flow leaving the duct and the cylinder pressure ringing the block. That is
+ * roughly what a microphone beside the truck would hear, and it is deliberately
+ * flat, because the spectrum view has to be able to prove the energy is where a
+ * speaker can reproduce it.
  *
  * A driver is not at the pipe mouth. The tailpipe is metres behind and below,
  * the sound reaches the seat through insulated sheet metal, glass, and the
@@ -115,17 +115,11 @@ export interface CabinSpec {
  *     reproduces it, so it is headroom spent on nothing, and spending it here is
  *     worse than usual because the compressor downstream would duck the audible
  *     band to make room for it.
- *   - **+6 dB at 85 Hz.** The boom. A cab is a panelled box on air springs with a
+ *   - **+5 dB at 85 Hz.** The boom. A cab is a panelled box on air springs with a
  *     low fundamental, and it is the one part of an engine you hear as much
- *     through the seat as through the air. Raised from +5 dB because the source
- *     is no longer low-heavy: combustion noise now carries most of the output at
- *     load and the exhaust fundamental is a small share of it, so the box has
- *     less to reinforce and has to reinforce it harder.
- *   - **−1.5 dB at 380 Hz.** Boxiness. Everything with a hard mid resonance
- *     sounds like a cardboard tube until this is pulled down. Halved from −3 dB
- *     for the same reason: that cut was set against a spectrum that was four
- *     fifths low-mid, and against one that is not it removes body the signal no
- *     longer has to spare.
+ *     through the seat as through the air.
+ *   - **−3 dB at 380 Hz.** Boxiness. Everything with a hard mid resonance sounds
+ *     like a cardboard tube until this is pulled down.
  *   - **2.6 kHz low pass.** Glass, insulation, and several metres of air.
  *
  *     This was 1.7 kHz, and it was chosen when the solver produced nothing above
@@ -145,8 +139,8 @@ export interface CabinSpec {
 export const CABIN_SPEC: CabinSpec = {
   filters: [
     { type: 'highpass', frequencyHz: 30, q: 0.7, gainDb: 0 },
-    { type: 'peaking', frequencyHz: 85, q: 1.1, gainDb: 6 },
-    { type: 'peaking', frequencyHz: 380, q: 1.0, gainDb: -1.5 },
+    { type: 'peaking', frequencyHz: 85, q: 1.1, gainDb: 5 },
+    { type: 'peaking', frequencyHz: 380, q: 1.0, gainDb: -3 },
     { type: 'lowpass', frequencyHz: 2600, q: 0.7, gainDb: 0 },
   ],
   directGain: 0.75,
@@ -169,13 +163,10 @@ export const CABIN_SPEC: CabinSpec = {
     ratio: 3,
     attackS: 0.006,
     releaseS: 0.18,
-    // 2.1, raised from 1.5 when the structural radiation path landed. The cab
-    // chain's low pass sits at 1.7 kHz, so the combustion noise added above it
-    // is removed here rather than heard, and the wet path lost about 3 dB
-    // against the raw one at both idle and load. This restores the level match
-    // the stage switch depends on; it does not address the deeper point, which
-    // is that a driver does hear clatter and this low pass is currently
-    // throwing most of it away.
+    // 1.9. Measured through the output analyser, this puts the cab +1.5 dB
+    // against raw at idle and −1.2 dB under load. It is a measurement rather
+    // than a derivation — it depends on the source spectrum — so the browser
+    // suite measures both ends rather than trusting the pair.
     makeupGain: 1.9,
   },
   crossfadeS: 0.04,

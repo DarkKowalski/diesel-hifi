@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "identity": {
     "id": "synthetic-test-inline-four",
     "display_name": "Synthetic Inline-Four Test Engine",
@@ -148,6 +148,7 @@
     "open_end_reflection": -0.7,
     "radiation_cutoff_hz": 2500.0,
     "aftertreatment_volume_m3": 0.006,
+    "aftertreatment_transmission": 0.7,
     "turbine_insertion_loss_db": 10.0,
     "turbine_loss_cutoff_hz": 500.0,
     "runner_length_min_m": 0.08,
@@ -952,6 +953,16 @@
       "safe_range": [
         0.0,
         0.2
+      ]
+    },
+    {
+      "path": "exhaust_system.aftertreatment_transmission",
+      "status": "calibrated",
+      "value_note": "invented test value for `exhaust_system.aftertreatment_transmission`",
+      "purpose": "invented test value for `exhaust_system.aftertreatment_transmission`",
+      "safe_range": [
+        0.0,
+        1.0
       ]
     },
     {

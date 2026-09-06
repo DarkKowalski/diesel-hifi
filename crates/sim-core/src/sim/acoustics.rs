@@ -8,7 +8,7 @@
 //! Two paths radiate, and they are summed at the end rather than in series:
 //!
 //! ```text
-//! source     = the wave leaving the tailpipe mouth, from `exhaust.rs`
+//! source     = the volume velocity at the tailpipe mouth, from `exhaust.rs`
 //! exhaust    = highpass(d(source)/dt)                      out of the pipe
 //! forcing    = d( sum over cylinders of p_cyl / p_ambient )/dt
 //! structural = sum over modes of  gain_k * resonator_k(forcing)   off the iron

@@ -141,6 +141,7 @@ pub const PARAMETER_PATHS: &[&str] = &[
     "exhaust_system.open_end_reflection",
     "exhaust_system.radiation_cutoff_hz",
     "exhaust_system.aftertreatment_volume_m3",
+    "exhaust_system.aftertreatment_transmission",
     "exhaust_system.turbine_insertion_loss_db",
     "exhaust_system.turbine_loss_cutoff_hz",
     "exhaust_system.runner_length_min_m",
