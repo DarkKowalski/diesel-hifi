@@ -1481,7 +1481,7 @@
     {
       "path": "audio.exhaust_gain",
       "status": "calibrated",
-      "value_note": "12000. The acoustic source is a per-step difference of port flow, which is a small number, so the scaling is correspondingly large. The source manual does not publish this.",
+      "value_note": "12000. The acoustic source is a per-step difference of open exhaust port area times the cylinder-to-manifold pressure difference, scaled by ambient pressure. That is a small number, so the scaling is correspondingly large. The source manual does not publish this.",
       "purpose": "Brings the radiated exhaust signal to a usable level before the soft clipper. Set so the loudest realistic condition \u2014 the start transient, which is louder than full load \u2014 approaches the knee without sitting on it. Driving it far past the knee flat-tops the waveform, and a flat-topped wave is full of high harmonics: an audible buzz, not a louder engine.",
       "safe_range": [
         0.0,
