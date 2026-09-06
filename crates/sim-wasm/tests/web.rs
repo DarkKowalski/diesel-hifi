@@ -33,12 +33,15 @@ fn controls(pedal: f64, load: f64, starter: bool, ignition: bool) -> JsValue {
     set("loadTorqueNm", JsValue::from_f64(load));
     set("starter", JsValue::from_bool(starter));
     set("ignition", JsValue::from_bool(ignition));
+    set("egrEnabled", JsValue::from_bool(true));
     object.into()
 }
 
 #[wasm_bindgen_test]
 fn exposes_stable_api_versions() {
-    assert_eq!(api_version(), 2);
+    // The API version moves with new required calls; the snapshot protocol
+    // stays at 2 because Milestone 3 only added members to it.
+    assert_eq!(api_version(), 3);
     assert_eq!(snapshot_version(), 2);
 }
 
@@ -187,6 +190,7 @@ fn sweep_options(start: f64, end: f64, step: f64) -> JsValue {
     set("pedal", JsValue::from_f64(1.0));
     set("settleCycles", JsValue::from_f64(30.0));
     set("measureCycles", JsValue::from_f64(6.0));
+    set("egrEnabled", JsValue::from_bool(true));
     object.into()
 }
 
@@ -211,16 +215,76 @@ fn reports_the_cycle_averaged_torque_and_power() {
     assert!(number(&snapshot, "cyclesCompleted") > 1.0);
     assert!(number(&snapshot, "brakeTorqueCycleNm").is_finite());
     assert!(number(&snapshot, "bmepPa").is_finite());
-    // Boost must have built above ambient under load.
+    // Boost must have built above ambient under load, and it is computed now
+    // rather than prescribed, so the turbo state must be real too.
     assert!(number(&snapshot, "intakePressurePa") > 1.05e5);
+    assert!(number(&snapshot, "boostPressurePa") > 0.0);
+    assert!(number(&snapshot, "turboShaftRadPerS") > 0.0);
     assert!(number(&snapshot, "residualFraction") >= 0.0);
+    assert!(number(&snapshot, "egrRate") >= 0.0);
+    assert!(number(&snapshot, "wastegatePosition") >= 0.0);
+}
+
+#[wasm_bindgen_test]
+fn audio_crosses_the_boundary_one_sample_per_step() {
+    let mut handle = SimHandle::new().expect("handle constructs");
+
+    // 25 us per step is a 40 kHz sample rate.
+    assert!((handle.audio_sample_rate() - 40_000.0).abs() < 1.0e-6);
+
+    handle
+        .set_controls(controls(0.5, 0.0, true, true))
+        .expect("controls accepted");
+    handle.advance(4_000).expect("advance");
+
+    let samples = handle.drain_audio();
+    assert_eq!(
+        samples.len(),
+        4_000,
+        "one audio sample must be produced per solver step"
+    );
+    for sample in &samples {
+        assert!(
+            sample.is_finite() && sample.abs() <= 1.0,
+            "sample {sample} is outside the range an audio device accepts"
+        );
+    }
+
+    // Draining is destructive: the space is freed for the next batch.
+    assert_eq!(handle.drain_audio().len(), 0);
+    assert_eq!(handle.audio_dropped(), 0);
+}
+
+#[wasm_bindgen_test]
+fn a_running_engine_produces_audible_output() {
+    let mut handle = SimHandle::new().expect("handle constructs");
+    handle
+        .set_controls(controls(0.6, 0.0, true, true))
+        .expect("controls accepted");
+
+    let mut loudest = 0.0f32;
+    for tick in 0..60 {
+        handle.advance(4_000).expect("advance");
+        if tick == 20 {
+            handle
+                .set_controls(controls(0.6, 900.0, false, true))
+                .expect("controls accepted");
+        }
+        for sample in handle.drain_audio() {
+            loudest = loudest.max(sample.abs());
+        }
+    }
+    assert!(
+        loudest > 1.0e-3,
+        "a running engine should not be silent, peak was {loudest}"
+    );
 }
 
 #[wasm_bindgen_test]
 fn a_dynamometer_point_crosses_the_boundary() {
     let handle = SimHandle::new().expect("handle constructs");
     let point = handle
-        .operating_point(1200.0, 1.0, 30, 6)
+        .operating_point(1200.0, 1.0, 30, 6, true)
         .expect("operating point measures");
     assert!(number(&point, "brakeTorqueNm") > 500.0);
     assert!(number(&point, "brakePowerW") > 0.0);

@@ -13,9 +13,22 @@
 //!   prescribed boost schedule. The placeholder combustion fields were removed
 //!   rather than extended, which is why the version was bumped rather than the
 //!   sections grown additively.
+//! - **v3** (Milestone 3) — wastegate turbocharger and cooled EGR dynamics, plus
+//!   the exhaust acoustic source. Boost stops being an input: the prescribed
+//!   response, charge-temperature fit, and back-pressure fit are removed because
+//!   a compressor, an intercooler, and a turbine now compute them.
+//!   `boost_target_schedule` survives with a more honest meaning — it is the
+//!   ECU's wastegate setpoint, which is what the manual describes the MCM
+//!   regulating to.
 //!
-//! Milestones 3 and 4 (turbo and EGR dynamics, engine brake) add fields to the
-//! existing sections and must not need another version bump.
+//! The *shape* of the document has not changed across any of these: same
+//! versioned sections, same provenance rules, same [`Schedule`] type, and an
+//! additive snapshot. What changes is which calibration fields exist, because a
+//! field that no longer describes anything should not sit in a provenance table
+//! that claims to describe the model.
+//!
+//! Milestone 4 (engine brake, driveline) is expected to add fields to existing
+//! sections and should not need another version bump.
 
 pub mod paths;
 pub mod provenance;
@@ -29,7 +42,7 @@ pub use schedule::Schedule;
 pub use validate::ValidatedConfig;
 
 /// The only configuration schema version understood by this build.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Identity and display metadata. Manufacturer names are factual references only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +86,18 @@ pub struct Valvetrain {
     pub intake_valve_close_rad: f64,
     /// Signed crank angle from firing TDC at which the cylinder reopens.
     pub exhaust_valve_open_rad: f64,
+    /// Crank angle over which the exhaust valve ramps between shut and full
+    /// lift.
+    ///
+    /// Short compared with the exhaust window: the valve cracks open quickly,
+    /// which is what makes blowdown a sharp pulse rather than a slow hump.
+    pub exhaust_ramp_rad: f64,
+    /// Effective flow area of one cylinder's exhaust port at full lift.
+    ///
+    /// Milestone 2 needed only the *angle* at which the cylinder reopens. The
+    /// acoustic source needs an area as well, because the exhaust pulse is a
+    /// flow through a port, not an event on a crank wheel.
+    pub exhaust_effective_area_m2: f64,
 }
 
 /// Injection system.
@@ -90,6 +115,13 @@ pub struct Injection {
     pub max_fuel_mg_per_cycle: f64,
     /// Minimum air/fuel ratio permitted before fuelling is clipped (smoke limit).
     pub smoke_limit_afr: f64,
+    /// Air/fuel ratio at which the fuel exactly consumes the air.
+    ///
+    /// Needed once exhaust is recirculated: it converts fuel burned into mass of
+    /// combustion products, which is what actually displaces oxygen in the
+    /// intake. A diesel runs lean, so its exhaust still carries usable oxygen,
+    /// and treating recirculated gas as inert would overstate the EGR penalty.
+    pub stoichiometric_afr: f64,
     pub nozzle_hole_count: u32,
     pub nozzle_hole_diameter_m: f64,
     pub discharge_coefficient: f64,
@@ -145,30 +177,90 @@ pub struct GasProperties {
 
 /// Air path.
 ///
-/// Milestone 2 prescribes charge pressure from a calibrated full-load schedule
-/// with a first-order response. Milestone 3 replaces the *source* of these
-/// values with wastegate turbocharger dynamics; the fields the solver reads do
-/// not change.
+/// Milestone 3 makes the manifolds real control volumes. Pressures are states
+/// integrated from mass flow rather than prescribed, which is also what removes
+/// the fuelling/air algebraic loop Milestone 2 broke with a first-order lag.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AirPath {
     pub ambient_pressure_pa: f64,
     pub ambient_temperature_k: f64,
-    /// Engine speed (rpm) to full-load manifold pressure (Pa absolute).
+    /// Engine speed (rpm) to the ECU's full-load boost setpoint (Pa absolute).
+    ///
+    /// In Milestone 2 this was written straight into manifold pressure. It is
+    /// now what the wastegate controller regulates *towards*, which is what the
+    /// manual describes the MCM doing via the boost pressure positioner.
     pub boost_target_schedule: Schedule,
-    /// First-order time constant for manifold pressure. Stands in for turbo
-    /// inertia until Milestone 3 models it.
-    pub boost_response_time_s: f64,
-    /// Charge temperature after the charge-air cooler at ambient pressure.
-    pub charge_temperature_base_k: f64,
-    /// Charge temperature rise per bar of boost above ambient.
-    pub charge_temperature_per_bar_k: f64,
-    /// Exhaust manifold pressure with no boost.
-    pub exhaust_manifold_pressure_pa: f64,
-    /// Exhaust back-pressure rise per bar of boost, representing the turbine.
-    pub exhaust_pressure_per_bar_boost: f64,
+    /// Intake manifold and charge-air housing volume, as one control volume.
+    pub intake_manifold_volume_m3: f64,
+    /// Exhaust manifold volume upstream of the turbine, as one control volume.
+    pub exhaust_manifold_volume_m3: f64,
+    /// Charge-air cooler effectiveness.
+    pub intercooler_effectiveness: f64,
+    /// Coolant temperature, the heat sink for both coolers.
+    pub coolant_temperature_k: f64,
+    /// Lumped restriction downstream of the turbine: `dp = k * m_dot^2`.
+    ///
+    /// This stands for the muffler and the aftertreatment can as a flow
+    /// resistance only. No DPF loading, SCR, dosing, or regeneration is
+    /// modelled; SPEC section 3 excludes complete aftertreatment from the MVP.
+    pub exhaust_restriction_pa_per_kg2_s2: f64,
     /// Pressure on the underside of the piston, used for the net gas force.
     pub crankcase_pressure_pa: f64,
     pub volumetric_efficiency: f64,
+}
+
+/// Wastegate turbocharger.
+///
+/// The manual publishes the architecture — a single turbine and compressor on a
+/// joint shaft, a charge-air cooler, and boost regulated by a wastegate the MCM
+/// drives through a vacuum cell and linkage. It publishes no geometry, no
+/// efficiency, no inertia, and no boost pressure, so every number here is
+/// calibrated.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Turbo {
+    pub shaft_inertia_kg_m2: f64,
+    pub compressor_wheel_diameter_m: f64,
+    pub compressor_efficiency: f64,
+    /// Head coefficient relating tip speed to pressure rise.
+    pub compressor_head_coefficient: f64,
+    /// Choke flow scaling: maximum corrected flow per rad/s of shaft speed.
+    pub compressor_max_flow_kg_s_per_rad_s: f64,
+    /// Turbine effective flow area — its swallowing capacity.
+    pub turbine_effective_area_m2: f64,
+    pub turbine_efficiency: f64,
+    pub bearing_friction_nm_per_rad_s: f64,
+    /// Overspeed guard for the shaft, mirroring the published turbocharger
+    /// protection function.
+    pub max_shaft_speed_rad_per_s: f64,
+    pub wastegate_max_area_m2: f64,
+    pub wastegate_p_gain_per_pa: f64,
+    pub wastegate_i_gain_per_pa_s: f64,
+    /// Actuator rate limit. The vacuum cell and linkage cannot move instantly.
+    pub wastegate_slew_per_s: f64,
+}
+
+/// Cooled high-pressure exhaust gas recirculation.
+///
+/// The cooler inlet and outlet temperatures are the only published values this
+/// subsystem contributes: the manual states cooling "from a temperature of about
+/// 650 C down to about 170 C". The recirculation *rate* is not published.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Egr {
+    /// Published: about 650 C at the cooler inlet.
+    pub cooler_inlet_temperature_k: f64,
+    /// Published: about 170 C at the cooler outlet.
+    pub cooler_outlet_temperature_k: f64,
+    /// Derived from the published inlet/outlet pair against coolant temperature.
+    pub cooler_effectiveness: f64,
+    /// Engine speed (rpm) to target recirculation rate, mass fraction.
+    pub rate_schedule: Schedule,
+    pub valve_max_area_m2: f64,
+    pub valve_discharge_coefficient: f64,
+    pub rate_p_gain: f64,
+    pub rate_i_gain_per_s: f64,
+    /// Hard ceiling on recirculation rate. Too much exhaust spoils combustion
+    /// and raises soot, CO and HC, which the manual states explicitly.
+    pub max_rate: f64,
 }
 
 /// Idle governor and overspeed limiting.
@@ -225,11 +317,21 @@ pub struct Solver {
     pub max_steps_per_batch: u32,
 }
 
-/// Reserved for Milestone 3. Unused by the current solver.
+/// Exhaust acoustic model.
+///
+/// The source is the computed blowdown through the exhaust ports; these values
+/// shape it into a signal. All calibrated: the manual publishes nothing about
+/// how the engine sounds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AudioCalibration {
     pub reference_spl_db: f64,
     pub exhaust_gain: f64,
+    /// Removes the standing pressure offset, leaving the pulses.
+    pub highpass_cutoff_hz: f64,
+    /// Muffler roll-off.
+    pub lowpass_cutoff_hz: f64,
+    /// Soft-clip knee keeping samples inside [-1, 1] without hard clipping.
+    pub soft_clip_knee: f64,
 }
 
 /// Published rated output.
@@ -257,6 +359,8 @@ pub struct EngineConfig {
     pub gas: GasProperties,
     pub friction: Friction,
     pub air_path: AirPath,
+    pub turbo: Turbo,
+    pub egr: Egr,
     pub governor: Governor,
     pub load: Load,
     pub inertia: Inertia,
@@ -304,6 +408,8 @@ impl EngineConfig {
             }
             "valvetrain.intake_valve_close_rad" => self.valvetrain.intake_valve_close_rad,
             "valvetrain.exhaust_valve_open_rad" => self.valvetrain.exhaust_valve_open_rad,
+            "valvetrain.exhaust_ramp_rad" => self.valvetrain.exhaust_ramp_rad,
+            "valvetrain.exhaust_effective_area_m2" => self.valvetrain.exhaust_effective_area_m2,
 
             "injection.rail_pressure_max_pa" => self.injection.rail_pressure_max_pa,
             "injection.amplified_pressure_max_pa" => self.injection.amplified_pressure_max_pa,
@@ -313,6 +419,7 @@ impl EngineConfig {
             "injection.fuel_density_kg_m3" => self.injection.fuel_density_kg_m3,
             "injection.max_fuel_mg_per_cycle" => self.injection.max_fuel_mg_per_cycle,
             "injection.smoke_limit_afr" => self.injection.smoke_limit_afr,
+            "injection.stoichiometric_afr" => self.injection.stoichiometric_afr,
             "injection.nozzle_hole_count" => f64::from(self.injection.nozzle_hole_count),
             "injection.nozzle_hole_diameter_m" => self.injection.nozzle_hole_diameter_m,
             "injection.discharge_coefficient" => self.injection.discharge_coefficient,
@@ -356,15 +463,41 @@ impl EngineConfig {
             "air_path.ambient_pressure_pa" => self.air_path.ambient_pressure_pa,
             "air_path.ambient_temperature_k" => self.air_path.ambient_temperature_k,
             "air_path.boost_target_schedule" => return None,
-            "air_path.boost_response_time_s" => self.air_path.boost_response_time_s,
-            "air_path.charge_temperature_base_k" => self.air_path.charge_temperature_base_k,
-            "air_path.charge_temperature_per_bar_k" => self.air_path.charge_temperature_per_bar_k,
-            "air_path.exhaust_manifold_pressure_pa" => self.air_path.exhaust_manifold_pressure_pa,
-            "air_path.exhaust_pressure_per_bar_boost" => {
-                self.air_path.exhaust_pressure_per_bar_boost
+            "air_path.intake_manifold_volume_m3" => self.air_path.intake_manifold_volume_m3,
+            "air_path.exhaust_manifold_volume_m3" => self.air_path.exhaust_manifold_volume_m3,
+            "air_path.intercooler_effectiveness" => self.air_path.intercooler_effectiveness,
+            "air_path.coolant_temperature_k" => self.air_path.coolant_temperature_k,
+            "air_path.exhaust_restriction_pa_per_kg2_s2" => {
+                self.air_path.exhaust_restriction_pa_per_kg2_s2
             }
             "air_path.crankcase_pressure_pa" => self.air_path.crankcase_pressure_pa,
             "air_path.volumetric_efficiency" => self.air_path.volumetric_efficiency,
+
+            "turbo.shaft_inertia_kg_m2" => self.turbo.shaft_inertia_kg_m2,
+            "turbo.compressor_wheel_diameter_m" => self.turbo.compressor_wheel_diameter_m,
+            "turbo.compressor_efficiency" => self.turbo.compressor_efficiency,
+            "turbo.compressor_head_coefficient" => self.turbo.compressor_head_coefficient,
+            "turbo.compressor_max_flow_kg_s_per_rad_s" => {
+                self.turbo.compressor_max_flow_kg_s_per_rad_s
+            }
+            "turbo.turbine_effective_area_m2" => self.turbo.turbine_effective_area_m2,
+            "turbo.turbine_efficiency" => self.turbo.turbine_efficiency,
+            "turbo.bearing_friction_nm_per_rad_s" => self.turbo.bearing_friction_nm_per_rad_s,
+            "turbo.max_shaft_speed_rad_per_s" => self.turbo.max_shaft_speed_rad_per_s,
+            "turbo.wastegate_max_area_m2" => self.turbo.wastegate_max_area_m2,
+            "turbo.wastegate_p_gain_per_pa" => self.turbo.wastegate_p_gain_per_pa,
+            "turbo.wastegate_i_gain_per_pa_s" => self.turbo.wastegate_i_gain_per_pa_s,
+            "turbo.wastegate_slew_per_s" => self.turbo.wastegate_slew_per_s,
+
+            "egr.cooler_inlet_temperature_k" => self.egr.cooler_inlet_temperature_k,
+            "egr.cooler_outlet_temperature_k" => self.egr.cooler_outlet_temperature_k,
+            "egr.cooler_effectiveness" => self.egr.cooler_effectiveness,
+            "egr.rate_schedule" => return None,
+            "egr.valve_max_area_m2" => self.egr.valve_max_area_m2,
+            "egr.valve_discharge_coefficient" => self.egr.valve_discharge_coefficient,
+            "egr.rate_p_gain" => self.egr.rate_p_gain,
+            "egr.rate_i_gain_per_s" => self.egr.rate_i_gain_per_s,
+            "egr.max_rate" => self.egr.max_rate,
 
             "governor.idle_target_rpm" => self.governor.idle_target_rpm,
             "governor.idle_p_gain_mg_per_rad_s" => self.governor.idle_p_gain_mg_per_rad_s,
@@ -391,6 +524,9 @@ impl EngineConfig {
 
             "audio.reference_spl_db" => self.audio.reference_spl_db,
             "audio.exhaust_gain" => self.audio.exhaust_gain,
+            "audio.highpass_cutoff_hz" => self.audio.highpass_cutoff_hz,
+            "audio.lowpass_cutoff_hz" => self.audio.lowpass_cutoff_hz,
+            "audio.soft_clip_knee" => self.audio.soft_clip_knee,
 
             "rated.max_power_w" => self.rated.max_power_w,
             "rated.max_power_hp" => self.rated.max_power_hp,

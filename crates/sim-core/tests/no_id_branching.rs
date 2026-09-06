@@ -25,6 +25,11 @@ const SOLVER_SOURCES: &[(&str, &str)] = &[
         "sim/heat_release.rs",
         include_str!("../src/sim/heat_release.rs"),
     ),
+    ("sim/acoustics.rs", include_str!("../src/sim/acoustics.rs")),
+    ("sim/egr.rs", include_str!("../src/sim/egr.rs")),
+    ("sim/flow.rs", include_str!("../src/sim/flow.rs")),
+    ("sim/manifold.rs", include_str!("../src/sim/manifold.rs")),
+    ("sim/turbo.rs", include_str!("../src/sim/turbo.rs")),
     ("geometry.rs", include_str!("../src/geometry.rs")),
     // The dynamometer harness reads whatever configuration it is handed, so it
     // must be free of engine identity too.
@@ -70,6 +75,11 @@ const STEPPING_SOURCES: &[(&str, &str)] = &[
         "sim/heat_release.rs",
         include_str!("../src/sim/heat_release.rs"),
     ),
+    ("sim/acoustics.rs", include_str!("../src/sim/acoustics.rs")),
+    ("sim/egr.rs", include_str!("../src/sim/egr.rs")),
+    ("sim/flow.rs", include_str!("../src/sim/flow.rs")),
+    ("sim/manifold.rs", include_str!("../src/sim/manifold.rs")),
+    ("sim/turbo.rs", include_str!("../src/sim/turbo.rs")),
     ("geometry.rs", include_str!("../src/geometry.rs")),
 ];
 

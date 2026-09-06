@@ -145,6 +145,7 @@ fn disabling_heat_transfer_raises_peak_motored_pressure() {
                 load_torque_nm: 0.0,
                 starter: true,
                 ignition: false,
+                egr_enabled: true,
             })
             .expect("controls accepted");
         let mut snapshot = engine.snapshot();
@@ -173,6 +174,7 @@ fn the_running_engine_reports_a_plausible_residual_fraction() {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
     for tick in 0..80 {
@@ -184,6 +186,7 @@ fn the_running_engine_reports_a_plausible_residual_fraction() {
                     load_torque_nm: 900.0,
                     starter: false,
                     ignition: true,
+                    egr_enabled: true,
                 })
                 .expect("controls accepted");
         }

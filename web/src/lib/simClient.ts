@@ -46,6 +46,8 @@ export interface SimClientHandlers {
   onSnapshot?: (snapshot: Snapshot) => void;
   onError?: (error: SimClientError) => void;
   onSweepProgress?: (done: number, total: number, rpm: number) => void;
+  /** A block of exhaust samples, streamed rather than requested. */
+  onAudio?: (samples: Float32Array, sampleRateHz: number, dropped: number) => void;
 }
 
 export interface SweepResult {
@@ -104,6 +106,11 @@ export class SimClient {
 
     if (data.t === 'snapshot' && data.rid === null) {
       this.#handlers.onSnapshot?.(data.snapshot);
+      return;
+    }
+
+    if (data.t === 'audio') {
+      this.#handlers.onAudio?.(data.samples, data.sampleRateHz, data.dropped);
       return;
     }
 
@@ -200,6 +207,16 @@ export class SimClient {
       throw new SimClientError('PROTOCOL', 'expected a sweep result');
     }
     return { points: message.points, peaks: message.peaks };
+  }
+
+  /**
+   * Start or stop exhaust audio production in the worker.
+   *
+   * Enable this only once an `AudioContext` exists, which SPEC section 8
+   * requires to come from an explicit user action.
+   */
+  async setAudio(enabled: boolean): Promise<void> {
+    await this.#request((rid) => ({ t: 'setAudio', rid, enabled }));
   }
 
   /** Advance an exact number of fixed steps. Deterministic; used by tests. */

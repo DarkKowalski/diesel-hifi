@@ -14,6 +14,11 @@
     const input = event.currentTarget as HTMLInputElement;
     await sim.setControls({ loadTorqueNm: Number(input.value) });
   }
+
+  async function onEgr(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    await sim.setControls({ egrEnabled: input.checked });
+  }
 </script>
 
 <section class="panel" aria-labelledby="controls-heading">
@@ -55,14 +60,26 @@
     />
   </label>
 
+  <label class="toggle">
+    <input
+      data-testid="egr-toggle"
+      type="checkbox"
+      checked={controls.egrEnabled}
+      onchange={onEgr}
+    />
+    <span>Exhaust gas recirculation</span>
+  </label>
+
   <p class="muted small">
     The pedal requests fuel, not air. Fuelling is clipped by the trapped air mass, and crank torque
     comes from cylinder pressure through slider-crank geometry.
   </p>
 
   <p class="muted small">
-    Audio is not part of this milestone. When it arrives it will require an explicit user action
-    before any Web Audio context is created.
+    Recirculation is on by default, as it is on the real engine across the whole speed range.
+    Switching it off shows what it costs: more air reaches the cylinders, so the smoke limit allows
+    more fuel and torque rises. What it buys — lower combustion temperature and so lower NOx — is
+    the reason the real calibration pays that price. This model does not predict emissions.
   </p>
 </section>
 
@@ -77,5 +94,14 @@
   }
   input[type='range'] {
     width: 100%;
+  }
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.9rem;
+  }
+  .toggle input {
+    width: auto;
   }
 </style>

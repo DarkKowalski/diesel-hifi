@@ -35,7 +35,11 @@ pub use sim::{Controls, CycleAverages, ResetOptions, Simulation};
 pub use snapshot::{RunState, Snapshot};
 
 /// Version of the public engine API. Bump on a breaking change.
-pub const API_VERSION: u32 = 2;
+///
+/// Milestone 3 takes this to 3: a worker that wants sound depends on
+/// `drain_audio` existing, so a version mismatch has to be visible rather than
+/// showing up as silence.
+pub const API_VERSION: u32 = 3;
 
 /// A catalog bound to a running simulation.
 ///
@@ -132,6 +136,14 @@ impl Engine {
         &self.simulation
     }
 
+    /// Mutable access, for draining produced audio.
+    ///
+    /// Audio is drained rather than read because the buffer is finite: whoever
+    /// takes the samples also frees the space for the next batch.
+    pub fn simulation_mut(&mut self) -> &mut Simulation {
+        &mut self.simulation
+    }
+
     /// Cycle-averaged results of the most recently completed four-stroke cycle.
     pub fn cycle_averages(&self) -> CycleAverages {
         self.simulation.cycle_averages()
@@ -145,6 +157,7 @@ impl Engine {
         pedal: f64,
         settle_cycles: u32,
         measure_cycles: u32,
+        egr_enabled: bool,
     ) -> Result<OperatingPoint> {
         dyno::operating_point(
             self.catalog.active_config(),
@@ -152,6 +165,7 @@ impl Engine {
             pedal,
             settle_cycles,
             measure_cycles,
+            egr_enabled,
         )
     }
 

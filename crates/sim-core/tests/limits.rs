@@ -21,6 +21,7 @@ fn a_nominal_pedal_sweep_stays_below_the_23_mpa_envelope() {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
 
@@ -39,6 +40,7 @@ fn a_nominal_pedal_sweep_stays_below_the_23_mpa_envelope() {
                 load_torque_nm: load,
                 starter: tick < 12,
                 ignition: true,
+                egr_enabled: true,
             })
             .expect("controls accepted");
         let snapshot = engine
@@ -76,6 +78,7 @@ fn the_engine_reaches_the_published_idle_speed() {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
 
@@ -89,6 +92,7 @@ fn the_engine_reaches_the_published_idle_speed() {
                     load_torque_nm: 0.0,
                     starter: false,
                     ignition: true,
+                    egr_enabled: true,
                 })
                 .expect("controls accepted");
         }
@@ -111,6 +115,7 @@ fn clearing_the_ignition_stops_the_engine() {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
     for _ in 0..30 {
@@ -127,6 +132,7 @@ fn clearing_the_ignition_stops_the_engine() {
             load_torque_nm: 0.0,
             starter: false,
             ignition: false,
+            egr_enabled: true,
         })
         .expect("controls accepted");
     // Coast down under friction and accessory load alone. 30 s of simulated
@@ -231,6 +237,7 @@ fn a_pressure_envelope_breach_latches_a_structured_fault() {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
 
@@ -284,6 +291,7 @@ fn gas_temperature_stays_inside_the_configured_guard() {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
     for _ in 0..80 {

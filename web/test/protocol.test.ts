@@ -27,6 +27,7 @@ describe('isToWorker', () => {
       { t: 'run', rid: 7, running: true },
       { t: 'stepOnce', rid: 8, steps: 100 },
       { t: 'sweep', rid: 9, options: DEFAULT_SWEEP },
+      { t: 'setAudio', rid: 10, enabled: true },
     ];
     for (const message of messages) {
       expect(isToWorker(message), JSON.stringify(message)).toBe(true);
@@ -63,6 +64,18 @@ describe('isFromWorker', () => {
     expect(isFromWorker({ t: 'sweepResult', rid: 4, points: [], peaks: null })).toBe(true);
   });
 
+  it('accepts audio blocks, which stream without a request id', () => {
+    expect(
+      isFromWorker({
+        t: 'audio',
+        rid: null,
+        samples: new Float32Array(8),
+        sampleRateHz: 40000,
+        dropped: 0,
+      }),
+    ).toBe(true);
+  });
+
   it('accepts unsolicited snapshots and errors on a null request id', () => {
     expect(isFromWorker({ t: 'snapshot', rid: null, snapshot: {} })).toBe(true);
     expect(isFromWorker({ t: 'error', rid: null, code: 'X', message: 'y' })).toBe(true);
@@ -81,12 +94,14 @@ describe('isFromWorker', () => {
 });
 
 describe('defaults', () => {
-  it('start the engine stopped, unfuelled and unloaded', () => {
+  it('start the engine stopped, unfuelled and unloaded, with EGR active', () => {
     expect(DEFAULT_CONTROLS).toEqual({
       pedal: 0,
       loadTorqueNm: 0,
       starter: false,
       ignition: false,
+      // On by default: the manual states EGR runs across the whole speed range.
+      egrEnabled: true,
     });
     expect(DEFAULT_RESET.seed).toBe(0);
     expect(DEFAULT_RESET.initialRpm).toBe(0);
@@ -94,8 +109,10 @@ describe('defaults', () => {
 });
 
 describe('DEFAULT_SWEEP', () => {
-  it('covers the usable speed range at full load', () => {
+  it('covers the usable speed range at full load with EGR active', () => {
     expect(DEFAULT_SWEEP.pedal).toBe(1);
+    // Measured the way the engine is calibrated: recirculation running.
+    expect(DEFAULT_SWEEP.egrEnabled).toBe(true);
     expect(DEFAULT_SWEEP.startRpm).toBeLessThan(DEFAULT_SWEEP.endRpm);
     expect(DEFAULT_SWEEP.stepRpm).toBeGreaterThan(0);
     expect(DEFAULT_SWEEP.settleCycles).toBeGreaterThan(0);

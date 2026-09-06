@@ -103,7 +103,29 @@ pub struct Snapshot {
     pub intake_pressure_pa: f64,
     pub intake_temperature_k: f64,
     pub exhaust_pressure_pa: f64,
+    pub exhaust_temperature_k: f64,
     pub residual_fraction: f64,
+
+    // Turbocharger and EGR. All of this is now computed rather than prescribed.
+    /// Intake pressure above ambient.
+    pub boost_pressure_pa: f64,
+    pub turbo_shaft_rad_per_s: f64,
+    /// Wastegate opening, `0..=1`.
+    pub wastegate_position: f64,
+    /// Recirculated mass over total charge mass.
+    pub egr_rate: f64,
+    /// EGR valve opening, `0..=1`.
+    pub egr_valve_position: f64,
+    /// Burned-gas mass fraction in the intake manifold; what dilutes the oxygen
+    /// the smoke limit sees.
+    pub intake_burned_fraction: f64,
+    pub compressor_flow_kg_per_s: f64,
+    pub turbine_flow_kg_per_s: f64,
+    pub egr_flow_kg_per_s: f64,
+
+    /// Exhaust level relative to the configured reference. Audio samples
+    /// themselves are drained separately; the snapshot stays compact.
+    pub audio_level_db: f64,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fault: Option<SimFault>,

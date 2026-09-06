@@ -150,6 +150,39 @@ impl SimHandle {
         self.engine.max_steps_per_batch()
     }
 
+    /// Sample rate of the exhaust audio, in hertz.
+    ///
+    /// One sample per solver step, so this is the reciprocal of the fixed step:
+    /// 40 kHz at 25 us. Consumers resample from here to their device rate.
+    #[wasm_bindgen(js_name = audioSampleRate)]
+    pub fn audio_sample_rate(&self) -> f64 {
+        self.engine.simulation().audio_sample_rate_hz()
+    }
+
+    /// Take the audio produced since the last drain.
+    ///
+    /// Deliberately separate from the snapshot: a batch carries thousands of
+    /// samples, and the snapshot has to stay compact. The returned array is a
+    /// fresh copy, so the caller may transfer it onward without touching WASM
+    /// memory.
+    #[wasm_bindgen(js_name = drainAudio)]
+    pub fn drain_audio(&mut self) -> Vec<f32> {
+        let available = self.engine.simulation().audio_available();
+        let mut out = vec![0.0f32; available];
+        let written = self.engine.simulation_mut().drain_audio(&mut out);
+        out.truncate(written);
+        out
+    }
+
+    /// Samples lost because the consumer fell behind, since the last reset.
+    #[wasm_bindgen(js_name = audioDropped)]
+    pub fn audio_dropped(&self) -> u32 {
+        self.engine
+            .simulation()
+            .audio_dropped()
+            .min(u64::from(u32::MAX)) as u32
+    }
+
     /// Measure one steady-state dynamometer point on the active configuration.
     ///
     /// Runs on a separate simulation instance, so the live one keeps running
@@ -162,10 +195,11 @@ impl SimHandle {
         pedal: f64,
         settle_cycles: u32,
         measure_cycles: u32,
+        egr_enabled: bool,
     ) -> Result<JsValue, JsValue> {
         let point = self
             .engine
-            .operating_point(rpm, pedal, settle_cycles, measure_cycles)
+            .operating_point(rpm, pedal, settle_cycles, measure_cycles, egr_enabled)
             .map_err(sim_error)?;
         to_js(&point)
     }

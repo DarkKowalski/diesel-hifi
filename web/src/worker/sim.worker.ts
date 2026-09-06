@@ -45,6 +45,12 @@ let fixedStepS = 0;
 let maxStepsPerBatch = 1;
 
 let running = false;
+/**
+ * Whether anyone is listening. Draining costs a copy per batch, so it is only
+ * done once the UI has actually started audio from a user gesture.
+ */
+let audioEnabled = false;
+let audioSampleRateHz = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let lastTickMs = 0;
 let accumulatorS = 0;
@@ -120,6 +126,25 @@ function tick(): void {
   if (steps > 0) {
     try {
       const snapshot = handle.advance(steps) as Snapshot;
+
+      // Drain every batch, not on the snapshot's slower cadence: the buffer
+      // holds exactly one batch, so skipping a drain would drop samples.
+      if (audioEnabled) {
+        const samples = handle.drainAudio();
+        if (samples.length > 0) {
+          self.postMessage(
+            {
+              t: 'audio',
+              rid: null,
+              samples,
+              sampleRateHz: audioSampleRateHz,
+              dropped: handle.audioDropped(),
+            } satisfies FromWorker,
+            [samples.buffer],
+          );
+        }
+      }
+
       if (now - lastPostMs >= SNAPSHOT_INTERVAL_MS) {
         lastPostMs = now;
         post({ t: 'snapshot', rid: null, snapshot });
@@ -174,6 +199,7 @@ function runSweep(rid: number, options: SweepOptions): void {
           options.pedal,
           options.settleCycles,
           options.measureCycles,
+          options.egrEnabled,
         ) as OperatingPoint,
       );
     } catch (error) {
@@ -271,6 +297,17 @@ function dispatch(message: ToWorker): void {
 
     case 'sweep': {
       runSweep(message.rid, message.options);
+      return;
+    }
+
+    case 'setAudio': {
+      const sim = requireHandle();
+      audioEnabled = message.enabled;
+      audioSampleRateHz = sim.audioSampleRate();
+      // Drop whatever accumulated while nobody was listening, so enabling
+      // audio does not begin by playing a stale batch.
+      sim.drainAudio();
+      post({ t: 'ok', rid: message.rid });
       return;
     }
   }

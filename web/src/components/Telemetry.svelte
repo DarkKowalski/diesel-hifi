@@ -40,7 +40,50 @@
       <div><dt>Fuel demand</dt><dd>{mg(snapshot.fuelDemandMg)} mg</dd></div>
       <div><dt>Intake pressure</dt><dd data-testid="intake-pressure">{bar(snapshot.intakePressurePa)} bar</dd></div>
       <div><dt>Intake temperature</dt><dd>{kelvin(snapshot.intakeTemperatureK)} K</dd></div>
-      <div><dt>Exhaust pressure</dt><dd>{bar(snapshot.exhaustPressurePa)} bar</dd></div>
+      <div><dt>Exhaust pressure</dt><dd data-testid="exhaust-pressure">{bar(snapshot.exhaustPressurePa)} bar</dd></div>
+      <div><dt>Exhaust temperature</dt><dd>{kelvin(snapshot.exhaustTemperatureK)} K</dd></div>
+    </dl>
+
+    <h3>Air path</h3>
+    <p class="muted small">
+      Boost is computed, not prescribed: the turbine drives a shaft with inertia, and the wastegate
+      regulates towards the ECU setpoint.
+    </p>
+    <dl class="grid" data-testid="air-path">
+      <div>
+        <dt>Boost</dt>
+        <dd data-testid="boost">{bar(snapshot.boostPressurePa)} bar</dd>
+      </div>
+      <div>
+        <dt>Turbo shaft</dt>
+        <dd data-testid="turbo-shaft">
+          {((snapshot.turboShaftRadPerS * 60) / (2 * Math.PI) / 1000).toFixed(1)} krpm
+        </dd>
+      </div>
+      <div>
+        <dt>Wastegate</dt>
+        <dd data-testid="wastegate">{(snapshot.wastegatePosition * 100).toFixed(0)}%</dd>
+      </div>
+      <div>
+        <dt>EGR rate</dt>
+        <dd data-testid="egr-rate">{(snapshot.egrRate * 100).toFixed(1)}%</dd>
+      </div>
+      <div>
+        <dt>EGR valve</dt>
+        <dd data-testid="egr-valve">{(snapshot.egrValvePosition * 100).toFixed(0)}%</dd>
+      </div>
+      <div>
+        <dt>Intake burned gas</dt>
+        <dd data-testid="intake-burned">{(snapshot.intakeBurnedFraction * 100).toFixed(1)}%</dd>
+      </div>
+      <div>
+        <dt>Compressor flow</dt>
+        <dd>{snapshot.compressorFlowKgPerS.toFixed(3)} kg/s</dd>
+      </div>
+      <div>
+        <dt>EGR flow</dt>
+        <dd>{snapshot.egrFlowKgPerS.toFixed(3)} kg/s</dd>
+      </div>
     </dl>
 
     <h3>Whole-cycle averages</h3>

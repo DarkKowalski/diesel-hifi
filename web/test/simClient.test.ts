@@ -125,6 +125,7 @@ describe('SimClient', () => {
       pedal: 1,
       settleCycles: 10,
       measureCycles: 4,
+      egrEnabled: true,
     });
     const rid = worker.sent[0]!.rid;
     expect(worker.sent[0]!.t).toBe('sweep');
@@ -144,6 +145,28 @@ describe('SimClient', () => {
     const result = await pending;
     expect(result.points).toHaveLength(3);
     expect(result.peaks).toMatchObject({ peakPowerRpm: 1000 });
+  });
+
+  it('streams audio blocks to the handler without resolving a request', () => {
+    const onAudio = vi.fn();
+    const { worker } = makeClient(() => null, { onAudio });
+
+    const samples = new Float32Array([0.1, -0.2, 0.3]);
+    worker.emit({ t: 'audio', rid: null, samples, sampleRateHz: 40000, dropped: 0 });
+
+    expect(onAudio).toHaveBeenCalledOnce();
+    expect(onAudio).toHaveBeenCalledWith(samples, 40000, 0);
+  });
+
+  it('enables and disables audio production through the protocol', async () => {
+    const { client, worker } = makeClient((m) => ({ t: 'ok', rid: m.rid }));
+
+    await client.setAudio(true);
+    await client.setAudio(false);
+
+    expect(worker.sent.map((m) => m.t)).toEqual(['setAudio', 'setAudio']);
+    expect(worker.sent[0]).toMatchObject({ t: 'setAudio', enabled: true });
+    expect(worker.sent[1]).toMatchObject({ t: 'setAudio', enabled: false });
   });
 
   it('surfaces worker-initiated errors', () => {
@@ -189,7 +212,13 @@ describe('SimClient', () => {
   it('sends the exact protocol messages the worker expects', async () => {
     const { client, worker } = makeClient((m) => ({ t: 'ok', rid: m.rid }));
 
-    await client.setControls({ pedal: 0.5, loadTorqueNm: 100, starter: false, ignition: true });
+    await client.setControls({
+      pedal: 0.5,
+      loadTorqueNm: 100,
+      starter: false,
+      ignition: true,
+      egrEnabled: true,
+    });
     await client.run(true);
     await client.reset({ seed: 3, initialRpm: 0, initialCrankRad: 0, coolantTempK: 293.15 });
 

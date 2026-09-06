@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "identity": {
     "id": "mercedes-benz-om471-9-m3d-375kw",
     "display_name": "OM 471.9 M3D 375 kW Reference",
@@ -28,7 +28,9 @@
     "intake_valves_per_cylinder": 2,
     "exhaust_valves_per_cylinder": 2,
     "intake_valve_close_rad": -2.7925268,
-    "exhaust_valve_open_rad": 2.443461
+    "exhaust_valve_open_rad": 2.443461,
+    "exhaust_ramp_rad": 0.6108652,
+    "exhaust_effective_area_m2": 0.0025
   },
   "injection": {
     "rail_pressure_max_pa": 90000000.0,
@@ -36,7 +38,8 @@
     "fuel_lower_heating_value_j_per_kg": 42700000.0,
     "fuel_density_kg_m3": 832.0,
     "max_fuel_mg_per_cycle": 350.0,
-    "smoke_limit_afr": 21.0,
+    "smoke_limit_afr": 19.5,
+    "stoichiometric_afr": 14.5,
     "nozzle_hole_count": 8,
     "nozzle_hole_diameter_m": 0.000175,
     "discharge_coefficient": 0.75,
@@ -57,7 +60,7 @@
         -0.2617994
       ]
     },
-    "soi_load_retard_rad_per_mg": 0.00045
+    "soi_load_retard_rad_per_mg": 0.00075
   },
   "combustion": {
     "combustion_efficiency": 0.98,
@@ -108,26 +111,71 @@
         2100.0
       ],
       "values": [
-        125000.0,
-        175000.0,
-        250000.0,
-        266000.0,
-        261000.0,
-        240000.0,
-        228000.0,
-        213000.0,
-        201000.0,
-        191000.0,
-        168000.0
+        128000.0,
+        188000.0,
+        286000.0,
+        308000.0,
+        299000.0,
+        278000.0,
+        256000.0,
+        249000.0,
+        235000.0,
+        224000.0,
+        195000.0
       ]
     },
-    "boost_response_time_s": 0.6,
-    "charge_temperature_base_k": 315.0,
-    "charge_temperature_per_bar_k": 12.0,
-    "exhaust_manifold_pressure_pa": 106000.0,
-    "exhaust_pressure_per_bar_boost": 100000.0,
+    "intake_manifold_volume_m3": 0.02,
+    "exhaust_manifold_volume_m3": 0.01,
+    "intercooler_effectiveness": 0.8,
+    "coolant_temperature_k": 358.15,
+    "exhaust_restriction_pa_per_kg2_s2": 120000.0,
     "crankcase_pressure_pa": 101325.0,
     "volumetric_efficiency": 0.92
+  },
+  "turbo": {
+    "shaft_inertia_kg_m2": 3.5e-05,
+    "compressor_wheel_diameter_m": 0.1,
+    "compressor_efficiency": 0.72,
+    "compressor_head_coefficient": 0.7,
+    "compressor_max_flow_kg_s_per_rad_s": 6.5e-05,
+    "turbine_effective_area_m2": 0.0006,
+    "turbine_efficiency": 0.7,
+    "bearing_friction_nm_per_rad_s": 1e-08,
+    "max_shaft_speed_rad_per_s": 15000.0,
+    "wastegate_max_area_m2": 0.0025,
+    "wastegate_p_gain_per_pa": 1.5e-05,
+    "wastegate_i_gain_per_pa_s": 3e-05,
+    "wastegate_slew_per_s": 6.0
+  },
+  "egr": {
+    "cooler_inlet_temperature_k": 923.15,
+    "cooler_outlet_temperature_k": 443.15,
+    "cooler_effectiveness": 0.8495575,
+    "rate_schedule": {
+      "breakpoints": [
+        600.0,
+        900.0,
+        1100.0,
+        1400.0,
+        1600.0,
+        1900.0,
+        2100.0
+      ],
+      "values": [
+        0.12,
+        0.14,
+        0.12,
+        0.1,
+        0.08,
+        0.06,
+        0.04
+      ]
+    },
+    "valve_max_area_m2": 0.0004,
+    "valve_discharge_coefficient": 0.7,
+    "rate_p_gain": 20.0,
+    "rate_i_gain_per_s": 60.0,
+    "max_rate": 0.35
   },
   "governor": {
     "idle_target_rpm": 560.0,
@@ -159,7 +207,10 @@
   },
   "audio": {
     "reference_spl_db": 94.0,
-    "exhaust_gain": 1.0
+    "exhaust_gain": 12000.0,
+    "highpass_cutoff_hz": 20.0,
+    "lowpass_cutoff_hz": 6000.0,
+    "soft_clip_knee": 0.85
   },
   "rated": {
     "max_power_w": 375000.0,
@@ -272,6 +323,26 @@
       ]
     },
     {
+      "path": "valvetrain.exhaust_ramp_rad",
+      "status": "calibrated",
+      "value_note": "35 degrees of crank between shut and full lift. The manual publishes no valve lift profile.",
+      "purpose": "Sets how sharply blowdown starts. A slow ramp leaves the port nearly shut at peak pressure difference, which makes the exhaust pulse a smooth hump with no harmonic content and no audible sound.",
+      "safe_range": [
+        0.05,
+        1.5
+      ]
+    },
+    {
+      "path": "valvetrain.exhaust_effective_area_m2",
+      "status": "calibrated",
+      "value_note": "2.5e-3 m^2 for both exhaust valves at full lift. The manual publishes the valve count but no lift profile or flow area.",
+      "purpose": "Scales the exhaust blowdown that drives the acoustic source: a bigger port makes a louder pulse.",
+      "safe_range": [
+        0.0001,
+        0.02
+      ]
+    },
+    {
       "path": "injection.rail_pressure_max_pa",
       "status": "published",
       "value_note": "900 bar maximum rail pressure; drives nozzle flow for the standard (non-amplified) APCRS variant",
@@ -318,11 +389,21 @@
     {
       "path": "injection.smoke_limit_afr",
       "status": "calibrated",
-      "value_note": "21:1 minimum air/fuel ratio. The source manual does not publish this.",
+      "value_note": "19.5:1 minimum air/fuel ratio. The source manual does not publish this.",
       "purpose": "Clips fuelling to the trapped fresh air, so the boost schedule rather than the pedal sets the full-load torque curve.",
       "safe_range": [
         16.0,
         30.0
+      ]
+    },
+    {
+      "path": "injection.stoichiometric_afr",
+      "status": "calibrated",
+      "value_note": "14.5:1, the standard figure for diesel fuel. The source manual does not publish this.",
+      "purpose": "Converts burned fuel into mass of combustion products, which is what recirculated exhaust actually displaces. Without it, EGR would be treated as inert and its penalty overstated.",
+      "safe_range": [
+        13.0,
+        16.0
       ]
     },
     {
@@ -378,7 +459,7 @@
     {
       "path": "injection.soi_load_retard_rad_per_mg",
       "status": "calibrated",
-      "value_note": "0.00045 rad per mg, about 8 degrees of retard at full fuelling. The source manual does not publish this.",
+      "value_note": "0.00075 rad per mg, about 8 degrees of retard at full fuelling. The source manual does not publish this.",
       "purpose": "Retards injection as fuelling rises, which is what keeps peak cylinder pressure inside the published 230 bar envelope at high load.",
       "safe_range": [
         0.0,
@@ -638,61 +719,61 @@
     {
       "path": "air_path.boost_target_schedule",
       "status": "calibrated",
-      "value_note": "1.25 to 2.66 bar absolute against engine speed, peaking near 1100 rpm. The manual describes the wastegate turbocharger and charge-air cooler but publishes NO boost pressure.",
-      "purpose": "Full-load charge pressure. With the smoke limit this is what sets the full-load torque curve, and it is the value Milestone 3 will replace with wastegate turbocharger dynamics.",
+      "value_note": "1.28 to 3.08 bar absolute against engine speed, peaking near 1100 rpm. The manual describes the wastegate, the boost pressure positioner and the charge-air cooler, but publishes NO boost pressure. The 2.8 bar the turbocharger section mentions is the control pressure applied to the wastegate vacuum cell, NOT boost, and is deliberately not used here.",
+      "purpose": "The ECU boost setpoint the wastegate controller regulates towards. In Milestone 2 this was written straight into manifold pressure; boost is now an outcome of the compressor, and this is the target it is driven to.",
       "safe_range": [
         0.0,
         1000000.0
       ]
     },
     {
-      "path": "air_path.boost_response_time_s",
+      "path": "air_path.intake_manifold_volume_m3",
       "status": "calibrated",
-      "value_note": "0.6 s first-order response. The source manual does not publish this.",
-      "purpose": "Stands in for turbocharger inertia until Milestone 3 models it, and breaks the algebraic loop between fuelling and available air.",
+      "value_note": "0.020 m^3 for the charge-air housing and intake manifold together. The source manual does not publish this.",
+      "purpose": "Control volume for the intake filling dynamics; sets how fast boost can build once the compressor delivers.",
       "safe_range": [
-        0.05,
-        5.0
+        0.001,
+        0.2
       ]
     },
     {
-      "path": "air_path.charge_temperature_base_k",
+      "path": "air_path.exhaust_manifold_volume_m3",
       "status": "calibrated",
-      "value_note": "315 K after the charge-air cooler at ambient pressure. The source manual does not publish this.",
-      "purpose": "Charge temperature at zero boost, setting trapped air mass.",
+      "value_note": "0.010 m^3 upstream of the turbine. The source manual does not publish this.",
+      "purpose": "Control volume for the exhaust filling dynamics; sets how quickly blowdown energy reaches the turbine.",
       "safe_range": [
-        280.0,
+        0.001,
+        0.2
+      ]
+    },
+    {
+      "path": "air_path.intercooler_effectiveness",
+      "status": "calibrated",
+      "value_note": "0.80 charge-air cooler effectiveness. The manual describes the cooler and its purpose but publishes no duty.",
+      "purpose": "Sets charge density after compression, and so the trapped air mass.",
+      "safe_range": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "path": "air_path.coolant_temperature_k",
+      "status": "calibrated",
+      "value_note": "358.15 K (85 C) coolant. The source manual does not publish this.",
+      "purpose": "Heat sink for both the charge-air cooler and the EGR cooler.",
+      "safe_range": [
+        330.0,
         380.0
       ]
     },
     {
-      "path": "air_path.charge_temperature_per_bar_k",
+      "path": "air_path.exhaust_restriction_pa_per_kg2_s2",
       "status": "calibrated",
-      "value_note": "12 K per bar of boost. The source manual does not publish this.",
-      "purpose": "Residual compressor heating the charge-air cooler does not remove.",
+      "value_note": "120000 Pa per (kg/s)^2 downstream of the turbine, about 15 kPa at rated flow. The source manual does not publish this.",
+      "purpose": "Lumped muffler and aftertreatment-can flow resistance. A restriction only: no filter loading, SCR, dosing or regeneration is modelled.",
       "safe_range": [
         0.0,
-        60.0
-      ]
-    },
-    {
-      "path": "air_path.exhaust_manifold_pressure_pa",
-      "status": "calibrated",
-      "value_note": "106000 Pa with no boost. The source manual does not publish this.",
-      "purpose": "Exhaust boundary condition, producing the pumping term explicitly.",
-      "safe_range": [
-        95000.0,
-        150000.0
-      ]
-    },
-    {
-      "path": "air_path.exhaust_pressure_per_bar_boost",
-      "status": "calibrated",
-      "value_note": "100000 Pa per bar of boost, keeping exhaust slightly above intake. The source manual does not publish this.",
-      "purpose": "Turbine restriction: exhaust manifold pressure rises with boost, which is what makes pumping work a real loss on a turbocharged engine.",
-      "safe_range": [
-        0.0,
-        200000.0
+        1000000.0
       ]
     },
     {
@@ -713,6 +794,221 @@
       "safe_range": [
         0.6,
         1.1
+      ]
+    },
+    {
+      "path": "turbo.shaft_inertia_kg_m2",
+      "status": "calibrated",
+      "value_note": "3.5e-5 kg m^2 for the rotating assembly. The source manual does not publish this.",
+      "purpose": "Sets turbocharger lag. This replaces Milestone 2's prescribed boost response time with a physical cause.",
+      "safe_range": [
+        1e-06,
+        0.001
+      ]
+    },
+    {
+      "path": "turbo.compressor_wheel_diameter_m",
+      "status": "calibrated",
+      "value_note": "0.10 m compressor wheel. The source manual does not publish this.",
+      "purpose": "With shaft speed this sets tip speed, and so the pressure ratio available.",
+      "safe_range": [
+        0.02,
+        0.25
+      ]
+    },
+    {
+      "path": "turbo.compressor_efficiency",
+      "status": "calibrated",
+      "value_note": "0.72 isentropic. The source manual does not publish this.",
+      "purpose": "Converts shaft work into pressure rise and sets compressor outlet temperature.",
+      "safe_range": [
+        0.3,
+        0.95
+      ]
+    },
+    {
+      "path": "turbo.compressor_head_coefficient",
+      "status": "calibrated",
+      "value_note": "0.70 head coefficient. The source manual does not publish this.",
+      "purpose": "Relates tip speed to the work the wheel does on the air.",
+      "safe_range": [
+        0.1,
+        1.5
+      ]
+    },
+    {
+      "path": "turbo.compressor_max_flow_kg_s_per_rad_s",
+      "status": "calibrated",
+      "value_note": "6.5e-5 kg/s per rad/s of shaft speed. The source manual does not publish this.",
+      "purpose": "Choke end of the simplified compressor map: the flow the wheel passes with no back-pressure.",
+      "safe_range": [
+        1e-06,
+        0.001
+      ]
+    },
+    {
+      "path": "turbo.turbine_effective_area_m2",
+      "status": "calibrated",
+      "value_note": "6.0e-4 m^2 effective area. The source manual does not publish this.",
+      "purpose": "Turbine swallowing capacity. Smaller areas raise back-pressure and spool harder; this is the primary boost-curve tuning parameter.",
+      "safe_range": [
+        1e-05,
+        0.01
+      ]
+    },
+    {
+      "path": "turbo.turbine_efficiency",
+      "status": "calibrated",
+      "value_note": "0.70 isentropic. The source manual does not publish this.",
+      "purpose": "Converts exhaust enthalpy drop into shaft power.",
+      "safe_range": [
+        0.3,
+        0.95
+      ]
+    },
+    {
+      "path": "turbo.bearing_friction_nm_per_rad_s",
+      "status": "calibrated",
+      "value_note": "1.0e-8 N m per rad/s. The source manual does not publish this.",
+      "purpose": "Bearing drag, which stops a freewheeling shaft from coasting forever.",
+      "safe_range": [
+        0.0,
+        1e-05
+      ]
+    },
+    {
+      "path": "turbo.max_shaft_speed_rad_per_s",
+      "status": "calibrated",
+      "value_note": "15000 rad/s, about 143000 rpm. The manual documents a turbocharger protection function and a turbine speed sensor for code M5Z, but publishes no speed.",
+      "purpose": "Overspeed guard on the shaft state, mirroring the published protection function.",
+      "safe_range": [
+        1000.0,
+        30000.0
+      ]
+    },
+    {
+      "path": "turbo.wastegate_max_area_m2",
+      "status": "calibrated",
+      "value_note": "2.5e-3 m^2 fully open. The source manual does not publish this.",
+      "purpose": "Bypass capacity: how much exhaust can be routed around the turbine, which sets how hard boost can be pulled back.",
+      "safe_range": [
+        1e-05,
+        0.01
+      ]
+    },
+    {
+      "path": "turbo.wastegate_p_gain_per_pa",
+      "status": "calibrated",
+      "value_note": "1.5e-5 per Pa of boost error. The source manual does not publish this.",
+      "purpose": "Proportional term of the boost controller the MCM implements.",
+      "safe_range": [
+        0.0,
+        0.01
+      ]
+    },
+    {
+      "path": "turbo.wastegate_i_gain_per_pa_s",
+      "status": "calibrated",
+      "value_note": "3.0e-5 per Pa-second. The source manual does not publish this.",
+      "purpose": "Integral term removing steady-state boost error.",
+      "safe_range": [
+        0.0,
+        0.01
+      ]
+    },
+    {
+      "path": "turbo.wastegate_slew_per_s",
+      "status": "calibrated",
+      "value_note": "6.0 per second, about a sixth of a second from shut to fully open. The source manual does not publish this.",
+      "purpose": "Actuator rate limit: the vacuum cell and linkage cannot move instantly.",
+      "safe_range": [
+        0.1,
+        100.0
+      ]
+    },
+    {
+      "path": "egr.cooler_inlet_temperature_k",
+      "status": "published",
+      "value_note": "923.15 K. The manual states the EGR cooler cools 'from a temperature of about 650 C'.",
+      "source_id": "mb-om471-intro-2011",
+      "locator": "GF14.20-W-3000H, Exhaust gas recirculation function (ENGINES 471.9 in MODEL 963, 964), printed page 66 (PDF page 69)"
+    },
+    {
+      "path": "egr.cooler_outlet_temperature_k",
+      "status": "published",
+      "value_note": "443.15 K. The manual states the EGR cooler cools 'down to about 170 C'.",
+      "source_id": "mb-om471-intro-2011",
+      "locator": "GF14.20-W-3000H, Exhaust gas recirculation function (ENGINES 471.9 in MODEL 963, 964), printed page 66 (PDF page 69)"
+    },
+    {
+      "path": "egr.cooler_effectiveness",
+      "status": "derived",
+      "value_note": "0.8495575 from the published inlet and outlet temperatures.",
+      "formula": "(T_in - T_out) / (T_in - T_coolant)",
+      "inputs": [
+        "egr.cooler_inlet_temperature_k",
+        "egr.cooler_outlet_temperature_k",
+        "air_path.coolant_temperature_k"
+      ]
+    },
+    {
+      "path": "egr.rate_schedule",
+      "status": "calibrated",
+      "value_note": "0.04 to 0.14 recirculated mass fraction against engine speed, highest at low speed and tapering towards rated power. The manual states EGR is active across the whole speed range but publishes NO rate.",
+      "purpose": "Sets how much oxygen is displaced, which trades NOx against soot, power and fuel consumption.",
+      "safe_range": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "path": "egr.valve_max_area_m2",
+      "status": "calibrated",
+      "value_note": "4.0e-4 m^2 fully open. The source manual does not publish this.",
+      "purpose": "Capacity of the throttle valve the EGR positioner drives.",
+      "safe_range": [
+        1e-06,
+        0.01
+      ]
+    },
+    {
+      "path": "egr.valve_discharge_coefficient",
+      "status": "calibrated",
+      "value_note": "0.70. The source manual does not publish this.",
+      "purpose": "Effective area of the valve relative to its geometric area.",
+      "safe_range": [
+        0.1,
+        1.0
+      ]
+    },
+    {
+      "path": "egr.rate_p_gain",
+      "status": "calibrated",
+      "value_note": "20.0 per unit of rate error. The source manual does not publish this.",
+      "purpose": "Proportional term of the recirculation rate controller.",
+      "safe_range": [
+        0.0,
+        1000.0
+      ]
+    },
+    {
+      "path": "egr.rate_i_gain_per_s",
+      "status": "calibrated",
+      "value_note": "60.0 per unit-second. The source manual does not publish this.",
+      "purpose": "Integral term holding the scheduled rate against changing pressures.",
+      "safe_range": [
+        0.0,
+        1000.0
+      ]
+    },
+    {
+      "path": "egr.max_rate",
+      "status": "calibrated",
+      "value_note": "0.35 hard ceiling. The source manual does not publish this.",
+      "purpose": "Above this the charge cannot burn cleanly; the manual notes soot, CO and HC rise when the exhaust proportion is too high.",
+      "safe_range": [
+        0.0,
+        0.5
       ]
     },
     {
@@ -889,8 +1185,8 @@
     {
       "path": "audio.reference_spl_db",
       "status": "calibrated",
-      "value_note": "94 dB reference. Reserved for Milestone 3; unused by the solver.",
-      "purpose": "Placeholder so adding Web Audio does not change the configuration schema.",
+      "value_note": "94 dB reference for the reported exhaust level. The source manual does not publish this.",
+      "purpose": "Reference the level meter is quoted against. A display reference only: it is not a claim about how loud the real engine is.",
       "safe_range": [
         60.0,
         120.0
@@ -899,11 +1195,41 @@
     {
       "path": "audio.exhaust_gain",
       "status": "calibrated",
-      "value_note": "1.0. Reserved for Milestone 3; unused by the solver.",
-      "purpose": "Placeholder so adding Web Audio does not change the configuration schema.",
+      "value_note": "12000. The acoustic source is a per-step difference of port flow, which is a small number, so the scaling is correspondingly large. The source manual does not publish this.",
+      "purpose": "Brings the radiated exhaust signal to a usable level before the soft clipper. Set so the loudest realistic condition \u2014 the start transient, which is louder than full load \u2014 approaches the knee without sitting on it. Driving it far past the knee flat-tops the waveform, and a flat-topped wave is full of high harmonics: an audible buzz, not a louder engine.",
       "safe_range": [
         0.0,
-        4.0
+        1000000.0
+      ]
+    },
+    {
+      "path": "audio.highpass_cutoff_hz",
+      "status": "calibrated",
+      "value_note": "20 Hz. The source manual does not publish this.",
+      "purpose": "Removes the standing pressure offset so only the pulses remain, and keeps the signal from drifting off centre.",
+      "safe_range": [
+        1.0,
+        200.0
+      ]
+    },
+    {
+      "path": "audio.lowpass_cutoff_hz",
+      "status": "calibrated",
+      "value_note": "6000 Hz, two poles. The source manual does not publish this.",
+      "purpose": "Muffler roll-off. Without it the blowdown edge is far harsher than any real exhaust system sounds.",
+      "safe_range": [
+        100.0,
+        19000.0
+      ]
+    },
+    {
+      "path": "audio.soft_clip_knee",
+      "status": "calibrated",
+      "value_note": "0.85. The source manual does not publish this.",
+      "purpose": "Saturation ceiling of the soft clipper, which is what guarantees samples stay inside [-1, 1] without hard clipping.",
+      "safe_range": [
+        0.1,
+        1.0
       ]
     },
     {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AudioPanel from './components/AudioPanel.svelte';
   import Controls from './components/Controls.svelte';
   import DynoPanel from './components/DynoPanel.svelte';
   import EngineSelector from './components/EngineSelector.svelte';
@@ -35,6 +36,7 @@
     <div class="column">
       <EngineSelector />
       <Controls />
+      <AudioPanel />
     </div>
     <div class="column">
       <Telemetry />
@@ -46,9 +48,10 @@
 
   <footer class="muted small">
     Mercedes-Benz and OM 471 are used as factual references only. No OEM endorsement is implied.
-    Milestone 2 models injection, ignition delay, double-Wiebe heat release and wall heat
-    transfer, and prescribes charge pressure from a calibrated boost schedule. Turbocharger and
-    EGR dynamics, aftertreatment, the engine brake, and audio are not modelled yet.
+    Milestone 3 adds wastegate turbocharger and cooled EGR dynamics, exhaust blowdown, and audio
+    taken directly from the computed exhaust pulses. Boost is now an outcome rather than a
+    prescribed schedule. Aftertreatment chemistry, the engine brake and driveline are not
+    modelled.
   </footer>
 </main>
 

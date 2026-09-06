@@ -15,6 +15,7 @@ const SCRIPT: &[(u32, Controls)] = &[
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         },
     ),
     // Idle on the governor.
@@ -25,6 +26,7 @@ const SCRIPT: &[(u32, Controls)] = &[
             load_torque_nm: 0.0,
             starter: false,
             ignition: true,
+            egr_enabled: true,
         },
     ),
     // Pull away under load.
@@ -35,6 +37,7 @@ const SCRIPT: &[(u32, Controls)] = &[
             load_torque_nm: 400.0,
             starter: false,
             ignition: true,
+            egr_enabled: true,
         },
     ),
     // Back off.
@@ -45,6 +48,7 @@ const SCRIPT: &[(u32, Controls)] = &[
             load_torque_nm: 300.0,
             starter: false,
             ignition: true,
+            egr_enabled: true,
         },
     ),
 ];
@@ -95,6 +99,7 @@ fn batching_does_not_change_the_result() {
                 load_torque_nm: 250.0,
                 starter: true,
                 ignition: true,
+                egr_enabled: true,
             })
             .expect("controls accepted");
         let mut remaining = total;
@@ -161,6 +166,7 @@ fn crank_angle_stays_inside_one_four_stroke_cycle() {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
     for _ in 0..40 {

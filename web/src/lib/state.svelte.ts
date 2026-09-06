@@ -6,6 +6,7 @@
  * is hard-coded here.
  */
 
+import { AudioEngine, type AudioStatus } from './audioEngine';
 import { SimClient, SimClientError, type ReadyInfo } from './simClient';
 import {
   DEFAULT_CONTROLS,
@@ -40,7 +41,18 @@ class SimStore {
   sweepDone = $state(0);
   sweepTotal = $state(0);
 
+  // Exhaust audio. Starts only from an explicit user action (SPEC section 8).
+  audioRunning = $state(false);
+  audioBuffered = $state(0);
+  audioUnderruns = $state(0);
+  audioReceived = $state(0);
+  audioDeviceRateHz = $state(0);
+  audioSampleRateHz = $state(0);
+  audioVolume = $state(0.6);
+  audioStarting = $state(false);
+
   #client: SimClient | null = null;
+  #audio: AudioEngine | null = null;
 
   get activeConfig(): ConfigSummary | null {
     return this.configs.find((c) => c.id === this.activeId) ?? null;
@@ -80,6 +92,11 @@ class SimStore {
         onSweepProgress: (done, total) => {
           this.sweepDone = done;
           this.sweepTotal = total;
+        },
+        onAudio: (samples, sampleRateHz) => {
+          this.audioSampleRateHz = sampleRateHz;
+          // Hand the block straight on; the engine transfers it to the worklet.
+          this.#audio?.push(samples);
         },
       });
       this.ready = await this.#client.init();
@@ -159,12 +176,67 @@ class SimStore {
     this.sweepRunning = false;
   }
 
+  /**
+   * Start exhaust audio.
+   *
+   * Must be called from a user gesture handler: SPEC section 8 requires an
+   * explicit user action before Web Audio starts, and browsers enforce it.
+   */
+  async enableAudio(): Promise<void> {
+    if (this.audioRunning || this.audioStarting) return;
+    this.audioStarting = true;
+    this.clearError();
+    try {
+      const engine = new AudioEngine((status: AudioStatus) => {
+        this.audioRunning = status.running;
+        this.audioBuffered = status.buffered;
+        this.audioUnderruns = status.underruns;
+        this.audioReceived = status.received;
+        this.audioDeviceRateHz = status.deviceRateHz;
+      });
+      engine.setVolume(this.audioVolume);
+      // The solver's own rate; the worklet resamples from it to the device.
+      const sourceRateHz = this.audioSampleRateHz || 1 / (this.ready?.fixedStepS ?? 0.000025);
+      await engine.start(sourceRateHz);
+      this.#audio = engine;
+      await this.#withClient(async (client) => {
+        await client.setAudio(true);
+      });
+    } catch (error) {
+      this.#fail(error);
+    } finally {
+      this.audioStarting = false;
+    }
+  }
+
+  async disableAudio(): Promise<void> {
+    await this.#withClient(async (client) => {
+      await client.setAudio(false);
+    });
+    await this.#audio?.stop();
+    this.#audio = null;
+    this.audioRunning = false;
+    this.audioBuffered = 0;
+  }
+
+  /** Current output spectrum, for the verification view. Null when silent. */
+  readAudioSpectrum(): { magnitudes: Uint8Array; binHz: number } | null {
+    return this.#audio?.readSpectrum() ?? null;
+  }
+
+  setAudioVolume(volume: number): void {
+    this.audioVolume = volume;
+    this.#audio?.setVolume(volume);
+  }
+
   async resetSimulation(): Promise<void> {
     await this.#withClient(async (client) => {
       await client.run(false);
       await client.reset({ ...DEFAULT_RESET });
       this.controls = { ...DEFAULT_CONTROLS };
       this.running = false;
+      // Buffered samples belong to the run that produced them.
+      this.#audio?.flush();
       this.clearError();
     });
   }
@@ -179,6 +251,8 @@ class SimStore {
   destroy(): void {
     this.#client?.close();
     this.#client = null;
+    void this.#audio?.stop();
+    this.#audio = null;
   }
 }
 

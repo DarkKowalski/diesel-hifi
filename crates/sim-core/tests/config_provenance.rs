@@ -131,11 +131,22 @@ fn values_absent_from_the_manual_are_never_classified_as_published() {
         "governor.overspeed_taper_start_rpm",
         "governor.overspeed_cutoff_rpm",
         "air_path.boost_target_schedule",
-        "air_path.charge_temperature_base_k",
+        "air_path.intercooler_effectiveness",
+        "air_path.exhaust_restriction_pa_per_kg2_s2",
         "injection.soi_schedule",
         "injection.soi_load_retard_rad_per_mg",
         "injection.nozzle_hole_diameter_m",
         "heat_transfer.wall_temperature_k",
+        // The manual describes the turbocharger architecture and the EGR loop in
+        // detail, but supplies no numbers for either beyond the cooler duty.
+        "turbo.turbine_effective_area_m2",
+        "turbo.compressor_efficiency",
+        "turbo.shaft_inertia_kg_m2",
+        "turbo.max_shaft_speed_rad_per_s",
+        "turbo.wastegate_max_area_m2",
+        "egr.rate_schedule",
+        "egr.valve_max_area_m2",
+        "egr.max_rate",
     ] {
         assert_eq!(
             status_of(&config, path),
@@ -143,6 +154,76 @@ fn values_absent_from_the_manual_are_never_classified_as_published() {
             "`{path}` is not published in the manual and must be classified as calibrated"
         );
     }
+}
+
+/// The turbocharger section mentions a pressure of "up to 2.8 bar" applied to
+/// the wastegate vacuum cell. That is the pneumatic pressure operating the
+/// actuator, **not** boost pressure — and it sits close enough to this model's
+/// calibrated peak boost to be mistaken for it. Nothing may claim it.
+#[test]
+fn the_wastegate_actuator_pressure_is_never_mistaken_for_published_boost() {
+    let config = parsed();
+
+    let boost = &config.air_path.boost_target_schedule;
+    assert_eq!(
+        status_of(&config, "air_path.boost_target_schedule"),
+        ProvenanceStatus::Calibrated,
+        "the manual publishes no boost pressure"
+    );
+    for value in &boost.values {
+        assert!(
+            (*value - 280_000.0).abs() > 1.0,
+            "boost setpoint {value} Pa is the wastegate control pressure, not boost"
+        );
+    }
+
+    // And no published entry anywhere may carry that value.
+    for entry in &config.provenance {
+        if entry.status != ProvenanceStatus::Published {
+            continue;
+        }
+        if let Some(value) = config.value_at(&entry.path) {
+            assert!(
+                (value - 280_000.0).abs() > 1.0,
+                "`{}` claims 2.8 bar as published; that figure is the wastegate \
+                 vacuum-cell control pressure, not a boost pressure",
+                entry.path
+            );
+        }
+    }
+}
+
+/// The EGR cooler duty is the one thing this milestone adds that the manual
+/// really does publish, and the effectiveness the solver uses is derived from
+/// it rather than invented alongside it.
+#[test]
+fn the_egr_cooler_temperatures_are_published_and_the_effectiveness_follows_them() {
+    let config = parsed();
+
+    assert_eq!(
+        status_of(&config, "egr.cooler_inlet_temperature_k"),
+        ProvenanceStatus::Published
+    );
+    assert_eq!(
+        status_of(&config, "egr.cooler_outlet_temperature_k"),
+        ProvenanceStatus::Published
+    );
+    assert_eq!(
+        status_of(&config, "egr.cooler_effectiveness"),
+        ProvenanceStatus::Derived
+    );
+
+    // 650 C and 170 C, as printed.
+    assert!((config.egr.cooler_inlet_temperature_k - 923.15).abs() < 1.0e-9);
+    assert!((config.egr.cooler_outlet_temperature_k - 443.15).abs() < 1.0e-9);
+
+    let expected = (config.egr.cooler_inlet_temperature_k - config.egr.cooler_outlet_temperature_k)
+        / (config.egr.cooler_inlet_temperature_k - config.air_path.coolant_temperature_k);
+    assert!(
+        (config.egr.cooler_effectiveness - expected).abs() < 1.0e-6,
+        "effectiveness {} does not follow from the published pair ({expected})",
+        config.egr.cooler_effectiveness
+    );
 }
 
 #[test]

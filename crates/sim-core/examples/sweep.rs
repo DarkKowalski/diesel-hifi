@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_torque_nm: 0.0,
         starter: true,
         ignition: true,
+        egr_enabled: true,
     })?;
     for tick in 0..90 {
         let snapshot = engine.advance(4_000)?;
@@ -29,6 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 load_torque_nm: 0.0,
                 starter: false,
                 ignition: true,
+                egr_enabled: true,
             })?;
         }
         if tick % 15 == 0 || tick == 89 {
@@ -53,8 +55,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         end_rpm: 2000.0,
         step_rpm: 100.0,
         pedal: 1.0,
-        settle_cycles: 60,
+        settle_cycles: 100,
         measure_cycles: 12,
+        egr_enabled: true,
     };
     // Measure point by point so a single envelope breach reports its speed
     // instead of aborting the whole sweep.
@@ -66,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             options.pedal,
             options.settle_cycles,
             options.measure_cycles,
+            options.egr_enabled,
         ) {
             Ok(point) => points.push(point),
             Err(error) => println!("{rpm:6.0} rpm FAILED: {error}"),
@@ -73,30 +77,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!(
-        "{:>6} {:>9} {:>9} {:>8} {:>8} {:>8} {:>8} {:>7} {:>7} {:>5}",
+        "{:>6} {:>9} {:>9} {:>8} {:>8} {:>8} {:>7} {:>6} {:>6} {:>6} {:>6} {:>6} {:>5}",
         "rpm",
         "brake Nm",
         "power kW",
-        "BMEP bar",
         "peak MPa",
         "fuel mg",
         "g/kWh",
         "AFR",
         "boost",
+        "p_exh",
+        "wgate",
+        "EGR%",
+        "krpm_t",
         "conv"
     );
     for p in &points {
         println!(
-            "{:>6.0} {:>9.1} {:>9.1} {:>8.2} {:>8.2} {:>8.1} {:>8.1} {:>7.1} {:>7.2} {:>5}",
+            "{:>6.0} {:>9.1} {:>9.1} {:>8.2} {:>8.1} {:>8.1} {:>7.1} {:>6.2} {:>6.2} {:>6.2} \
+             {:>6.1} {:>6.0} {:>5}",
             p.rpm,
             p.brake_torque_nm,
             p.brake_power_w / 1000.0,
-            p.bmep_pa / 1.0e5,
             p.peak_pressure_pa / 1.0e6,
             p.fuel_mg_per_cycle,
             p.bsfc_g_per_kwh,
             p.air_fuel_ratio,
             p.intake_pressure_pa / 1.0e5,
+            p.exhaust_pressure_pa / 1.0e5,
+            p.wastegate_position,
+            p.egr_rate * 100.0,
+            p.turbo_shaft_rad_per_s * 60.0 / (2.0 * std::f64::consts::PI) / 1000.0,
             p.converged,
         );
     }

@@ -38,6 +38,10 @@ pub struct OperatingPoint {
     pub peak_gas_temperature_k: f64,
     pub air_fuel_ratio: f64,
     pub intake_pressure_pa: f64,
+    pub exhaust_pressure_pa: f64,
+    pub turbo_shaft_rad_per_s: f64,
+    pub wastegate_position: f64,
+    pub egr_rate: f64,
     pub residual_fraction: f64,
     /// Whether the speed controller actually held the target.
     pub converged: bool,
@@ -56,6 +60,16 @@ pub struct SweepOptions {
     pub settle_cycles: u32,
     /// Cycles averaged into the reported figures.
     pub measure_cycles: u32,
+    /// Whether exhaust gas recirculation runs during the sweep.
+    ///
+    /// Defaults on, matching how the real engine is calibrated. Sweeping with it
+    /// off is how the cost of recirculation is measured rather than asserted.
+    #[serde(default = "default_true")]
+    pub egr_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for SweepOptions {
@@ -67,6 +81,7 @@ impl Default for SweepOptions {
             pedal: 1.0,
             settle_cycles: 40,
             measure_cycles: 12,
+            egr_enabled: true,
         }
     }
 }
@@ -131,6 +146,7 @@ pub fn operating_point(
     pedal: f64,
     settle_cycles: u32,
     measure_cycles: u32,
+    egr_enabled: bool,
 ) -> Result<OperatingPoint> {
     if !rpm.is_finite() || rpm <= 0.0 {
         return Err(SimError::invalid_control(
@@ -158,6 +174,7 @@ pub fn operating_point(
         load_torque_nm: 0.0,
         starter: false,
         ignition: true,
+        egr_enabled,
     })?;
 
     let cycle_s = 2.0 * 60.0 / rpm;
@@ -242,6 +259,10 @@ pub fn operating_point(
         peak_gas_temperature_k: peak_temperature,
         air_fuel_ratio,
         intake_pressure_pa: snapshot.intake_pressure_pa,
+        exhaust_pressure_pa: snapshot.exhaust_pressure_pa,
+        turbo_shaft_rad_per_s: snapshot.turbo_shaft_rad_per_s,
+        wastegate_position: snapshot.wastegate_position,
+        egr_rate: snapshot.egr_rate,
         residual_fraction: residual / n,
         converged: spread <= CONVERGENCE_TOLERANCE,
     })
@@ -276,6 +297,7 @@ pub fn sweep(config: &ValidatedConfig, options: SweepOptions) -> Result<Vec<Oper
             options.pedal,
             options.settle_cycles,
             options.measure_cycles,
+            options.egr_enabled,
         )?);
     }
     Ok(points)

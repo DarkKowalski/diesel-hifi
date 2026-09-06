@@ -235,6 +235,15 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         v.exhaust_valve_open_rad > 0.0 && v.exhaust_valve_open_rad < CYCLE_RAD / 2.0,
         "valvetrain.exhaust_valve_open_rad must fall in (0, 2*PI) relative to firing TDC",
     )?;
+    finite_positive(
+        v.exhaust_effective_area_m2,
+        "valvetrain.exhaust_effective_area_m2",
+    )?;
+    require(
+        v.exhaust_ramp_rad > 0.0 && v.exhaust_ramp_rad < CYCLE_RAD / 8.0,
+        "valvetrain.exhaust_ramp_rad must be positive and short compared with the \
+         exhaust window",
+    )?;
 
     let i = &config.injection;
     finite_positive(i.rail_pressure_max_pa, "injection.rail_pressure_max_pa")?;
@@ -249,6 +258,12 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
     finite_positive(i.fuel_density_kg_m3, "injection.fuel_density_kg_m3")?;
     finite_positive(i.max_fuel_mg_per_cycle, "injection.max_fuel_mg_per_cycle")?;
     finite_positive(i.smoke_limit_afr, "injection.smoke_limit_afr")?;
+    finite_positive(i.stoichiometric_afr, "injection.stoichiometric_afr")?;
+    require(
+        i.smoke_limit_afr > i.stoichiometric_afr,
+        "injection.smoke_limit_afr must exceed the stoichiometric ratio; a diesel \
+         smoke-limits well before it runs out of air",
+    )?;
     require(
         i.nozzle_hole_count >= 1,
         "injection.nozzle_hole_count must be at least 1",
@@ -334,30 +349,139 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         a.boost_target_schedule.min_value() >= a.ambient_pressure_pa,
         "air_path.boost_target_schedule must never fall below ambient pressure",
     )?;
+    // Manifold volumes set the stiffness of the filling dynamics. Too small and
+    // the pressure states move faster than the fixed step can follow.
     require(
-        a.boost_response_time_s > 0.0 && a.boost_response_time_s <= 10.0,
-        "air_path.boost_response_time_s must fall in (0, 10] seconds",
-    )?;
-    finite_positive(
-        a.charge_temperature_base_k,
-        "air_path.charge_temperature_base_k",
-    )?;
-    require(
-        a.charge_temperature_per_bar_k >= 0.0,
-        "air_path.charge_temperature_per_bar_k must not be negative",
-    )?;
-    finite_positive(
-        a.exhaust_manifold_pressure_pa,
-        "air_path.exhaust_manifold_pressure_pa",
+        a.intake_manifold_volume_m3 >= 1.0e-3 && a.intake_manifold_volume_m3 <= 1.0,
+        "air_path.intake_manifold_volume_m3 must fall in [1e-3, 1] m^3; smaller volumes \
+         make the filling dynamics too stiff for the fixed step",
     )?;
     require(
-        a.exhaust_pressure_per_bar_boost >= 0.0,
-        "air_path.exhaust_pressure_per_bar_boost must not be negative",
+        a.exhaust_manifold_volume_m3 >= 1.0e-3 && a.exhaust_manifold_volume_m3 <= 1.0,
+        "air_path.exhaust_manifold_volume_m3 must fall in [1e-3, 1] m^3; smaller volumes \
+         make the filling dynamics too stiff for the fixed step",
+    )?;
+    require(
+        a.intercooler_effectiveness >= 0.0 && a.intercooler_effectiveness <= 1.0,
+        "air_path.intercooler_effectiveness must fall in [0, 1]",
+    )?;
+    finite_positive(a.coolant_temperature_k, "air_path.coolant_temperature_k")?;
+    require(
+        a.exhaust_restriction_pa_per_kg2_s2 >= 0.0,
+        "air_path.exhaust_restriction_pa_per_kg2_s2 must not be negative",
     )?;
     finite_positive(a.crankcase_pressure_pa, "air_path.crankcase_pressure_pa")?;
     require(
         a.volumetric_efficiency > 0.0 && a.volumetric_efficiency <= 1.5,
         "air_path.volumetric_efficiency must fall in (0, 1.5]",
+    )?;
+
+    let t = &config.turbo;
+    finite_positive(t.shaft_inertia_kg_m2, "turbo.shaft_inertia_kg_m2")?;
+    finite_positive(
+        t.compressor_wheel_diameter_m,
+        "turbo.compressor_wheel_diameter_m",
+    )?;
+    require(
+        t.compressor_efficiency > 0.0 && t.compressor_efficiency <= 1.0,
+        "turbo.compressor_efficiency must fall in (0, 1]",
+    )?;
+    require(
+        t.turbine_efficiency > 0.0 && t.turbine_efficiency <= 1.0,
+        "turbo.turbine_efficiency must fall in (0, 1]",
+    )?;
+    finite_positive(
+        t.compressor_head_coefficient,
+        "turbo.compressor_head_coefficient",
+    )?;
+    finite_positive(
+        t.compressor_max_flow_kg_s_per_rad_s,
+        "turbo.compressor_max_flow_kg_s_per_rad_s",
+    )?;
+    finite_positive(
+        t.turbine_effective_area_m2,
+        "turbo.turbine_effective_area_m2",
+    )?;
+    require(
+        t.bearing_friction_nm_per_rad_s >= 0.0,
+        "turbo.bearing_friction_nm_per_rad_s must not be negative",
+    )?;
+    finite_positive(
+        t.max_shaft_speed_rad_per_s,
+        "turbo.max_shaft_speed_rad_per_s",
+    )?;
+    finite_positive(t.wastegate_max_area_m2, "turbo.wastegate_max_area_m2")?;
+    require(
+        t.wastegate_p_gain_per_pa >= 0.0 && t.wastegate_i_gain_per_pa_s >= 0.0,
+        "wastegate controller gains must not be negative",
+    )?;
+    finite_positive(t.wastegate_slew_per_s, "turbo.wastegate_slew_per_s")?;
+
+    let e = &config.egr;
+    finite_positive(
+        e.cooler_inlet_temperature_k,
+        "egr.cooler_inlet_temperature_k",
+    )?;
+    require(
+        e.cooler_outlet_temperature_k > 0.0
+            && e.cooler_outlet_temperature_k < e.cooler_inlet_temperature_k,
+        "egr.cooler_outlet_temperature_k must be positive and below the inlet temperature",
+    )?;
+    require(
+        e.cooler_effectiveness >= 0.0 && e.cooler_effectiveness <= 1.0,
+        "egr.cooler_effectiveness must fall in [0, 1]",
+    )?;
+    e.rate_schedule.validate("egr.rate_schedule")?;
+    require(
+        e.rate_schedule.min_value() >= 0.0 && e.rate_schedule.max_value() <= e.max_rate,
+        "egr.rate_schedule values must fall in [0, egr.max_rate]",
+    )?;
+    finite_positive(e.valve_max_area_m2, "egr.valve_max_area_m2")?;
+    require(
+        e.valve_discharge_coefficient > 0.0 && e.valve_discharge_coefficient <= 1.0,
+        "egr.valve_discharge_coefficient must fall in (0, 1]",
+    )?;
+    require(
+        e.rate_p_gain >= 0.0 && e.rate_i_gain_per_s >= 0.0,
+        "EGR rate controller gains must not be negative",
+    )?;
+    // Above roughly half the charge being recirculated the engine cannot burn
+    // cleanly at all; the manual notes soot, CO and HC rise when the exhaust
+    // proportion is too high.
+    require(
+        e.max_rate > 0.0 && e.max_rate <= 0.5,
+        "egr.max_rate must fall in (0, 0.5]",
+    )?;
+
+    // The solver step is checked before audio, because the audio cutoffs are
+    // validated against the sample rate it implies. Reporting "the low-pass is
+    // above Nyquist" when the real fault is an absurd step size would point at
+    // the wrong field.
+    let s = &config.solver;
+    require(
+        s.fixed_step_s > 0.0 && s.fixed_step_s <= 1.0e-3,
+        "solver.fixed_step_s must fall in (0, 1e-3] seconds",
+    )?;
+
+    let au = &config.audio;
+    require(
+        au.exhaust_gain >= 0.0,
+        "audio.exhaust_gain must not be negative",
+    )?;
+    require(
+        au.highpass_cutoff_hz > 0.0 && au.highpass_cutoff_hz < au.lowpass_cutoff_hz,
+        "audio.highpass_cutoff_hz must be positive and below audio.lowpass_cutoff_hz",
+    )?;
+    // Both filters must stay under Nyquist for the solver's own sample rate.
+    require(
+        au.lowpass_cutoff_hz < 0.5 / config.solver.fixed_step_s,
+        "audio.lowpass_cutoff_hz must stay below the Nyquist frequency of the solver step",
+    )?;
+    // The knee is also the ceiling the soft clipper saturates at, so keeping it
+    // at or below unity is what guarantees samples stay inside [-1, 1].
+    require(
+        au.soft_clip_knee > 0.0 && au.soft_clip_knee <= 1.0,
+        "audio.soft_clip_knee must fall in (0, 1]",
     )?;
 
     let gov = &config.governor;
@@ -403,7 +527,7 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         "limits.max_combustion_pressure_pa",
     )?;
     require(
-        lim.max_combustion_pressure_pa > config.air_path.exhaust_manifold_pressure_pa,
+        lim.max_combustion_pressure_pa > config.air_path.ambient_pressure_pa,
         "limits.max_combustion_pressure_pa must exceed the exhaust manifold pressure",
     )?;
     require(

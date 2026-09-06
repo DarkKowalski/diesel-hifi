@@ -17,6 +17,7 @@ fn run_briefly(engine: &mut Engine) {
             load_torque_nm: 0.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
     engine.advance(8_000).expect("advance succeeds");

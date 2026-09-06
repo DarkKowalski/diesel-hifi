@@ -37,6 +37,7 @@ fn a_different_engine_runs_through_the_same_solver() {
             load_torque_nm: 200.0,
             starter: true,
             ignition: true,
+            egr_enabled: true,
         })
         .expect("controls accepted");
 
@@ -71,6 +72,7 @@ fn the_fixture_produces_a_different_result_from_the_om471() {
                 load_torque_nm: 0.0,
                 starter: true,
                 ignition: true,
+                egr_enabled: true,
             })
             .expect("controls accepted");
         let mut snapshot = engine.snapshot();

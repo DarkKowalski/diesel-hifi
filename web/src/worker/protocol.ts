@@ -21,6 +21,14 @@ export interface Controls {
   loadTorqueNm: number;
   starter: boolean;
   ignition: boolean;
+  /**
+   * Exhaust gas recirculation enable.
+   *
+   * Defaults on: the manual states EGR is active across the whole speed range.
+   * Turning it off shows the trade the real calibration makes, since
+   * recirculation costs power and fuel to buy lower NOx.
+   */
+  egrEnabled: boolean;
 }
 
 /** Mirrors `sim_core::ResetOptions` (serialized camelCase). */
@@ -102,7 +110,25 @@ export interface Snapshot {
   intakePressurePa: number;
   intakeTemperatureK: number;
   exhaustPressurePa: number;
+  exhaustTemperatureK: number;
   residualFraction: number;
+
+  /**
+   * Turbocharger and EGR. All computed rather than prescribed: Milestone 2 wrote
+   * manifold pressure from a schedule, Milestone 3 makes it an outcome.
+   */
+  boostPressurePa: number;
+  turboShaftRadPerS: number;
+  wastegatePosition: number;
+  egrRate: number;
+  egrValvePosition: number;
+  intakeBurnedFraction: number;
+  compressorFlowKgPerS: number;
+  turbineFlowKgPerS: number;
+  egrFlowKgPerS: number;
+
+  /** Exhaust level against the configured reference. Samples arrive separately. */
+  audioLevelDb: number;
 
   fault?: SimFault | null;
 }
@@ -124,6 +150,10 @@ export interface OperatingPoint {
   peakGasTemperatureK: number;
   airFuelRatio: number;
   intakePressurePa: number;
+  exhaustPressurePa: number;
+  turboShaftRadPerS: number;
+  wastegatePosition: number;
+  egrRate: number;
   residualFraction: number;
   converged: boolean;
 }
@@ -136,6 +166,8 @@ export interface SweepOptions {
   pedal: number;
   settleCycles: number;
   measureCycles: number;
+  /** Whether EGR runs during the sweep. Off measures what recirculation costs. */
+  egrEnabled: boolean;
 }
 
 /**
@@ -207,7 +239,15 @@ export type ToWorker =
   /** Advance an exact step count with no wall-clock involvement. Deterministic. */
   | { t: 'stepOnce'; rid: number; steps: number }
   /** Run a dynamometer sweep, reporting progress between points. */
-  | { t: 'sweep'; rid: number; options: SweepOptions };
+  | { t: 'sweep'; rid: number; options: SweepOptions }
+  /**
+   * Start or stop producing exhaust audio.
+   *
+   * Draining costs a copy per batch, so it is only done when someone is
+   * listening. The UI enables this from inside the user gesture that starts the
+   * AudioContext.
+   */
+  | { t: 'setAudio'; rid: number; enabled: boolean };
 
 export type FromWorker =
   | {
@@ -226,6 +266,19 @@ export type FromWorker =
   | { t: 'snapshot'; rid: number | null; snapshot: Snapshot }
   | { t: 'sweepProgress'; rid: number; done: number; total: number; rpm: number }
   | { t: 'sweepResult'; rid: number; points: OperatingPoint[]; peaks: SweepPeaks | null }
+  /**
+   * A block of exhaust samples, unsolicited like snapshots.
+   *
+   * `samples` is transferred rather than copied, so the worker must not touch it
+   * afterwards. `sampleRateHz` is the solver's own rate; the consumer resamples.
+   */
+  | {
+      t: 'audio';
+      rid: null;
+      samples: Float32Array;
+      sampleRateHz: number;
+      dropped: number;
+    }
   | { t: 'error'; rid: number | null; code: string; message: string };
 
 // --- Guards -----------------------------------------------------------------
@@ -244,6 +297,7 @@ const TO_WORKER_KINDS = new Set<string>([
   'run',
   'stepOnce',
   'sweep',
+  'setAudio',
 ]);
 
 const FROM_WORKER_KINDS = new Set<string>([
@@ -254,6 +308,7 @@ const FROM_WORKER_KINDS = new Set<string>([
   'snapshot',
   'sweepProgress',
   'sweepResult',
+  'audio',
   'error',
 ]);
 
@@ -270,8 +325,9 @@ export function isFromWorker(value: unknown): value is FromWorker {
   if (!isRecord(value) || typeof value.t !== 'string' || !FROM_WORKER_KINDS.has(value.t)) {
     return false;
   }
-  // Snapshots and worker-initiated errors may arrive without a request id.
-  if (value.t === 'snapshot' || value.t === 'error') {
+  // Snapshots, audio blocks and worker-initiated errors are streams rather than
+  // responses, so they may arrive without a request id.
+  if (value.t === 'snapshot' || value.t === 'audio' || value.t === 'error') {
     return value.rid === null || typeof value.rid === 'number';
   }
   return typeof value.rid === 'number';
@@ -289,6 +345,7 @@ export const DEFAULT_CONTROLS: Controls = {
   loadTorqueNm: 0,
   starter: false,
   ignition: false,
+  egrEnabled: true,
 };
 
 /** A full-load sweep across the usable speed range. */
@@ -297,6 +354,7 @@ export const DEFAULT_SWEEP: SweepOptions = {
   endRpm: 2000,
   stepRpm: 100,
   pedal: 1,
-  settleCycles: 60,
+  settleCycles: 100,
   measureCycles: 12,
+  egrEnabled: true,
 };

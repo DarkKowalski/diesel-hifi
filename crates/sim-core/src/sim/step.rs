@@ -14,12 +14,9 @@ use crate::geometry::SliderCrank;
 use crate::sim::cylinder::{self, Phase};
 use crate::sim::governor::{self, rpm_to_rad_per_s};
 use crate::sim::{
-    gas, heat_release, heat_transfer, ignition_delay, injection, torque, wrap_cycle, SimState,
-    StepReport,
+    acoustics, egr, flow, gas, heat_release, heat_transfer, ignition_delay, injection, manifold,
+    torque, turbo, wrap_cycle, SimState, StepReport,
 };
-
-/// Pascals per bar, used by the boost-referenced calibration coefficients.
-const PA_PER_BAR: f64 = 1.0e5;
 
 pub(super) fn step(
     config: &ValidatedConfig,
@@ -54,28 +51,143 @@ pub(super) fn step(
     );
     state.fuel_demand_mg = demand_mg;
 
-    // --- air path ---
+    // --- air path: turbocharger, EGR, and manifold filling ---
     //
-    // Milestone 2 prescribes charge pressure from a calibrated full-load
-    // schedule scaled by fuelling demand, relaxed through a first-order lag that
-    // stands in for turbocharger inertia. Milestone 3 replaces the source of
-    // these three values with wastegate turbo dynamics; nothing downstream
-    // changes.
+    // Boost is no longer an input. Both manifolds are control volumes whose
+    // pressure is a state integrated from mass flow; the compressor and turbine
+    // trade power through a shaft with inertia; and Milestone 2's boost schedule
+    // has become the setpoint the wastegate controller regulates towards, which
+    // is what the manual describes the MCM doing.
+    //
+    // Making pressure a state is also what removes the algebraic loop between
+    // fuelling and available air that Milestone 2 had to break with a lag.
     let ambient_pa = air.ambient_pressure_pa;
-    let load_fraction = (demand_mg / inj.max_fuel_mg_per_cycle).clamp(0.0, 1.0);
-    let target_pa =
-        ambient_pa + (air.boost_target_schedule.lookup(rpm) - ambient_pa) * load_fraction;
-    state.manifold_pressure_pa +=
-        (target_pa - state.manifold_pressure_pa) * (dt / air.boost_response_time_s);
-    let boost_bar = ((state.manifold_pressure_pa - ambient_pa) / PA_PER_BAR).max(0.0);
-    state.manifold_temperature_k =
-        air.charge_temperature_base_k + air.charge_temperature_per_bar_k * boost_bar;
-    state.exhaust_pressure_pa =
-        air.exhaust_manifold_pressure_pa + air.exhaust_pressure_per_bar_boost * boost_bar;
+    let events_per_s = count as f64 * rpm / 120.0;
+    let fuel_flow_kg_per_s = demand_mg * 1.0e-6 * events_per_s;
 
-    let manifold_pa = state.manifold_pressure_pa;
-    let manifold_k = state.manifold_temperature_k;
-    let exhaust_pa = state.exhaust_pressure_pa;
+    let load_fraction = (demand_mg / inj.max_fuel_mg_per_cycle).clamp(0.0, 1.0);
+    let boost_setpoint_pa =
+        ambient_pa + (air.boost_target_schedule.lookup(rpm) - ambient_pa) * load_fraction;
+
+    let turbo_out = turbo::evaluate(
+        &cfg.turbo,
+        air,
+        gas_props,
+        state.turbo_shaft_rad_per_s,
+        state.intake.pressure_pa,
+        state.exhaust.pressure_pa,
+        state.exhaust.temperature_k,
+        state.wastegate_position,
+    );
+
+    let egr_cooled_k = egr::cooler_outlet_temperature_k(
+        &cfg.egr,
+        state.exhaust.temperature_k,
+        air.coolant_temperature_k,
+    );
+    let egr_flow_kg_per_s = egr::mass_flow_kg_per_s(
+        &cfg.egr,
+        gas_props,
+        state.egr_valve_position,
+        state.exhaust.pressure_pa,
+        egr_cooled_k,
+        state.intake.pressure_pa,
+    );
+
+    let engine_flow_kg_per_s = manifold::engine_flow_kg_per_s(
+        derived.total_displacement_m3,
+        air.volumetric_efficiency,
+        rpm,
+        state.intake.density_kg_per_m3(gas_props),
+    );
+
+    // --- actuators ---
+    state.egr_rate = egr::rate(egr_flow_kg_per_s, turbo_out.compressor_flow_kg_per_s);
+    let egr_target = cfg.egr.rate_schedule.lookup(rpm).min(cfg.egr.max_rate);
+    state.egr_valve_position = egr::update_valve(
+        &cfg.egr,
+        state.egr_valve_position,
+        &mut state.egr_integral,
+        state.egr_rate,
+        egr_target,
+        state.controls.egr_enabled,
+        dt,
+    );
+    state.wastegate_position = turbo::update_wastegate(
+        &cfg.turbo,
+        state.wastegate_position,
+        &mut state.wastegate_integral,
+        state.intake.pressure_pa,
+        boost_setpoint_pa,
+        dt,
+    );
+    state.turbo_shaft_rad_per_s = turbo::advance_shaft(
+        &cfg.turbo,
+        state.turbo_shaft_rad_per_s,
+        turbo_out.shaft_power_balance_w,
+        dt,
+    );
+
+    // --- intake manifold: compressor and EGR in, engine out ---
+    let intake_mass_kg = state
+        .intake
+        .mass_kg(gas_props, air.intake_manifold_volume_m3);
+    state.intake.temperature_k = manifold::mix_temperature(
+        state.intake.temperature_k,
+        turbo_out.charge_temperature_k,
+        turbo_out.compressor_flow_kg_per_s,
+        intake_mass_kg,
+        dt,
+    );
+    state.intake.temperature_k = manifold::mix_temperature(
+        state.intake.temperature_k,
+        egr_cooled_k,
+        egr_flow_kg_per_s,
+        intake_mass_kg,
+        dt,
+    );
+    state.intake.burned_fraction = manifold::mix_burned_fraction(
+        state.intake.burned_fraction,
+        turbo_out.compressor_flow_kg_per_s,
+        egr_flow_kg_per_s * state.exhaust.burned_fraction,
+        intake_mass_kg,
+        dt,
+    );
+    state.intake.pressure_pa = manifold::advance_pressure(
+        gas_props,
+        state.intake.pressure_pa,
+        state.intake.temperature_k,
+        air.intake_manifold_volume_m3,
+        turbo_out.compressor_flow_kg_per_s + egr_flow_kg_per_s - engine_flow_kg_per_s,
+        dt,
+        ambient_pa * 0.5,
+    );
+
+    // --- exhaust manifold: cylinders in, turbine, wastegate and EGR out ---
+    state.exhaust.pressure_pa = manifold::advance_pressure(
+        gas_props,
+        state.exhaust.pressure_pa,
+        state.exhaust.temperature_k,
+        air.exhaust_manifold_volume_m3,
+        engine_flow_kg_per_s + fuel_flow_kg_per_s
+            - turbo_out.turbine_flow_kg_per_s
+            - turbo_out.wastegate_flow_kg_per_s
+            - egr_flow_kg_per_s,
+        dt,
+        ambient_pa * 0.5,
+    );
+
+    state.compressor_flow_kg_per_s = turbo_out.compressor_flow_kg_per_s;
+    state.turbine_flow_kg_per_s = turbo_out.turbine_flow_kg_per_s;
+    state.wastegate_flow_kg_per_s = turbo_out.wastegate_flow_kg_per_s;
+    state.egr_flow_kg_per_s = egr_flow_kg_per_s;
+    state.engine_flow_kg_per_s = engine_flow_kg_per_s;
+
+    let manifold_pa = state.intake.pressure_pa;
+    let manifold_k = state.intake.temperature_k;
+    let manifold_burned = state.intake.burned_fraction;
+    let exhaust_pa = state.exhaust.pressure_pa;
+    let exhaust_k = state.exhaust.temperature_k;
 
     // --- crank angle ---
     let theta_old = state.crank_angle_rad;
@@ -99,6 +211,19 @@ pub(super) fn step(
     let mut step_peak_temperature_k: f64 = 0.0;
     let mut fuel_latched_kg = 0.0;
 
+    let exhaust_port = acoustics::Port {
+        effective_area_m2: valvetrain.exhaust_effective_area_m2,
+        valve_open_rad: valvetrain.exhaust_valve_open_rad,
+        ramp_rad: valvetrain.exhaust_ramp_rad,
+    };
+
+    // Acoustic source, summed across whichever cylinders are blowing down, and
+    // the port-area-weighted temperature of the gas they are handing to the
+    // exhaust manifold.
+    let mut acoustic_source = 0.0;
+    let mut donor_temperature_sum = 0.0;
+    let mut donor_weight = 0.0;
+
     for index in 0..count {
         let mut c = state.cylinders[index];
         let psi_old = cylinder::signed_cycle_angle(theta_old, c.phase_offset_rad);
@@ -114,14 +239,19 @@ pub(super) fn step(
         if phase_new == Phase::Closed && c.phase != Phase::Closed {
             // --- intake valve closing ---
             //
-            // Trap the fresh charge on top of whatever burned gas survived the
-            // exhaust stroke, then schedule this cycle's injection. The smoke
-            // limit sees fresh air only, so residual correctly reduces the
-            // oxygen available.
+            // Trap the charge drawn from the intake manifold on top of whatever
+            // burned gas survived the exhaust stroke, then schedule this cycle's
+            // injection.
+            //
+            // Two things now dilute the oxygen the smoke limit sees: residual
+            // gas left in the clearance volume, and recirculated exhaust already
+            // mixed into the intake manifold. Only the genuinely fresh part of
+            // the charge counts as air.
             let ideal_charge_kg = gas::mass_kg(gas_props, manifold_pa, manifold_k, volume_new_m3)
                 * air.volumetric_efficiency;
             let residual_kg = c.residual_kg.max(0.0);
             let fresh_kg = (ideal_charge_kg - residual_kg).max(0.0);
+            let air_kg = fresh_kg * (1.0 - manifold_burned).clamp(0.0, 1.0);
             let total_kg = residual_kg + fresh_kg;
             let mixed_k = if total_kg > 0.0 {
                 (residual_kg * c.residual_temperature_k + fresh_kg * manifold_k) / total_kg
@@ -130,7 +260,7 @@ pub(super) fn step(
             };
 
             c.mass_kg = total_kg;
-            c.trapped_air_kg = fresh_kg;
+            c.trapped_air_kg = air_kg;
             c.temperature_k = mixed_k;
             c.pressure_pa = gas::pressure_pa(gas_props, total_kg, mixed_k, volume_new_m3);
             c.motored_pressure_pa = c.pressure_pa;
@@ -140,7 +270,7 @@ pub(super) fn step(
             c.profile_ready = false;
             c.profile = heat_release::Profile::NONE;
 
-            let smoke_limit_kg = fresh_kg / inj.smoke_limit_afr;
+            let smoke_limit_kg = air_kg / inj.smoke_limit_afr;
             let fuel_kg = (demand_mg * 1.0e-6).min(smoke_limit_kg).max(0.0);
             c.injection =
                 injection::schedule(inj, fuel_kg, rpm, state.omega_rad_per_s, c.pressure_pa);
@@ -261,9 +391,84 @@ pub(super) fn step(
                     c.burned_fraction = 0.0;
                 }
                 Phase::Exhaust => {
-                    c.pressure_pa = exhaust_pa;
-                    c.mass_kg = gas::mass_kg(gas_props, exhaust_pa, c.temperature_k, volume_new_m3);
-                    c.motored_pressure_pa = exhaust_pa;
+                    // Blowdown through the exhaust port, as real orifice flow.
+                    //
+                    // Milestone 2 clamped the cylinder to the manifold here.
+                    // That is adequate for pumping work, but it makes the
+                    // pressure difference across the port identically zero — and
+                    // that difference *is* the exhaust pulse this milestone has
+                    // to produce. A boundary condition cannot make a sound.
+                    //
+                    // Only the exhaust side gets orifice flow. The intake stays
+                    // a manifold boundary because it sits near equilibrium,
+                    // whereas the exhaust valve opens onto a pressure ratio
+                    // large enough to choke.
+                    let area = exhaust_port.area_m2(psi_new);
+                    let dv = volume_new_m3 - volume_old_m3;
+                    let cv = gas::cv_j_per_kg_k(gas_props, c.temperature_k);
+                    let cp = cv + gas_props.gas_constant_j_per_kg_k;
+
+                    let out_kg = flow::mass_flow_kg_per_s(
+                        gas_props,
+                        area,
+                        c.pressure_pa,
+                        c.temperature_k,
+                        exhaust_pa,
+                    ) * dt;
+                    let in_kg = flow::mass_flow_kg_per_s(
+                        gas_props,
+                        area,
+                        exhaust_pa,
+                        exhaust_k,
+                        c.pressure_pa,
+                    ) * dt;
+
+                    // Never empty more than a fraction of the charge in one
+                    // step; an explicit step cannot follow a faster transfer.
+                    let out_kg = out_kg.min(c.mass_kg * 0.2).max(0.0);
+
+                    // Nor may one step carry the cylinder *past* manifold
+                    // pressure. An explicit step transfers a whole step's worth
+                    // of mass at the rate it saw at the start of the step, so
+                    // near equilibrium it overshoots, the pressure difference
+                    // flips sign, and the next step pushes back. That is a
+                    // two-sample limit cycle — a tone at the Nyquist frequency,
+                    // sitting there for as long as the port is open.
+                    //
+                    // It is inaudible in the pressure trace and obvious in the
+                    // audio, because the radiation derivative amplifies with
+                    // frequency: a stopped engine ends up emitting a steady
+                    // ultrasonic buzz that is the loudest thing left once
+                    // combustion stops.
+                    //
+                    // Flow through an orifice stops when the ends equalise; it
+                    // does not reverse within one step. Clamping the transfer to
+                    // the mass that reaches equilibrium says exactly that.
+                    let equilibrium_kg =
+                        gas::mass_kg(gas_props, exhaust_pa, c.temperature_k, volume_new_m3);
+                    let net_kg = in_kg - out_kg;
+                    let headroom_kg = equilibrium_kg - c.mass_kg;
+                    let settle = if net_kg == 0.0 {
+                        1.0
+                    } else {
+                        (headroom_kg / net_kg).clamp(0.0, 1.0)
+                    };
+                    let out_kg = out_kg * settle;
+                    let in_kg = in_kg * settle;
+
+                    let energy_j = c.mass_kg * cv * c.temperature_k;
+                    let new_mass_kg = (c.mass_kg - out_kg + in_kg).max(1.0e-12);
+                    // Enthalpy leaves with the gas that leaves, and arrives with
+                    // any that flows back; the piston does `p dV` on the rest.
+                    let new_energy_j = energy_j - out_kg * cp * c.temperature_k
+                        + in_kg * cp * exhaust_k
+                        - c.pressure_pa * dv;
+
+                    c.mass_kg = new_mass_kg;
+                    c.temperature_k = (new_energy_j / (new_mass_kg * cv)).max(1.0);
+                    c.pressure_pa =
+                        gas::pressure_pa(gas_props, new_mass_kg, c.temperature_k, volume_new_m3);
+                    c.motored_pressure_pa = c.pressure_pa;
                 }
             }
         }
@@ -307,10 +512,54 @@ pub(super) fn step(
             torque_pumping_nm += contribution;
         }
 
+        // The exhaust pulse is a flow through a port, so it exists only while
+        // that port is open and scales with how far open it is.
+        acoustic_source += acoustics::cylinder_source(
+            phase_new,
+            psi_new,
+            c.pressure_pa,
+            exhaust_pa,
+            ambient_pa,
+            &exhaust_port,
+        );
+        if phase_new == Phase::Exhaust {
+            let weight = exhaust_port.area_m2(psi_new);
+            donor_temperature_sum += weight * c.temperature_k;
+            donor_weight += weight;
+        }
+
         step_peak_pressure_pa = step_peak_pressure_pa.max(c.pressure_pa);
         step_peak_temperature_k = step_peak_temperature_k.max(c.temperature_k);
         state.cylinders[index] = c;
     }
+
+    // --- exhaust manifold thermal state, from the cylinders that just emptied ---
+    if donor_weight > 0.0 {
+        let donor_k = donor_temperature_sum / donor_weight;
+        let exhaust_mass_kg = state
+            .exhaust
+            .mass_kg(gas_props, air.exhaust_manifold_volume_m3);
+        state.exhaust.temperature_k = manifold::mix_temperature(
+            state.exhaust.temperature_k,
+            donor_k,
+            engine_flow_kg_per_s + fuel_flow_kg_per_s,
+            exhaust_mass_kg,
+            dt,
+        );
+    }
+
+    // Burned-gas fraction of the exhaust: the fuel and the air it consumed,
+    // against everything leaving the cylinders. A diesel runs lean, so this
+    // stays well below one and the recirculated gas still carries oxygen.
+    let exhaust_total_flow = engine_flow_kg_per_s + fuel_flow_kg_per_s;
+    if exhaust_total_flow > 0.0 {
+        state.exhaust.burned_fraction = (fuel_flow_kg_per_s * (1.0 + inj.stoichiometric_afr)
+            / exhaust_total_flow)
+            .clamp(0.0, 1.0);
+    }
+
+    // --- exhaust acoustic sample, one per step ---
+    state.acoustics.push(&cfg.audio, acoustic_source, dt);
 
     state.peak_pressure_pa_cycle = state.peak_pressure_pa_cycle.max(step_peak_pressure_pa);
     state.peak_pressure_pa_session = state.peak_pressure_pa_session.max(step_peak_pressure_pa);

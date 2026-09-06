@@ -10,15 +10,20 @@
 //! configuration (which now holds interpolation tables and therefore is not
 //! `Copy`) at the same time as it mutates state.
 
+pub mod acoustics;
 pub mod cylinder;
+pub mod egr;
+pub mod flow;
 pub mod gas;
 pub mod governor;
 pub mod heat_release;
 pub mod heat_transfer;
 pub mod ignition_delay;
 pub mod injection;
+pub mod manifold;
 pub mod step;
 pub mod torque;
+pub mod turbo;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +33,7 @@ use crate::geometry::SliderCrank;
 use crate::rng::Pcg32;
 use crate::snapshot::{RunState, SimFault, Snapshot, SNAPSHOT_VERSION};
 
+use acoustics::Acoustics;
 use cylinder::{CylinderState, Phase};
 use governor::{rad_per_s_to_rpm, rpm_to_rad_per_s, GovernorState};
 
@@ -93,6 +99,18 @@ pub struct Controls {
     pub starter: bool,
     /// Fuelling enable. Clearing it shuts the engine down.
     pub ignition: bool,
+    /// Exhaust gas recirculation enable.
+    ///
+    /// Defaults on, because the manual states EGR is active across the whole
+    /// speed range. Turning it off is a demonstration affordance: it shows the
+    /// trade the real calibration is making, since recirculated exhaust costs
+    /// power and fuel to buy lower NOx.
+    #[serde(default = "default_egr_enabled")]
+    pub egr_enabled: bool,
+}
+
+fn default_egr_enabled() -> bool {
+    true
 }
 
 impl Default for Controls {
@@ -102,7 +120,37 @@ impl Default for Controls {
             load_torque_nm: 0.0,
             starter: false,
             ignition: false,
+            egr_enabled: true,
         }
+    }
+}
+
+/// Intake manifold state for an engine at rest: ambient air, no burned gas.
+fn rest_intake(cfg: &crate::config::EngineConfig) -> manifold::State {
+    manifold::State {
+        pressure_pa: cfg.air_path.ambient_pressure_pa,
+        temperature_k: cfg.air_path.ambient_temperature_k,
+        burned_fraction: 0.0,
+    }
+}
+
+/// Exhaust manifold state for an engine at rest.
+///
+/// Ambient, and holding air rather than exhaust. A stopped engine has nothing
+/// pumping and nothing to hold pressure, so any other starting pressure is not a
+/// state the engine can actually be in: the turbine would immediately dump it
+/// towards ambient, and that dump is a real transient in the acoustic source —
+/// heard as a crack every time the simulation is reset.
+///
+/// The burned-gas fraction is zero for the same reason. An engine that has not
+/// run has air in its exhaust manifold, and starting it at 1.0 would have EGR
+/// recirculating "exhaust" that is really air, wrongly starving the first
+/// cycles of oxygen.
+fn rest_exhaust(cfg: &crate::config::EngineConfig) -> manifold::State {
+    manifold::State {
+        pressure_pa: cfg.air_path.ambient_pressure_pa,
+        temperature_k: cfg.air_path.ambient_temperature_k,
+        burned_fraction: 0.0,
     }
 }
 
@@ -244,10 +292,27 @@ pub struct SimState {
     pub(crate) governor: GovernorState,
     pub(crate) rng: Pcg32,
 
-    /// Charge conditions produced by the boost schedule, updated every step.
-    pub(crate) manifold_pressure_pa: f64,
-    pub(crate) manifold_temperature_k: f64,
-    pub(crate) exhaust_pressure_pa: f64,
+    /// Intake manifold, downstream of the charge-air cooler and the EGR mixer.
+    pub(crate) intake: manifold::State,
+    /// Exhaust manifold, upstream of the turbine and the EGR branch.
+    pub(crate) exhaust: manifold::State,
+
+    pub(crate) turbo_shaft_rad_per_s: f64,
+    pub(crate) wastegate_position: f64,
+    pub(crate) wastegate_integral: f64,
+    pub(crate) egr_valve_position: f64,
+    pub(crate) egr_integral: f64,
+    pub(crate) egr_rate: f64,
+
+    /// Air-path flows from the most recent step, kg/s.
+    pub(crate) compressor_flow_kg_per_s: f64,
+    pub(crate) turbine_flow_kg_per_s: f64,
+    pub(crate) wastegate_flow_kg_per_s: f64,
+    pub(crate) egr_flow_kg_per_s: f64,
+    pub(crate) engine_flow_kg_per_s: f64,
+
+    /// Exhaust acoustic source: filters and the produced-sample ring buffer.
+    pub(crate) acoustics: Acoustics,
 
     pub(crate) fuel_demand_mg: f64,
     pub(crate) last_fuel_charge_mg: f64,
@@ -291,9 +356,20 @@ impl Simulation {
             controls: Controls::default(),
             governor: GovernorState::default(),
             rng: Pcg32::seed_from(options.seed),
-            manifold_pressure_pa: config.config().air_path.ambient_pressure_pa,
-            manifold_temperature_k: config.config().air_path.charge_temperature_base_k,
-            exhaust_pressure_pa: config.config().air_path.exhaust_manifold_pressure_pa,
+            intake: rest_intake(config.config()),
+            exhaust: rest_exhaust(config.config()),
+            turbo_shaft_rad_per_s: 0.0,
+            wastegate_position: 0.0,
+            wastegate_integral: 0.0,
+            egr_valve_position: 0.0,
+            egr_integral: 0.0,
+            egr_rate: 0.0,
+            compressor_flow_kg_per_s: 0.0,
+            turbine_flow_kg_per_s: 0.0,
+            wastegate_flow_kg_per_s: 0.0,
+            egr_flow_kg_per_s: 0.0,
+            engine_flow_kg_per_s: 0.0,
+            acoustics: Acoustics::new(config.config().solver.max_steps_per_batch as usize),
             fuel_demand_mg: 0.0,
             last_fuel_charge_mg: 0.0,
             last_variant: injection::Variant::Standard,
@@ -349,9 +425,22 @@ impl Simulation {
         state.controls = Controls::default();
         state.governor.reset();
         state.rng = Pcg32::seed_from(options.seed);
-        state.manifold_pressure_pa = cfg.air_path.ambient_pressure_pa;
-        state.manifold_temperature_k = cfg.air_path.charge_temperature_base_k;
-        state.exhaust_pressure_pa = cfg.air_path.exhaust_manifold_pressure_pa;
+        // A reset engine is a cold one: manifolds at rest, turbo stopped, both
+        // actuators shut and their integrators released.
+        state.intake = rest_intake(cfg);
+        state.exhaust = rest_exhaust(cfg);
+        state.turbo_shaft_rad_per_s = 0.0;
+        state.wastegate_position = 0.0;
+        state.wastegate_integral = 0.0;
+        state.egr_valve_position = 0.0;
+        state.egr_integral = 0.0;
+        state.egr_rate = 0.0;
+        state.compressor_flow_kg_per_s = 0.0;
+        state.turbine_flow_kg_per_s = 0.0;
+        state.wastegate_flow_kg_per_s = 0.0;
+        state.egr_flow_kg_per_s = 0.0;
+        state.engine_flow_kg_per_s = 0.0;
+        state.acoustics.reset();
         state.fuel_demand_mg = 0.0;
         state.last_fuel_charge_mg = 0.0;
         state.last_variant = injection::Variant::Standard;
@@ -368,8 +457,8 @@ impl Simulation {
         state.fault = None;
         state.cylinder_count = cfg.geometry.cylinders;
 
-        let pressure = state.manifold_pressure_pa;
-        let temperature = state.manifold_temperature_k;
+        let pressure = state.intake.pressure_pa;
+        let temperature = state.intake.temperature_k;
 
         for index in 0..MAX_CYLINDERS {
             let offset = derived.phase_offsets_rad.get(index).copied().unwrap_or(0.0);
@@ -470,6 +559,42 @@ impl Simulation {
     /// Engine speed in rpm.
     pub fn rpm(&self) -> f64 {
         rad_per_s_to_rpm(self.state.omega_rad_per_s)
+    }
+
+    /// Sample rate of the exhaust audio, in hertz.
+    ///
+    /// One sample per solver step, so this is just the reciprocal of the fixed
+    /// step: 40 kHz at 25 us. Consumers resample from here to whatever rate
+    /// their audio device runs at.
+    pub fn audio_sample_rate_hz(&self) -> f64 {
+        1.0 / self.config.config().solver.fixed_step_s
+    }
+
+    /// Copy produced audio samples into `out`, returning how many were written.
+    ///
+    /// Samples are produced one per step regardless of whether anyone drains
+    /// them; a caller that never drains simply loses the oldest. Draining once
+    /// per batch, which is how the worker uses this, never loses any because the
+    /// buffer is sized for a whole batch.
+    pub fn drain_audio(&mut self, out: &mut [f32]) -> usize {
+        self.state.acoustics.drain(out)
+    }
+
+    /// Samples waiting to be drained.
+    pub fn audio_available(&self) -> usize {
+        self.state.acoustics.available()
+    }
+
+    /// Samples lost because the consumer fell behind since the last reset.
+    pub fn audio_dropped(&self) -> u64 {
+        self.state.acoustics.dropped()
+    }
+
+    /// Exhaust level in decibels, relative to the configured reference.
+    pub fn audio_level_db(&self) -> f64 {
+        self.state
+            .acoustics
+            .level_db(self.config.config().audio.reference_spl_db)
     }
 
     /// Cycle-averaged results of the most recently completed cycle.
@@ -575,10 +700,25 @@ impl Simulation {
             ignition_delay_rad: state.last_ignition_delay_rad,
             premixed_fraction: state.last_premixed_fraction,
 
-            intake_pressure_pa: state.manifold_pressure_pa,
-            intake_temperature_k: state.manifold_temperature_k,
-            exhaust_pressure_pa: state.exhaust_pressure_pa,
+            intake_pressure_pa: state.intake.pressure_pa,
+            intake_temperature_k: state.intake.temperature_k,
+            exhaust_pressure_pa: state.exhaust.pressure_pa,
+            exhaust_temperature_k: state.exhaust.temperature_k,
             residual_fraction: self.residual_fraction(),
+
+            boost_pressure_pa: (state.intake.pressure_pa
+                - self.config.config().air_path.ambient_pressure_pa)
+                .max(0.0),
+            turbo_shaft_rad_per_s: state.turbo_shaft_rad_per_s,
+            wastegate_position: state.wastegate_position,
+            egr_rate: state.egr_rate,
+            egr_valve_position: state.egr_valve_position,
+            intake_burned_fraction: state.intake.burned_fraction,
+            compressor_flow_kg_per_s: state.compressor_flow_kg_per_s,
+            turbine_flow_kg_per_s: state.turbine_flow_kg_per_s,
+            egr_flow_kg_per_s: state.egr_flow_kg_per_s,
+
+            audio_level_db: self.audio_level_db(),
 
             fault: state.fault.as_ref().map(SimFault::from),
         }

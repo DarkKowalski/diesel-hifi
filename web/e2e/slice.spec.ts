@@ -42,6 +42,23 @@ async function rpm(page: Page): Promise<number> {
   return numeric(page, 'rpm');
 }
 
+/**
+ * Bring a running engine up to a loaded working point.
+ *
+ * The load is ramped rather than dropped on all at once. Boost is no longer
+ * prescribed from a schedule — it has to be earned from exhaust energy — so an
+ * idling engine buried under full load simply stalls, and a stalled engine makes
+ * no boost. A real truck pulls away the same way.
+ */
+async function pullAway(page: Page): Promise<void> {
+  await page.getByTestId('pedal').fill('90');
+  await page.getByTestId('load').fill('500');
+  await expect
+    .poll(() => rpm(page), { timeout: 30_000, message: 'the engine should pick up speed' })
+    .toBeGreaterThan(1_100);
+  await page.getByTestId('load').fill('1800');
+}
+
 test('the worker boots and the selector is populated from the real catalog API', async ({
   page,
 }) => {
@@ -56,7 +73,7 @@ test('the worker boots and the selector is populated from the real catalog API',
   await expect(page.getByTestId('disclaimer')).not.toBeEmpty();
 
   // Versions come from the WASM module, so a boot means WASM really loaded.
-  await expect(page.getByTestId('status-bar')).toContainText('api v2');
+  await expect(page.getByTestId('status-bar')).toContainText('api v3');
   await expect(page.getByTestId('status-bar')).toContainText('Web Worker');
 });
 
@@ -176,12 +193,11 @@ test('cycle-averaged torque and power appear once the engine runs', async ({ pag
   // Milestone 2 combustion telemetry: the published APCRS variant is reported.
   await expect(page.getByTestId('variant')).toHaveText(/standard|amplified/);
 
-  // Load the engine so the boost schedule actually spools.
-  await page.getByTestId('pedal').fill('90');
-  await page.getByTestId('load').fill('1500');
+  // Load the engine so the turbocharger actually spools.
+  await pullAway(page);
   await expect
     .poll(() => numeric(page, 'intake-pressure'), {
-      timeout: 25_000,
+      timeout: 30_000,
       message: 'charge pressure should rise above ambient under load',
     })
     .toBeGreaterThan(1.1);
@@ -217,4 +233,136 @@ test('the dynamometer sweep renders a calibrated curve', async ({ page }) => {
   await page.getByRole('button', { name: 'Show table' }).click();
   await expect(page.getByTestId('sweep-table')).toBeVisible();
   expect(await page.getByTestId('sweep-table').locator('tbody tr').count()).toBeGreaterThan(9);
+});
+
+test('the air path is computed rather than prescribed', async ({ page }) => {
+  await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+
+  // Load it so the turbo has exhaust energy to work with.
+  await pullAway(page);
+
+  // Boost is the output of a compressor on a shaft with inertia, so the shaft
+  // must actually be turning for boost to exist.
+  await expect
+    .poll(() => numeric(page, 'turbo-shaft'), {
+      timeout: 30_000,
+      message: 'the turbo shaft should spin up under load',
+    })
+    .toBeGreaterThan(10);
+  await expect
+    .poll(() => numeric(page, 'boost'), { timeout: 30_000 })
+    .toBeGreaterThan(0.3);
+
+  // Exhaust manifold pressure is a state too, not a fixed boundary condition.
+  await expect.poll(() => numeric(page, 'exhaust-pressure')).toBeGreaterThan(1.1);
+});
+
+test('switching EGR off changes what reaches the cylinders', async ({ page }) => {
+  await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+
+  await pullAway(page);
+
+  const toggle = page.getByTestId('egr-toggle');
+  await expect(toggle).toBeChecked();
+
+  // Recirculation dilutes the intake charge, which is what the smoke limit sees.
+  await expect
+    .poll(() => numeric(page, 'intake-burned'), {
+      timeout: 30_000,
+      message: 'recirculated exhaust should show up in the intake',
+    })
+    .toBeGreaterThan(0.5);
+
+  await toggle.uncheck();
+
+  // With the valve shut the loop stops and the intake cleans up.
+  await expect
+    .poll(() => numeric(page, 'egr-valve'), { timeout: 20_000 })
+    .toBe(0);
+  await expect
+    .poll(() => numeric(page, 'intake-burned'), { timeout: 30_000 })
+    .toBeLessThan(0.5);
+});
+
+test('sound starts only from an explicit action and then really plays', async ({ page }) => {
+  await bootstrap(page);
+
+  // SPEC section 8: nothing audio-related exists before the user asks for it.
+  await expect(page.getByTestId('audio-status')).toHaveCount(0);
+  await expect(
+    page.evaluate(() => (window as unknown as { AudioContext?: unknown }).AudioContext !== undefined),
+  ).resolves.toBe(true);
+
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+
+  await page.getByTestId('enable-audio').click();
+  await expect(page.getByTestId('audio-status')).toBeVisible({ timeout: 20_000 });
+
+  // The solver produces at its own fixed-step rate; the worklet resamples.
+  await expect(page.getByTestId('audio-source-rate')).toHaveText('40.0 kHz');
+  await expect
+    .poll(() => numeric(page, 'audio-device-rate'), { timeout: 10_000 })
+    .toBeGreaterThan(0);
+
+  // Samples must actually reach the worklet, which is what proves the whole
+  // chain works: solver -> worker -> main thread -> AudioWorklet.
+  await expect
+    .poll(() => numeric(page, 'audio-received'), {
+      timeout: 30_000,
+      message: 'the worklet should be receiving exhaust samples',
+    })
+    .toBeGreaterThan(10_000);
+
+  await page.getByTestId('disable-audio').click();
+  await expect(page.getByTestId('enable-audio')).toBeVisible();
+});
+
+test('the exhaust output has energy where a speaker can reproduce it', async ({ page }) => {
+  await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+
+  await page.getByTestId('enable-audio').click();
+  await expect(page.getByTestId('spectrum')).toBeVisible({ timeout: 20_000 });
+
+  await pullAway(page);
+  await page.waitForTimeout(2_000);
+
+  // Bars are drawn from the analyser on the *output* path, so a bar with height
+  // is energy actually being played.
+  //
+  // This is the assertion that a "finite, bounded, correct fundamental" test
+  // suite cannot make. The signal can pass every one of those and still be
+  // silent in practice, because all of its energy sits below roughly 150 Hz
+  // where ordinary speakers reproduce nothing. Here that shows up as bars only
+  // at the far left, and this fails.
+  const heights = await page
+    .getByTestId('spectrum')
+    .locator('rect.bar')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => Number.parseFloat(node.getAttribute('height') ?? '0')),
+    );
+
+  expect(heights.length).toBeGreaterThan(16);
+  const tallest = Math.max(...heights);
+  expect(tallest, 'the spectrum should show real output').toBeGreaterThan(1);
+
+  // The axis is logarithmic from 20 Hz to 20 kHz across 64 buckets, so the
+  // bucket for a frequency f is floor(log10(f/20) / log10(1000) * 64).
+  const bucketOf = (hz: number) =>
+    Math.floor((Math.log10(hz / 20) / Math.log10(20_000 / 20)) * heights.length);
+
+  const audible = heights
+    .slice(bucketOf(150), bucketOf(4_000))
+    .reduce((max, h) => Math.max(max, h), 0);
+
+  expect(
+    audible,
+    'most of the exhaust energy must sit above 150 Hz, or nothing will be heard',
+  ).toBeGreaterThan(tallest * 0.25);
 });
