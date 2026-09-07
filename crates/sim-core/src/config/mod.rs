@@ -610,8 +610,17 @@ pub struct AudioCalibration {
     pub exhaust_gain: f64,
     /// Rumble filter below the audible band, protecting output headroom.
     pub highpass_cutoff_hz: f64,
-    /// Soft-clip knee keeping samples inside [-1, 1] without hard clipping.
+    /// Ceiling the limiter holds the summed mix to, inside [-1, 1].
     pub soft_clip_knee: f64,
+    /// Time constant the limiter's gain recovers towards unity with.
+    ///
+    /// Attack is instantaneous and needs no parameter: the gain drops to exactly
+    /// what the ceiling requires on the sample that requires it, which is what
+    /// bounds the output without lookahead. Release is the only choice, and it
+    /// has to be long compared with a firing period — a follower that recovers
+    /// between combustion events scales each pulse differently, which is the
+    /// waveshaping the level follower exists to stop doing.
+    pub limiter_release_s: f64,
     /// Level of the structural path against the exhaust path.
     pub structural_gain: f64,
     /// Modal bank the cylinder-pressure rise rings.
@@ -866,6 +875,7 @@ impl EngineConfig {
             "audio.exhaust_gain" => self.audio.exhaust_gain,
             "audio.highpass_cutoff_hz" => self.audio.highpass_cutoff_hz,
             "audio.soft_clip_knee" => self.audio.soft_clip_knee,
+            "audio.limiter_release_s" => self.audio.limiter_release_s,
             "audio.structural_gain" => self.audio.structural_gain,
             "audio.structural_modes" => return None,
             "audio.body_gain" => self.audio.body_gain,

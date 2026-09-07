@@ -633,11 +633,20 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         "audio.highpass_cutoff_hz must be positive and below the Nyquist frequency of the \
          solver step",
     )?;
-    // The knee is also the ceiling the soft clipper saturates at, so keeping it
-    // at or below unity is what guarantees samples stay inside [-1, 1].
+    // The knee is the ceiling the limiter holds the mix to, so keeping it at or
+    // below unity is what guarantees samples stay inside [-1, 1].
     require(
         au.soft_clip_knee > 0.0 && au.soft_clip_knee <= 1.0,
         "audio.soft_clip_knee must fall in (0, 1]",
+    )?;
+    // The release has to outlast a firing period or the follower tracks the
+    // pulse train instead of the passage, which is the waveshaping it replaced.
+    // The slowest firing rate that matters is idle's, around 28 Hz for a six at
+    // 560 rpm, so a period is about 36 ms; ten seconds is past the point where a
+    // gain reduction is a fault report rather than a limiter.
+    require(
+        au.limiter_release_s.is_finite() && (0.05..=10.0).contains(&au.limiter_release_s),
+        "audio.limiter_release_s must be finite and fall in [0.05, 10] seconds",
     )?;
     require(
         au.structural_gain.is_finite() && au.structural_gain >= 0.0,

@@ -554,14 +554,32 @@ fn a_stopped_engine_emits_no_high_frequency_hiss() {
     );
 }
 
-/// Idle must be audible and full load must not be at the ceiling: the usable
-/// range has to sit between the two.
+/// Idle must be audible, and the loud end must reach the ceiling without being
+/// squared off against it.
+///
+/// **The criterion changed with the mechanism, and this records why.** It used to
+/// require full load to sit at 99% of the knee or below, on the grounds that the
+/// start transient is louder than full load and needed room underneath the
+/// ceiling to arrive in. That was a true statement about a *static* gain feeding
+/// a memoryless soft clipper: nothing else stopped the transient flat-topping, so
+/// unused headroom was the only defence, and the cost was that every loud passage
+/// was reshaped rather than turned down.
+///
+/// The limiter now follows the level, so the ceiling is reached by reducing gain
+/// and the transient needs no room reserved for it. Full load reaching the knee
+/// is therefore expected rather than a defect — and the question the old
+/// threshold was really asking, *is the loud end squared off*, is not answered by
+/// how close the peak is to the ceiling at all. It is answered by crest factor,
+/// which is what this asserts instead: a peak sitting exactly on the knee with 13
+/// dB of crest is a pulse train that has been turned down, and the same peak with
+/// 3 dB of crest is a buzz. The old form could not tell those apart, and the
+/// mechanism it was written for produced the second one.
 #[test]
-fn the_output_keeps_headroom_across_the_operating_range() {
+fn the_output_reaches_the_ceiling_without_being_squared_off() {
     let config = config();
     let knee = config.config().audio.soft_clip_knee as f32;
 
-    let peak_at = |rpm: f64, pedal: f64| {
+    let measure_at = |rpm: f64, pedal: f64| {
         let mut sim = Simulation::new(
             config.clone(),
             ResetOptions {
@@ -579,27 +597,42 @@ fn the_output_keeps_headroom_across_the_operating_range() {
             sim.pin_speed_rpm(rpm).expect("pin");
             discard_audio(&mut sim, 100);
         }
-        let mut peak = 0.0f32;
+        let mut out: Vec<f32> = Vec::new();
         for _ in 0..400 {
             sim.advance(100).expect("advance");
             sim.pin_speed_rpm(rpm).expect("pin");
-            let block = drain_summed(&mut sim, 100);
-            peak = peak.max(block.iter().fold(0.0f32, |m, s| m.max(s.abs())));
+            out.extend(drain_summed(&mut sim, 100));
         }
-        peak
+        let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        (peak, crest_db(&out))
     };
 
-    let idle = peak_at(600.0, 0.15);
-    let full = peak_at(1_400.0, 1.0);
+    let (idle, idle_crest) = measure_at(600.0, 0.15);
+    let (full, full_crest) = measure_at(1_400.0, 1.0);
 
     assert!(
         idle > 0.01,
         "idle at {idle} is too quiet to hear once a device volume is applied"
     );
     assert!(
-        full < knee * 0.99,
-        "full load at {full} is against the {knee} ceiling, leaving no headroom \
-         for the louder start transient"
+        full <= knee * 1.000_01,
+        "full load at {full} is past the {knee} ceiling the limiter is meant to \
+         hold it to"
+    );
+    // The acceptance figure for a train of distinct combustion events. A steady
+    // tone is 3 dB and the memoryless clipper this replaced pulled full load down
+    // to 10.4 dB while it was pinning the peak just under the knee, so this is
+    // the assertion that would have caught it.
+    assert!(
+        full_crest > 9.0,
+        "full load peaks at {full} with only {full_crest:.1} dB of crest: the \
+         loud end is being squared off against the ceiling rather than turned \
+         down to it"
+    );
+    assert!(
+        idle_crest > 9.0,
+        "idle has only {idle_crest:.1} dB of crest, which is a hum rather than \
+         an idling diesel"
     );
     assert!(full > idle * 2.0, "the range should have real dynamics");
 }

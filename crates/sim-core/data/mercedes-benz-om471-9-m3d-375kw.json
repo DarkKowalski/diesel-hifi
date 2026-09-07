@@ -269,6 +269,7 @@
     "exhaust_gain": 9.5,
     "highpass_cutoff_hz": 20.0,
     "soft_clip_knee": 0.85,
+    "limiter_release_s": 0.3,
     "structural_gain": 0.4,
     "structural_modes": [
       {
@@ -1712,10 +1713,20 @@
       "path": "audio.soft_clip_knee",
       "status": "calibrated",
       "value_note": "0.85. The source manual does not publish this.",
-      "purpose": "Saturation ceiling of the soft clipper, which is what guarantees samples stay inside [-1, 1] without hard clipping.",
+      "purpose": "Ceiling the limiter holds the summed mix to, which is what guarantees samples stay inside [-1, 1] without hard clipping. The limiter reaches it by reducing gain rather than by reshaping the sample, so a signal held here keeps its pulse shape; the remaining headroom to full scale is a smooth shoulder that only an overshoot can reach.",
       "safe_range": [
         0.1,
         1.0
+      ]
+    },
+    {
+      "path": "audio.limiter_release_s",
+      "status": "calibrated",
+      "value_note": "0.3 s. Chosen as a multiple of a firing period rather than by ear: the fastest firing rate in the range is 90 Hz at 1800 rpm and the slowest that limits at all is 65 Hz under brake, so 0.3 s is twenty periods and the gain recovers by about 5% between combustion events. Shorter and the follower starts tracking individual pulses, which is the per-sample waveshaping it was introduced to stop; much longer and a single loud transient ducks the engine for a second afterwards. The source manual does not publish this.",
+      "purpose": "Time constant the limiter's gain recovers towards unity with. There is no matching attack parameter because attack is instantaneous: the gain drops to exactly what the ceiling requires on the sample that requires it, which is what bounds the output with no lookahead and no latency. Release is therefore the only choice, and it has to be long compared with a firing period, because a follower quick enough to recover between combustion events scales each pulse by a different amount and deforms the pulse train it is meant to be passing.",
+      "safe_range": [
+        0.05,
+        10.0
       ]
     },
     {

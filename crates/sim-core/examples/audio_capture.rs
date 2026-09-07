@@ -23,13 +23,21 @@
 //! | `mix.wav` | the three paths added up: the raw listening stage |
 //! | `exhaust.wav`, `block.wav`, `body.wav` | each radiating path on its own |
 //! | `*-unsaturated.wav` | the same paths with the limiter's gain divided out |
+//! | `mix-unsaturated.wav` | those paths summed: the mix before the limiter |
 //! | `manifest.json` (at the root) | conditions, and every metric, for every run |
 //!
 //! The unsaturated set is written only for scenarios where the limiter actually
-//! engaged, and the manifest says how far it engaged. It exists because a pulse
-//! shape is the timbre and a limiter changes pulse shapes: comparing sources
-//! through a stage that is squashing them differently in the two runs compares
-//! the squashing.
+//! engaged, and the manifest says how far it engaged and what it cost. It exists
+//! because a pulse shape is the timbre: comparing sources through a stage that is
+//! reducing them differently in the two runs compares the stage.
+//!
+//! **The pair is also how the limiter itself is measured.** How far the gain
+//! fell says nothing about whether the waveform survived — a slow gain is a
+//! level change and a per-sample one is a waveshaper, and both report the same
+//! minimum. The crest factor of the two mixes is the difference. That comparison
+//! is what found the memoryless soft clipper this stage replaced: it was costing
+//! `brake-1300` 5.5 dB of crest, which was the whole of that scenario's
+//! acceptance failure.
 //!
 //! **There is no cockpit-stage file.** The cab is a Web Audio graph in
 //! `web/src/lib/cabin.ts`, and reimplementing it here to export it would be a
@@ -49,9 +57,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use sim_core::analysis::{
-    crest_db, dbfs, firing_hz, modulation_depth, peak, rms, saturation_gain, Spectrum,
-};
+use sim_core::analysis::{crest_db, dbfs, firing_hz, modulation_depth, peak, rms, Spectrum};
 use sim_core::catalog::OM471_9_M3D_JSON;
 use sim_core::scenario::{self, Scenario, ScenarioRun};
 use sim_core::{EngineConfig, ValidatedConfig};
@@ -147,26 +153,54 @@ fn round(value: f64, places: u32) -> f64 {
     (value * scale).round() / scale
 }
 
+/// What the limiter did to a run, and the signal it did it to.
+struct Unsaturated {
+    /// Each radiating path with the limiter's common gain divided back out.
+    tracks: Vec<Vec<f32>>,
+    /// Those paths summed: the mix as the solver produced it, pre-limiter.
+    mix: Vec<f32>,
+    /// The smallest gain seen. 1.0 means the limiter never engaged.
+    smallest_gain: f64,
+}
+
 /// Divide the limiter's common gain back out of every path.
 ///
-/// The clipper acts on the mix and is applied to the three paths as one gain, so
-/// the mix — which is what was emitted — is enough to recover it. See
-/// [`sim_core::analysis::saturation_gain`].
+/// The limiter decides one gain from the mix and applies it to all three paths,
+/// so dividing each sample by the gain its frame carries recovers exactly what
+/// the solver produced before the limiter engaged. The gains come from the run
+/// rather than from arithmetic on the output: the follower has a release time,
+/// so its gain depends on the whole passage and not on the sample it scaled.
 ///
-/// Returns the recovered tracks and the smallest gain seen, which is how far the
-/// limiter engaged: 1.0 means it never did.
-fn unsaturate(run: &ScenarioRun, knee: f64) -> (Vec<Vec<f32>>, f64) {
-    let mut tracks = vec![Vec::with_capacity(run.frame_count()); run.paths];
+/// The recovered mix is returned as well as the recovered paths, because *how
+/// far* the limiter engaged does not say what it cost. A gain of 0.247 that
+/// moves slowly is a level reduction and preserves the waveform; the same figure
+/// applied per sample is a waveshaper. The difference shows up as crest factor,
+/// and only measuring both signals tells them apart.
+fn unsaturate(run: &ScenarioRun) -> Unsaturated {
+    let frames = run.frame_count();
+    let mut tracks = vec![Vec::with_capacity(frames); run.paths];
+    let mut mix = Vec::with_capacity(frames);
     let mut smallest = 1.0f64;
-    for frame in run.frames.chunks(run.paths) {
-        let sum: f64 = frame.iter().map(|s| f64::from(*s)).sum();
-        let gain = saturation_gain(sum, knee);
+    for (index, frame) in run.frames.chunks(run.paths).enumerate() {
+        let gain = run
+            .limiter_gains
+            .get(index)
+            .map_or(1.0, |g| f64::from(*g))
+            .max(1e-9);
         smallest = smallest.min(gain);
+        let mut recovered_sum = 0.0f64;
         for (path, sample) in frame.iter().enumerate() {
-            tracks[path].push((f64::from(*sample) / gain.max(1e-9)) as f32);
+            let value = f64::from(*sample) / gain;
+            recovered_sum += value;
+            tracks[path].push(value as f32);
         }
+        mix.push(recovered_sum as f32);
     }
-    (tracks, smallest)
+    Unsaturated {
+        tracks,
+        mix,
+        smallest_gain: smallest,
+    }
 }
 
 fn capture(
@@ -207,16 +241,19 @@ fn capture(
     // Only when the limiter actually did something. A set of files identical to
     // the ones beside them is a set of files someone will later compare and draw
     // a conclusion from.
-    let (recovered, smallest_gain) = unsaturate(&run, knee);
+    let recovered = unsaturate(&run);
+    let smallest_gain = recovered.smallest_gain;
     let saturated = smallest_gain < 0.999;
     if saturated {
         for (index, name) in PATH_NAMES.iter().enumerate().take(run.paths) {
             write_wav(
                 &dir.join(format!("{name}-unsaturated.wav")),
-                &recovered[index],
+                &recovered.tracks[index],
                 rate,
             )?;
         }
+        write_wav(&dir.join("mix-unsaturated.wav"), &recovered.mix, rate)?;
+        tracks.insert("mix-unsaturated".into(), measure(&recovered.mix, rate, f0));
     }
 
     let phases: Vec<serde_json::Value> = run
@@ -258,7 +295,10 @@ fn capture(
         dbfs(rms(&mix)),
         crest_db(&mix),
         if saturated {
-            format!("  limiter to {smallest_gain:.3}")
+            format!(
+                "  limiter to {smallest_gain:.3}, crest was {:.1} dB",
+                crest_db(&recovered.mix)
+            )
         } else {
             String::new()
         }

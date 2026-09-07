@@ -1,10 +1,13 @@
 # OM 471 Sound Improvement Plan
 
-Status: phases 1-3 delivered 2026-09-07 as milestone 8; phases 4-7 remain
-proposed. Delivered behaviour, the measurements it produced and the deficits it
-exposed are recorded in `README.md`, which stays the specification. Phase 4 is
-now selectable from measured deficits rather than from guesswork; see
-**Results → Sound → Known deficits** there.
+Status: phases 1-3 delivered 2026-09-07 as milestone 8. The first item of phase 5
+— the shared saturation stage — delivered 2026-09-07 as milestone 9, ahead of
+phase 4, because the measurements said the listening stage was flattening the
+pulses the source already produced. Phases 4, 6 and 7 remain proposed.
+
+Delivered behaviour, the measurements it produced and the deficits it exposed are
+recorded in `README.md`, which stays the specification. See
+**Results → Sound → Known deficits** there for what is open.
 
 ## Objective
 
@@ -182,6 +185,20 @@ audible without relying on additional background noise.
 
 ### 5. Calibrate the Driver-Seat Transfer
 
+**The saturation review is done; the rest of this phase is not.** The shared
+stage was a memoryless soft clipper, which is a waveshaper: it cost every fuelled
+point above idle 1 to 3.4 dB of crest factor and the engine brake 5.5 dB, which
+was that scenario's entire acceptance failure. It is now a level follower with an
+instantaneous attack, a calibrated release and a ceiling that is transparent below
+its knee, and the solver reports the gain each frame carried so a capture can
+recover the pre-limiter mix exactly. Headroom at the final output is measured and
+recorded. Source contributions were already identifiable; no channel changed, so
+no descriptor, adapter, protocol, worklet or routing change was needed.
+
+What remains here is the transfer itself: source-to-ear balance, filtering,
+delays, cabin response, panel radiation against tactile vibration, and the
+cockpit compressor's interaction with the paths.
+
 Tune source-to-ear balance, filtering, delays and cabin response using individually
 inspectable sources. Represent mount-driven panel radiation and cabin modes;
 separate optional speaker compensation from the vehicle response. Keep raw output
@@ -255,6 +272,25 @@ Two items of the package were **not** delivered and are carried forward:
 
 Phase 4 experiments can now be selected from measured deficits rather than
 guessed at. Phases 4 and 5 can iterate together; phase 6 remains conditional.
+
+## Second Implementation Package
+
+The saturation stage, delivered as milestone 9. Taken before phase 4 on the
+evidence rather than in plan order: three of the four milestone 8 deficits turned
+out to be one defect in the listening stage, and source excitation cannot be
+evaluated through a stage that is squashing whatever the source produces.
+
+It also leaves phase 4 with better targets than it had. Passing the pulses intact
+showed that the engine brake puts 55.2% of its energy above 300 Hz, which the
+clipper had been reporting as 40.4% — the first honest measurement of that path,
+and one that the band criteria, written against fuelled operation, have no
+business judging yet.
+
+**The reference recording is still un-annotated**, and it is now the blocking
+item for three separate things: the speed-dependent low-band tolerance at idle,
+the exhaust-over-block floor that two operating points sit just under, and
+whether the brake's upper-band share is a defect at all. Every one of those is a
+criterion waiting on characterisation rather than a model waiting on a change.
 
 Primary ownership:
 

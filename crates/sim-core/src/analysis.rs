@@ -444,35 +444,6 @@ pub fn firing_hz(rpm: f64, cylinders: usize) -> f64 {
     rpm / 60.0 * cylinders as f64 * 0.5
 }
 
-/// Undo the solver's soft clipper on a summed sample, returning the gain it
-/// applied.
-///
-/// The clipper acts on the mix and is applied to the three paths as one common
-/// gain `clipped / mix`, with `clipped = knee * tanh(mix / knee)`. That is
-/// invertible: from the emitted sum — which *is* `clipped` — the pre-saturation
-/// mix is `knee * atanh(clipped / knee)`, so dividing every path by this gain
-/// recovers what the solver produced before the limiter touched it.
-///
-/// This is why the capture tool can export unsaturated source tracks without the
-/// solver gaining a second output or an export mode. The recovery is exact
-/// wherever the clipper is, which is everywhere except the outer `[-1, 1]` clamp
-/// that measurement says never engages; a ratio at or past 1 is clamped just
-/// short of it, where the inverse is finite, rather than returning infinity.
-///
-/// Returns 1.0 for a silent sample or a non-positive knee, i.e. no correction.
-#[must_use]
-pub fn saturation_gain(clipped_sum: f64, knee: f64) -> f64 {
-    if knee <= 0.0 || clipped_sum == 0.0 {
-        return 1.0;
-    }
-    let ratio = (clipped_sum / knee).clamp(-0.999_999, 0.999_999);
-    let mix = knee * ratio.atanh();
-    if mix.abs() <= f64::MIN_POSITIVE {
-        return 1.0;
-    }
-    clipped_sum / mix
-}
-
 /// A synthetic train of raised-cosine pulses at `f0_hz`, for exercising the
 /// metrics against a signal whose character is known.
 ///
@@ -565,25 +536,6 @@ mod tests {
             + spectrum.band_share(300.0, 2_000.0)
             + spectrum.band_share(2_000.0, f64::INFINITY);
         assert!((sum - 100.0).abs() < 0.01, "bands summed to {sum}");
-    }
-
-    #[test]
-    fn the_saturation_gain_inverts_the_soft_clipper() {
-        let knee = 0.85f64;
-        for mix in [-2.0f64, -0.9, -0.1, 0.05, 0.4, 1.2, 3.0] {
-            let clipped = knee * (mix / knee).tanh();
-            let gain = saturation_gain(clipped, knee);
-            let recovered = clipped / gain;
-            assert!(
-                (recovered - mix).abs() < 1e-9,
-                "recovering {mix} from {clipped} gave {recovered}"
-            );
-        }
-        assert_eq!(
-            saturation_gain(0.0, 0.85),
-            1.0,
-            "silence needs no correction"
-        );
     }
 
     #[test]

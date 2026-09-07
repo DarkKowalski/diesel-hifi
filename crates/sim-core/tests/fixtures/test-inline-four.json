@@ -160,6 +160,7 @@
     "exhaust_gain": 1.0,
     "highpass_cutoff_hz": 25.0,
     "soft_clip_knee": 0.8,
+    "limiter_release_s": 0.3,
     "structural_gain": 3.0,
     "structural_modes": [
       {
@@ -1397,6 +1398,16 @@
       "safe_range": [
         -1.8,
         4.2
+      ]
+    },
+    {
+      "path": "audio.limiter_release_s",
+      "status": "calibrated",
+      "value_note": "invented test value for `audio.limiter_release_s`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        0.05,
+        10.0
       ]
     },
     {

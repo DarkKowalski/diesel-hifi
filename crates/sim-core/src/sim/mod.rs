@@ -403,8 +403,7 @@ impl Simulation {
             engine_flow_kg_per_s: 0.0,
             acoustics: Acoustics::new(
                 config.config().solver.max_steps_per_batch as usize,
-                &config.config().audio.structural_modes,
-                &config.config().audio.body_modes,
+                &config.config().audio,
                 config.config().solver.fixed_step_s,
             ),
             exhaust_system: ExhaustSystem::new(
@@ -696,6 +695,20 @@ impl Simulation {
     /// buffer is sized for a whole batch.
     pub fn drain_audio(&mut self, out: &mut [f32]) -> usize {
         self.state.acoustics.drain(out)
+    }
+
+    /// [`Simulation::drain_audio`], also reporting each frame's limiter gain.
+    ///
+    /// One entry of `gains` per frame written, so a caller can divide the
+    /// limiter back out and see the mix the solver produced before it engaged.
+    /// The gain has a release time and is therefore a function of history rather
+    /// than of the emitted sample, which is why it is reported rather than left
+    /// to be recovered by arithmetic.
+    ///
+    /// For measurement and capture. The playback path uses `drain_audio`: the
+    /// gain is already in the samples.
+    pub fn drain_audio_with_gains(&mut self, out: &mut [f32], gains: &mut [f32]) -> usize {
+        self.state.acoustics.drain_with_gains(out, gains)
     }
 
     /// Frames waiting to be drained.

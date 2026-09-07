@@ -269,6 +269,7 @@
     "exhaust_gain": 26.0,
     "highpass_cutoff_hz": 20.0,
     "soft_clip_knee": 0.85,
+    "limiter_release_s": 0.3,
     "structural_gain": 2.2,
     "structural_modes": [
       {
@@ -1687,10 +1688,20 @@
       "path": "audio.soft_clip_knee",
       "status": "calibrated",
       "value_note": "0.85. The source manual does not publish this.",
-      "purpose": "Saturation ceiling of the soft clipper, which is what guarantees samples stay inside [-1, 1] without hard clipping.",
+      "purpose": "Ceiling the limiter holds the summed mix to, which is what guarantees samples stay inside [-1, 1] without hard clipping.",
       "safe_range": [
         0.1,
         1.0
+      ]
+    },
+    {
+      "path": "audio.limiter_release_s",
+      "status": "calibrated",
+      "value_note": "0.3 s, about twenty firing periods across the range that limits. The source manual does not publish this.",
+      "purpose": "Time constant the limiter's gain recovers towards unity with. Attack is instantaneous and has no parameter; release has to outlast a firing period or the follower deforms the pulse train it is passing.",
+      "safe_range": [
+        0.05,
+        10.0
       ]
     },
     {

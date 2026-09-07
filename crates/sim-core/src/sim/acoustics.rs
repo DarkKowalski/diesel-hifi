@@ -15,7 +15,8 @@
 //! t_forcing  = (gas + pumping torque) / rated torque
 //! body       = sum over modes of  gain_k * resonator_k(t_forcing)  off the frame
 //! mix        = g_exh*exhaust + g_str*structural + g_body*body
-//! frame      = [g_exh*exhaust, g_str*structural, g_body*body] * softclip(mix)/mix
+//! gain       = level follower on |mix| against the knee: drop at once, recover slowly
+//! frame      = [g_exh*exhaust, g_str*structural, g_body*body] * gain
 //! ```
 //!
 //! The three paths leave here **separately**, one interleaved frame per step,
@@ -26,16 +27,34 @@
 //! mix and applied as a common gain, so the three still sum to exactly the one
 //! sample this used to emit.
 //!
+//! ## Why the ceiling is a follower and not a clipper
+//!
+//! It was `knee * tanh(mix / knee)`, per sample, for four milestones. That
+//! bounds the output and is smooth and continuous, and it reduces a tall sample
+//! by more than a short one — which is exactly how a train of combustion events
+//! becomes a buzz. It also acted below the knee, so it shaped the whole
+//! operating range rather than catching the top of it. Measured by exporting the
+//! mix on both sides of it, it cost every fuelled point above idle between 1 and
+//! 3.4 dB of crest factor, and the engine brake 5.5 dB — from 12.9 dB down to
+//! 7.4 dB, which was the only acceptance criterion the brake was failing. The
+//! release lobe was never the problem.
+//!
+//! What replaces it works out how much the *passage* needs turning down and turns
+//! all of it down by that much, which is what preserves the shape. Attack is
+//! instantaneous, so the bound is exact with no lookahead; release has a time
+//! constant of several firing periods, so a steady passage runs at a very nearly
+//! constant gain.
+//!
 //! ## Why three and not two
 //!
 //! The exhaust and the structure were the first two, and between them they leave
 //! a hole exactly where a heavy truck lives. The exhaust path is a clean comb at
 //! the firing frequency — measured on the shipped configuration, 82% of its
-//! energy sits in the first four orders at cruise and 94% at full load — but it
+//! energy sits in the first four orders at cruise and 92% at full load — but it
 //! arrives through metres of pipe, a turbine and an aftertreatment box. The
 //! structural path is driven by cylinder *pressure*, whose premixed edge is fast
 //! and whose modes are consequently in the hundreds of hertz and above: it is
-//! combustion noise, and only 15% of it lands in the firing orders at all.
+//! combustion noise, and under a quarter of it lands in the firing orders at all.
 //!
 //! Neither is the roar. The roar is the engine reacting against its mounts:
 //! crank *torque* swings through the whole cycle at the firing frequency and its
@@ -224,13 +243,40 @@ impl Port {
     }
 }
 
-/// Soft clipper: linear for small signals, saturating at `knee`.
+/// Bound a sample to `[-1, 1]`, exactly transparently below `knee`.
+///
+/// Returns `x` unchanged for `|x| <= knee`, then a `tanh` shoulder over the remaining
+/// headroom that asymptotes to 1. The derivative is 1 on both sides of the knee,
+/// so the join is smooth rather than a corner.
+///
+/// **This is not the `knee * tanh(x / knee)` it replaces**, and the difference is
+/// the whole point of the limiter below. That function reshaped *every* sample,
+/// however small: at the knee itself it was already 2.4 dB down and visibly
+/// rounded, so it acted as a waveshaper across the entire operating range rather
+/// than as a ceiling. Measured on the shipped configuration, it cost `full-1400`
+/// 3.4 dB of crest factor and `brake-1300` 5.5 dB — enough on its own to take the
+/// brake from 12.9 dB, comfortably inside the 9 dB criterion, to 7.4 dB and
+/// failing. A pulse shape is the timbre, and it was the thing being squashed.
+///
+/// Changing the *level* is the follower's job. All this has to do is stop an
+/// overshoot leaving the boundary contract, and it is exactly transparent
+/// whenever there is no overshoot to stop.
 #[inline]
-fn soft_clip(x: f64, knee: f64) -> f64 {
+fn limit(x: f64, knee: f64) -> f64 {
     if knee <= 0.0 {
         return 0.0;
     }
-    (knee * (x / knee).tanh()).clamp(-1.0, 1.0)
+    let knee = knee.min(1.0);
+    let magnitude = x.abs();
+    if magnitude <= knee {
+        return x;
+    }
+    let headroom = 1.0 - knee;
+    if headroom <= 0.0 {
+        // A knee at full scale leaves nothing to shoulder into.
+        return x.signum() * knee;
+    }
+    x.signum() * (knee + headroom * ((magnitude - knee) / headroom).tanh())
 }
 
 /// One-pole coefficient for a cutoff frequency at a given step.
@@ -238,6 +284,18 @@ fn soft_clip(x: f64, knee: f64) -> f64 {
 fn pole(cutoff_hz: f64, dt: f64) -> f64 {
     let rc = 1.0 / (std::f64::consts::TAU * cutoff_hz);
     dt / (rc + dt)
+}
+
+/// Per-step fraction of the way the limiter's gain recovers towards one.
+///
+/// `1 - exp(-dt / tau)`, so `tau` is the time constant in seconds and the
+/// recovery is independent of the step. A non-positive time constant means no
+/// smoothing at all, which recovers the gain immediately.
+fn release_coefficient(release_s: f64, dt: f64) -> f64 {
+    if release_s <= 0.0 || !release_s.is_finite() {
+        return 1.0;
+    }
+    1.0 - (-dt / release_s).exp()
 }
 
 /// One resonant mode of the engine structure: two poles and two zeros.
@@ -401,7 +459,31 @@ pub struct Acoustics {
     /// Body modal bank, driven by torque rather than by pressure.
     body: Vec<Resonator>,
 
+    /// The limiter's current gain. One, until the mix asks for less.
+    limiter_gain: f64,
+    /// Per-step release coefficient, from `limiter_release_s` and the step.
+    ///
+    /// Precomputed here rather than in `push` for the same reason the resonator
+    /// coefficients are: the step is fixed, and an exponential per sample is a
+    /// hot-loop cost for an answer that never changes.
+    release_coefficient: f64,
+
     buffer: Vec<f32>,
+    /// The limiter gain that was applied to each buffered frame.
+    ///
+    /// One entry per frame, and **no cursors of its own**: the frame cursors
+    /// always move by `PATHS`, so `write / PATHS` and `read / PATHS` index this
+    /// directly. Alignment is therefore structural rather than maintained, which
+    /// is the same argument that puts the three paths in one interleaved ring.
+    ///
+    /// It exists because the limiter is no longer invertible from its output.
+    /// The soft clipper it replaces was a memoryless function of the mix, so
+    /// `knee * atanh(sum / knee)` recovered the pre-saturation signal from the
+    /// emitted one; a gain with a release time is a function of history, and no
+    /// amount of arithmetic on the output recovers it. The capture tool needs the
+    /// unsaturated tracks, so the solver records what it did instead of leaving a
+    /// tool to guess.
+    gains: Vec<f32>,
     write: usize,
     read: usize,
     len: usize,
@@ -417,12 +499,7 @@ impl Acoustics {
     ///
     /// Both the frame ring and the resonator banks are allocated here and never
     /// resized, so producing audio allocates nothing in the hot loop.
-    pub fn new(
-        capacity: usize,
-        modes: &[StructuralMode],
-        body_modes: &[StructuralMode],
-        dt: f64,
-    ) -> Self {
+    pub fn new(capacity: usize, audio: &AudioCalibration, dt: f64) -> Self {
         let capacity = capacity.max(1);
         Self {
             primed_steps: 0,
@@ -431,9 +508,20 @@ impl Acoustics {
             highpass_previous_input: 0.0,
             highpass_previous_output: 0.0,
             previous_pressure_sum: 0.0,
-            resonators: modes.iter().map(|m| Resonator::new(m, dt)).collect(),
-            body: body_modes.iter().map(|m| Resonator::new(m, dt)).collect(),
+            resonators: audio
+                .structural_modes
+                .iter()
+                .map(|m| Resonator::new(m, dt))
+                .collect(),
+            body: audio
+                .body_modes
+                .iter()
+                .map(|m| Resonator::new(m, dt))
+                .collect(),
+            limiter_gain: 1.0,
+            release_coefficient: release_coefficient(audio.limiter_release_s, dt),
             buffer: vec![0.0; capacity * PATHS],
+            gains: vec![1.0; capacity],
             write: 0,
             read: 0,
             len: 0,
@@ -456,11 +544,16 @@ impl Acoustics {
         for resonator in self.resonators.iter_mut().chain(self.body.iter_mut()) {
             resonator.clear();
         }
+        // A reset engine is not being limited. Releasing towards one from
+        // whatever the previous run ended on would duck the first second of the
+        // new one.
+        self.limiter_gain = 1.0;
         // Zero the samples too, not just the cursors. Stale bytes would be
         // unreachable through `drain`, but leaving them means two simulations
         // reset identically would not be bit-identical in every field, and this
         // is a reset rather than the hot loop.
         self.buffer.fill(0.0);
+        self.gains.fill(1.0);
         self.write = 0;
         self.read = 0;
         self.len = 0;
@@ -634,26 +727,77 @@ impl Acoustics {
 
         // Saturation as a *gain*, applied to all three alike.
         //
-        // The clipper has to act on the mix — that is what it is for, and it is
-        // the mix that approaches the ceiling. At full load the summed signal
-        // peaks near the knee while the loudest single path is far below it, so
-        // clipping each path in isolation would be a different operation that
-        // essentially never engaged, and the start transient — the loudest thing
-        // the engine does — would stop being softened.
+        // It has to be decided on the mix — that is what approaches the ceiling.
+        // At full load the summed signal is near the knee while the loudest
+        // single path is far below it, so limiting each path in isolation would
+        // be a different operation that essentially never engaged.
         //
-        // So the mix is clipped, the ratio of clipped to unclipped is taken as a
-        // common gain, and that gain scales every path. Which is what a limiter
-        // is. `factor` is never above one, so the three channels still sum to
-        // exactly the single clipped sample this used to emit: splitting the
-        // paths changes the routing and not the sound, and a test asserts it.
-        let clipped = soft_clip(mix, audio.soft_clip_knee);
-        let factor = if mix.abs() > 0.0 { clipped / mix } else { 1.0 };
+        // ## Why this follows the level instead of clipping the sample
+        //
+        // The predecessor was `knee * tanh(mix / knee)`: a memoryless function of
+        // the current sample, which is a *waveshaper* and not a limiter. It
+        // reduced tall samples more than short ones, which is precisely how a
+        // pulse gets squashed into a buzz, and it did it everywhere rather than
+        // only near the ceiling. Measured on the shipped configuration it cost
+        // every fuelled point above idle between 1 and 3.4 dB of crest factor,
+        // and `brake-1300` 5.5 dB — from 12.9 dB down to 7.4 dB, which is the
+        // one acceptance criterion the release lobe was failing. The source was
+        // never the problem there.
+        //
+        // So the gain now tracks the *level*:
+        //
+        // - **Attack is instantaneous.** When the mix needs less gain than it is
+        //   getting, it gets exactly what it needs, on that sample. That is what
+        //   bounds the output exactly, with no lookahead and no latency, and it
+        //   is why the shoulder below almost never has anything to do.
+        // - **Release has a time constant**, and a long one — several firing
+        //   periods. A follower quick enough to recover between combustion events
+        //   would be tracking the pulse train rather than the passage, and
+        //   scaling each pulse differently is the deformation this replaces. Over
+        //   a steady passage the gain settles to very nearly a constant, and a
+        //   constant gain preserves crest factor and pulse shape exactly.
+        //
+        // The gain is never above one, so the three channels still sum to exactly
+        // the single sample this emits, and the paths remain a routing detail
+        // rather than a change in the sound.
+        let knee = audio.soft_clip_knee;
+        let magnitude = mix.abs();
+        let required = if magnitude > knee && magnitude > 0.0 {
+            knee / magnitude
+        } else {
+            1.0
+        };
+        if required < self.limiter_gain {
+            self.limiter_gain = required;
+        } else {
+            self.limiter_gain += (required - self.limiter_gain) * self.release_coefficient;
+        }
+
+        // The shoulder is a backstop, not the mechanism. With an instantaneous
+        // attack the limited mix is inside the knee by construction, so `limit`
+        // passes it through unchanged and `shoulder` is exactly one. It earns
+        // its place by keeping the boundary contract true if the gain is ever
+        // not what the arithmetic above says it is.
+        let limited = self.limiter_gain * mix;
+        let bounded = limit(limited, knee);
+        let shoulder = if limited.abs() > 0.0 {
+            bounded / limited
+        } else {
+            1.0
+        };
+        let factor = self.limiter_gain * shoulder;
 
         // Slow decay toward the current level, roughly a 50 ms window at 40 kHz.
         // Measured on the mix, because the level meter reports what is being
-        // played rather than one component of it.
-        let level = if clipped.is_finite() { clipped } else { 0.0 };
+        // played rather than one component of it. `bounded` is the sum the three
+        // paths below add up to, so this is the level of what is emitted.
+        let level = if bounded.is_finite() { bounded } else { 0.0 };
         self.mean_square += (level * level - self.mean_square) * 0.0005;
+
+        // Recorded before the cursor moves, because the cursor is this ring's
+        // index too: `write / PATHS` is the frame the loop below is about to
+        // fill.
+        self.gains[self.write / PATHS] = factor as f32;
 
         for path in paths {
             let scaled = path * factor;
@@ -700,8 +844,27 @@ impl Acoustics {
     /// than in floats is what keeps "one per solver step" true of the number
     /// this returns.
     pub fn drain(&mut self, out: &mut [f32]) -> usize {
+        self.drain_with_gains(out, &mut [])
+    }
+
+    /// [`Acoustics::drain`], also reporting the limiter gain each frame carries.
+    ///
+    /// `gains` receives one entry per frame written and is filled only as far as
+    /// it reaches; passing an empty slice is exactly [`Acoustics::drain`]. The
+    /// number of frames is decided by `out` alone, so a short `gains` cannot
+    /// silently shorten a capture.
+    ///
+    /// This is here for the capture tool, which needs the pre-limiter signal and
+    /// can no longer recover it by arithmetic — see the `gains` field. The WASM
+    /// boundary does not drain it: the gain is already in the samples, and a
+    /// fourth interleaved value would be a channel the listening stage would have
+    /// to know about and does not need.
+    pub fn drain_with_gains(&mut self, out: &mut [f32], gains: &mut [f32]) -> usize {
         let count = self.len.min(out.len() / PATHS);
         for frame in 0..count {
+            if let Some(slot) = gains.get_mut(frame) {
+                *slot = self.gains[self.read / PATHS];
+            }
             for path in 0..PATHS {
                 out[frame * PATHS + path] = self.buffer[self.read];
                 self.read = (self.read + 1) % self.buffer.len();
@@ -761,6 +924,7 @@ mod tests {
             exhaust_gain: 0.35,
             highpass_cutoff_hz: 25.0,
             soft_clip_knee: 0.9,
+            limiter_release_s: 0.3,
             structural_gain: 0.02,
             structural_modes: modes(),
             body_gain: 0.02,
@@ -773,7 +937,7 @@ mod tests {
 
     /// An `Acoustics` with the banks these tests use. Capacity in frames.
     fn bank(capacity: usize) -> Acoustics {
-        Acoustics::new(capacity, &modes(), &body_modes(), DT)
+        Acoustics::new(capacity, &audio(), DT)
     }
 
     /// Drain `frames` frames and sum each one down to what a listener hears.
@@ -921,6 +1085,192 @@ mod tests {
             octave_above < 1.2,
             "above the corner the transfer must flatten rather than keep rising; \
              got {octave_above:.2}x, which is a differentiator that never stops"
+        );
+    }
+
+    /// One second of raised-cosine pulses at a plausible firing rate, run
+    /// through the exhaust path alone with the other two gains zeroed.
+    ///
+    /// The exhaust path is the one the limiter has to survive: it carries the
+    /// firing comb, and a combustion pulse is exactly the signal a waveshaper
+    /// destroys and a level follower does not.
+    fn pulses_through_exhaust(exhaust_gain: f64) -> Vec<f32> {
+        const LEN: usize = 40_000;
+        let mut a = audio();
+        a.exhaust_gain = exhaust_gain;
+        a.structural_gain = 0.0;
+        a.body_gain = 0.0;
+
+        let source = crate::analysis::pulse_train(LEN, 1.0 / DT, 65.0, 0.05);
+        let mut ac = bank(LEN);
+        for sample in &source {
+            ac.push(&a, f64::from(*sample), 6.0, 0.0, RADIATION_HZ, DT);
+        }
+        drain_summed(&mut ac, LEN)
+    }
+
+    #[test]
+    fn the_ceiling_is_exactly_transparent_below_the_knee() {
+        // The property that separates this stage from the `knee * tanh(x / knee)`
+        // it replaced. That function was 2.4 dB down *at* the knee and rounded
+        // every sample below it, so it shaped the whole operating range; this one
+        // leaves every sample alone until there is an overshoot to catch.
+        let knee = 0.85;
+        for x in [-0.85, -0.6, -0.01, 0.0, 0.2, 0.7, 0.85] {
+            assert_eq!(limit(x, knee), x, "the knee must pass {x} untouched");
+        }
+        // And above it: bounded, still inside the contract, still monotone. The
+        // shoulder reaches full scale rather than approaching it for ever —
+        // `tanh` saturates to exactly one in floating point a few multiples of
+        // the headroom up — which is why the bound is inclusive.
+        let mut previous = knee;
+        for x in [0.86, 1.0, 2.0, 10.0, 1.0e6] {
+            let y = limit(x, knee);
+            assert!(y >= previous, "the shoulder must stay monotone at {x}");
+            assert!(y <= 1.0, "the shoulder must stay inside full scale at {x}");
+            assert_eq!(limit(-x, knee), -y, "the shoulder must stay odd at {x}");
+            previous = y;
+        }
+        assert!(
+            limit(0.86, knee) > knee,
+            "the shoulder must actually rise above the knee"
+        );
+    }
+
+    #[test]
+    fn limiting_turns_the_pulses_down_rather_than_flattening_them() {
+        // The whole point of the level follower, stated as a comparison so it
+        // needs no absolute figure: the same signal at two gains, one that fits
+        // under the ceiling and one that does not, must have the same crest
+        // factor. A limiter changes the level; a waveshaper changes the shape,
+        // and crest factor is what tells them apart.
+        //
+        // The predecessor failed this badly. Measured on the shipped
+        // configuration it cost `brake-1300` 5.5 dB of crest, which was that
+        // scenario's entire acceptance failure.
+        let quiet = pulses_through_exhaust(0.35);
+        let loud = pulses_through_exhaust(0.35 * 20.0);
+
+        // Measure past the onset: the filters settle and the follower makes its
+        // first reduction there, and neither is the steady behaviour under test.
+        let quiet_crest = crate::analysis::crest_db(&quiet[20_000..]);
+        let loud_crest = crate::analysis::crest_db(&loud[20_000..]);
+
+        let quiet_peak = quiet[20_000..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let loud_peak = loud[20_000..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            quiet_peak < audio().soft_clip_knee as f32,
+            "the quiet run is meant to fit under the ceiling, peaked at {quiet_peak}"
+        );
+        assert!(
+            loud_peak > audio().soft_clip_knee as f32 * 0.99,
+            "the loud run is meant to be held at the ceiling, peaked at only {loud_peak}"
+        );
+
+        assert!(
+            (loud_crest - quiet_crest).abs() < 1.0,
+            "twenty times the gain changed the crest factor from {quiet_crest:.1} dB \
+             to {loud_crest:.1} dB, so the ceiling is reshaping the pulses rather \
+             than turning them down"
+        );
+    }
+
+    #[test]
+    fn a_drained_frame_reports_the_gain_that_was_applied_to_it() {
+        // The gains ring is what the capture tool divides out to recover the
+        // pre-limiter mix, and it cannot be checked against the output it came
+        // from without arguing in a circle. So it is checked against *linearity*
+        // instead: everything upstream of the limiter is linear in the source, so
+        // twenty times the source at twenty times the gain, with the limiter
+        // divided back out, must be twenty times the quiet run's mix.
+        //
+        // That fails if the recorded gain is off by a frame, off by a scale, or
+        // taken from the wrong ring position.
+        const LEN: usize = 40_000;
+        const SCALE: f64 = 20.0;
+
+        let run = |exhaust_gain: f64| {
+            let mut a = audio();
+            a.exhaust_gain = exhaust_gain;
+            a.structural_gain = 0.0;
+            a.body_gain = 0.0;
+            let source = crate::analysis::pulse_train(LEN, 1.0 / DT, 65.0, 0.05);
+            let mut ac = bank(LEN);
+            for sample in &source {
+                ac.push(&a, f64::from(*sample), 6.0, 0.0, RADIATION_HZ, DT);
+            }
+            let mut interleaved = vec![0.0f32; LEN * PATHS];
+            let mut gains = vec![1.0f32; LEN];
+            let written = ac.drain_with_gains(&mut interleaved, &mut gains);
+            assert_eq!(written, LEN, "one frame per push");
+            let mix: Vec<f64> = interleaved
+                .chunks(PATHS)
+                .map(|f| f.iter().map(|s| f64::from(*s)).sum())
+                .collect();
+            (mix, gains)
+        };
+
+        let (quiet, quiet_gains) = run(0.35);
+        let (loud, loud_gains) = run(0.35 * SCALE);
+
+        assert!(
+            quiet_gains.iter().all(|g| (*g - 1.0).abs() < 1e-6),
+            "the quiet run fits under the ceiling, so nothing should have been \
+             limited"
+        );
+        let smallest = loud_gains.iter().fold(1.0f32, |m, g| m.min(*g));
+        assert!(
+            smallest < 0.6,
+            "the loud run should have been limited by several decibels, smallest \
+             gain was {smallest}"
+        );
+
+        let reference = quiet.iter().fold(0.0f64, |m, s| m.max(s.abs()));
+        for (index, (loud_sample, gain)) in loud.iter().zip(loud_gains.iter()).enumerate() {
+            let recovered = loud_sample / f64::from(*gain) / SCALE;
+            assert!(
+                (recovered - quiet[index]).abs() < reference * 1e-4,
+                "frame {index}: dividing the reported gain out gave {recovered} \
+                 where linearity says {}",
+                quiet[index]
+            );
+        }
+    }
+
+    #[test]
+    fn the_limiter_does_not_recover_between_combustion_events() {
+        // Release has to outlast a firing period. If it does not, the gain climbs
+        // back between pulses and drops again on the next one, which scales every
+        // pulse by a different amount — the deformation the follower exists to
+        // avoid, arrived at from the other direction.
+        //
+        // A 65 Hz train is 15.4 ms apart; the calibrated 0.3 s release recovers
+        // about 5% across that gap.
+        const LEN: usize = 40_000;
+        let mut a = audio();
+        a.exhaust_gain = 0.35 * 20.0;
+        a.structural_gain = 0.0;
+        a.body_gain = 0.0;
+
+        let source = crate::analysis::pulse_train(LEN, 1.0 / DT, 65.0, 0.05);
+        let mut ac = bank(LEN);
+        for sample in &source {
+            ac.push(&a, f64::from(*sample), 6.0, 0.0, RADIATION_HZ, DT);
+        }
+        let mut interleaved = vec![0.0f32; LEN * PATHS];
+        let mut gains = vec![1.0f32; LEN];
+        ac.drain_with_gains(&mut interleaved, &mut gains);
+
+        // Past the onset, where the follower has found the passage's level.
+        let settled = &gains[20_000..];
+        let smallest = settled.iter().fold(1.0f32, |m, g| m.min(*g));
+        let largest = settled.iter().fold(0.0f32, |m, g| m.max(*g));
+        let swing = largest / smallest;
+        assert!(
+            swing < 1.1,
+            "the gain swung by {:.1}% over a settled passage, so it is tracking \
+             the pulse train rather than its level",
+            (swing - 1.0) * 100.0
         );
     }
 

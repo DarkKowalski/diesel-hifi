@@ -123,12 +123,18 @@ user action before Web Audio starts**.
 | 6 | Making it sound like a truck: a torque-driven body path, a bounded pipe-mouth radiation transfer, a lower and broader modal bank, cycle-to-cycle combustion variation, and acceptance criteria that measure firing orders and pulse dynamics rather than band shares alone. |
 | 7 | Three paths to the listener: the radiating paths cross the boundary interleaved instead of summed, each gets its own cab transfer, and the UI can solo them. |
 | 8 | **Measuring before changing**: a tested metric library, a broken modulation detector replaced, named reproducible scenarios covering idle through engine braking, a WAV capture tool, a level-matched A/B against local recordings, and an audit of the playback chain at both device rates. No acoustic source or calibration was changed. |
+| 9 | **The limiter stops shaping the timbre**: the memoryless soft clipper is replaced by a level follower with an instantaneous attack and a calibrated release, the ceiling becomes transparent below the knee, and the capture tool reports the gain each frame carried. Every operating point gains crest factor; the engine brake gains 5 dB of it and passes the criterion it was failing. No acoustic *source* changed. |
 
-Milestone 8 deliberately delivers **no change to how the engine sounds**. Every
-figure below that is measured at an operating point milestone 7 also measured is
-unchanged to the last digit. What changed is what can be measured, what can be
-regenerated, and what is now known to be wrong — see **Results → Sound → Known
-deficits**.
+Milestone 8 deliberately delivered **no change to how the engine sounds**, and
+every figure it measured at an operating point milestone 7 also measured was
+unchanged to the last digit. What it changed was what can be measured, what can
+be regenerated, and what is known to be wrong.
+
+Milestone 9 is the first fix taken from that list, and it is a fix to the
+*listening stage* rather than to a source: the measurements said the pulses were
+being squashed after they were produced. The figures below therefore move for the
+first time since milestone 7, and **Results → Sound** records what moved, by how
+much, and what the fix exposed underneath.
 
 Still out: aftertreatment chemistry, clutch slip and gear-change behaviour, the
 manual's shift-assist and engine-stop-assist brake functions, ABS interaction,
@@ -202,8 +208,8 @@ route either:
   turbine's insertion loss, into a tailpipe modelled as a waveguide with a
   reflecting, lossy open end. What leaves at the end is the **volume velocity at
   the mouth**, `p+ − p−`; the aftertreatment substrate takes its cut on each
-  traverse. This is the firing comb: 83% of this path's energy sits in the first
-  four orders at cruise and 95% at full load.
+  traverse. This is the firing comb: 82% of this path's energy sits in the first
+  four orders at cruise and 92% at full load.
 - **The structure**, driven by cylinder *pressure*. The premixed burn is a
   near-step pressure rise inside a stiff iron box, and the box rings. Six
   resonators standing for bending and breathing modes of the block, head and
@@ -245,74 +251,106 @@ rather than reproduced by hand:
 | | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` | `brake-1300` | Target |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Speed, rpm | 551 governed | 900 held | 1200 held | 1400 held | 1800 held | 1300 held | — |
-| Firing orders `f0…4·f0` | 49.3% | 64.3% | 71.3% | 91.9% | 73.8% | 57.8% | ≥ 35% loaded |
-| Crest factor | 16.6 dB | 11.7 dB | 10.9 dB | 10.4 dB | 10.0 dB | **7.4 dB** | ≥ 9 dB |
-| Modulation depth | 0.63 | 1.03 | 0.72 | 1.37 | 1.05 | 1.60 | > 0 |
-| `<80 Hz` | **40.9%** | 2.1% | 18.6% | 4.1% | 0.0% | 4.9% | ≤ 35% |
-| `80–300 Hz` | 41.7% | 80.3% | 56.2% | 90.3% | 75.7% | 54.4% | ≥ 45% |
-| `300 Hz–2 kHz` | 15.8% | 16.0% | 24.2% | 4.9% | 22.4% | **40.4%** | ≤ 30% |
-| `150 Hz–15 kHz` | 38.7% | 64.3% | 49.6% | 58.8% | 77.2% | 93.3% | ≥ 35% |
-| `>15 kHz` residue | 0.06% | 0.00% | 0.00% | 0.00% | 0.00% | 0.02% | ≤ 1% |
-| Peak | 0.110 | 0.347 | 0.542 | 0.794 | 0.751 | **0.849** | under the 0.85 knee |
-| Level, dBFS | −35.8 | −20.9 | −16.2 | −12.4 | −12.5 | −8.8 | — |
-| Exhaust over block | 9.2 dB | 5.1 dB | 6.3 dB | 10.6 dB | 6.0 dB | 20.7 dB | ≥ 6 dB |
+| Firing orders `f0…4·f0` | 49.2% | 63.9% | 70.1% | 87.1% | 69.4% | 44.0% | ≥ 35% loaded |
+| Crest factor | 16.7 dB | 12.1 dB | 11.9 dB | 13.1 dB | 12.3 dB | 12.4 dB | ≥ 9 dB |
+| Modulation depth | 0.63 | 1.05 | 0.78 | 1.56 | 1.10 | 2.32 | > 0 |
+| `<80 Hz` | **40.8%** | 2.0% | 17.8% | 5.3% | 0.0% | 1.9% | ≤ 35% |
+| `80–300 Hz` | **41.7%** | 80.1% | 55.8% | 83.9% | 71.1% | **42.8%** | ≥ 45% |
+| `300 Hz–2 kHz` | 15.8% | 16.3% | 25.5% | 9.8% | 26.4% | **55.2%** | ≤ 30% |
+| `150 Hz–15 kHz` | 38.8% | 64.6% | 51.1% | 60.9% | 78.7% | 94.5% | ≥ 35% |
+| `>15 kHz` residue | 0.06% | 0.01% | 0.00% | 0.00% | 0.00% | 0.01% | ≤ 1% |
+| Peak | 0.110 | 0.368 | 0.642 | 0.850 | 0.850 | 0.850 | at or under the 0.85 knee |
+| Level, dBFS | −35.8 | −20.7 | −15.7 | −14.5 | −13.7 | −13.8 | — |
+| Limiter gain | 1.000 | 1.000 | 1.000 | 0.592 | 0.719 | 0.247 | reported, not targeted |
+| Exhaust over block | 9.2 dB | **5.2 dB** | 6.7 dB | 11.3 dB | **5.8 dB** | 26.8 dB | ≥ 6 dB |
 
 Bold entries miss their target and are discussed under **Known deficits** below.
 
-`cruise-1200` and `full-1400` are the conditions milestone 7 called cruise and
-full load, and they reproduce its figures: every band share to the tenth of a
-percent it was quoted to, and the levels to a tenth of a decibel. The residual —
-a peak of 0.794 against 0.796, a crest of 10.4 dB against 10.5 — is the settling
-time, which the scenario now states as a number (3.0 s) rather than leaving it
-implicit in a loop count. That agreement is what says the metric library replaced
-the arithmetic without moving the answers.
+**Milestone 9 moved these figures, and the crest row is why.** The limiter was a
+memoryless soft clipper — `knee · tanh(mix / knee)` — applied to each sample as it
+was produced. That reduces a tall sample more than a short one, which is the
+definition of a waveshaper and the opposite of what a limiter is for. The capture
+tool now measures the mix on both sides of it, and the cost was not subtle:
 
-**The modulation column is the exception, and is not comparable with milestone 7's.**
-It is a different measurement; see **Measuring the sound** below.
+| Crest factor | before, saturated | before, limiter divided out | now |
+|---|---:|---:|---:|
+| `idle` | 16.6 dB | 16.7 dB | 16.7 dB |
+| `light-900` | 11.7 dB | 12.1 dB | 12.1 dB |
+| `cruise-1200` | 10.9 dB | 11.9 dB | 11.9 dB |
+| `full-1400` | 10.4 dB | 13.8 dB | 13.1 dB |
+| `rated-1800` | 10.0 dB | 12.6 dB | 12.3 dB |
+| `accelerate` | 10.7 dB | 14.6 dB | 11.9 dB |
+| `brake-1300` | **7.4 dB** | 12.9 dB | 12.4 dB |
 
-Three columns are new and two of them were not measurable before. `idle` is now
-**governed** — the engine sits where the governor puts it, at 551 rpm against the
-published 560 — where the old "idle" column was 600 rpm at 15% pedal with the
-crank re-pinned every 2.5 ms. That is a held speed with an idle-ish pedal, and it
-is a different signal: it was reading 17.2% below 80 Hz where governed idle reads
-40.9%, because 600 rpm puts the second order above 80 Hz and 551 rpm does not.
-The old number was not wrong about the signal it measured. It was measuring the
-wrong signal.
+The middle column is the signal the solver had *already produced* and the clipper
+then flattened. `brake-1300` was failing the 9 dB criterion at 7.4 dB while
+carrying 12.9 dB of crest one stage upstream: the release lobe was never the
+problem, the stage after it was. Three of the four known deficits recorded in
+milestone 8 were this one defect seen from different angles.
 
-The loudest octave is `40–80 Hz` at governed idle, `160–315 Hz` at 900, 1400,
-1800 and under brake, and `80–160 Hz` at cruise.
+Two consequences of replacing it, both visible in the table. The knee is now
+**transparent below itself**, so `idle`, `light-900`, `cruise-1200`, `start` and
+`stop` are no longer touched at all where the clipper had been rounding them; and
+where it does engage the peak sits *on* the knee rather than a little under it,
+because the ceiling is now reached by turning the passage down instead of by
+squashing its peaks. The levels fall with it — `brake-1300` by 5 dB — since a
+uniform gain reduction costs RMS where a waveshaper had been quietly making up
+the difference in harmonics.
+
+**The modulation column is not comparable with milestone 7's.** It is a different
+measurement; see **Measuring the sound** below.
+
+Three columns arrived with milestone 8 and two of them were not measurable
+before. `idle` is **governed** — the engine sits where the governor puts it, at
+551 rpm against the published 560 — where the old "idle" column was 600 rpm at
+15% pedal with the crank re-pinned every 2.5 ms. That is a held speed with an
+idle-ish pedal, and it is a different signal: it was reading 17.2% below 80 Hz
+where governed idle reads 40.8%, because 600 rpm puts the second order above
+80 Hz and 551 rpm does not. The old number was not wrong about the signal it
+measured. It was measuring the wrong signal.
+
+The loudest octave is `40–80 Hz` at governed idle, `160–315 Hz` at 900, 1400 and
+1800, `80–160 Hz` at cruise, and `315–630 Hz` under brake. The brake's moved up
+an octave in milestone 9: the release lobe's crack is the fastest event in the
+model and the clipper had been taking the top off it.
 
 The probe reports each path on its own, because the balance between them is the
 whole question and a mixed band share cannot say which one moved:
 
 | Alone, at `full-1400` | dBFS | `<80 Hz` | `80–300` | `300–2k` | `>2 kHz` | orders |
 |---|---:|---:|---:|---:|---:|---:|
-| Exhaust | −12.0 | 7.3% | 89.5% | 3.1% | 0.1% | 94.5% |
-| Block | −22.6 | 3.6% | 23.3% | 62.3% | 10.8% | 26.6% |
-| Body | −23.5 | 84.6% | 15.3% | 0.1% | 0.0% | 99.8% |
+| Exhaust | −14.3 | 7.7% | 86.1% | 6.1% | 0.0% | 91.7% |
+| Block | −25.6 | 3.7% | 20.1% | 63.4% | 12.8% | 23.5% |
+| Body | −27.1 | 84.0% | 16.0% | 0.0% | 0.0% | 99.8% |
 
-The exhaust leads the block by 6 to 21 dB at every point measured. That figure is
+The exhaust leads the block by 5 to 27 dB at every point measured. That figure is
 the single one that decides whether this reads as a truck: the exhaust carries the
 firing orders and the block sits on top of them, and a block in front of the
 exhaust is a small engine however the bands come out.
 
 #### Known deficits
 
-Found by the milestone 8 measurements and **not fixed**. They are recorded here
-rather than tuned away, because tuning a number the day it is first measured is
-how the previous round of acceptance criteria came to enforce the defect they
-were meant to catch.
+Recorded here rather than tuned away, because tuning a number the day it is first
+measured is how the previous round of acceptance criteria came to enforce the
+defect they were meant to catch.
 
-- **The engine brake is being clipped, hard.** `brake-1300` peaks at 0.849 against
-  a 0.85 knee, and the capture tool reports the limiter's common gain falling to
-  **0.247** — a 12 dB reduction — at some point in the capture. The crest factor
-  is 7.4 dB against a 9 dB criterion, which is the signature the crest measurement
-  exists to catch: a train of distinct events squared off into a buzz. The release
-  lobe is deliberately the fastest pressure event in the model, so it is the one
-  event the shared limiter cannot pass, and the gains were set against fuelled
-  operation. `300 Hz–2 kHz` at 40.4% against a 30% ceiling is the same story from
-  the other side: clipping is broadband.
-- **Governed idle sits 40.9% below 80 Hz, against a 35% ceiling.** A six at 551 rpm
+**Fixed in milestone 9**, and kept here because what they turned out to be is the
+point:
+
+- ~~The engine brake is being clipped, hard.~~ It was, and it was the *stage*
+  rather than the source: 7.4 dB of crest at the output against 12.9 dB one stage
+  upstream. The level follower passes the release lobe and `brake-1300` now reads
+  12.4 dB. It is still held down by 12 dB of gain reduction — that figure did not
+  move, and was never the problem.
+- ~~The limiter engages at every fuelled point above idle.~~ It engaged because
+  the clipper acted on every sample it saw, so "engaged" included rounding a
+  signal that was nowhere near the ceiling. With a transparent knee it engages at
+  three of the ten scenarios, and where it does it changes the level rather than
+  the shape.
+
+**Still open:**
+
+- **Governed idle sits 40.8% below 80 Hz, against a 35% ceiling.** A six at 551 rpm
   has its fundamental at 27.5 Hz and its second order at 55 Hz, so the energy is
   genuinely there and the model is not obviously wrong. What is wrong is the
   criterion: a fixed ceiling asks "can ordinary hardware reproduce this" at a
@@ -320,36 +358,77 @@ were meant to catch.
   the range the honest answer is *not the fundamental, no*. The number is left as
   it stands, failing, until there is reference characterisation to set a
   speed-dependent tolerance from. It is not silently widened.
-- **The limiter engages at every fuelled point above idle**, down to 0.553 at
-  `full-1400`. It is doing its job, but it is doing it to the pulse shape, which is
-  the timbre. The capture tool exports unsaturated tracks alongside the saturated
-  ones for exactly this reason.
-- **`light-900` has the exhaust only 5.1 dB in front of the block**, under the 6 dB
-  floor. Light load is where ignition delay is longest and the premixed fraction
-  largest, so the block is loudest relative to the exhaust exactly where the
-  balance criterion is tightest.
+- **`light-900` has the exhaust only 5.2 dB in front of the block**, and
+  `rated-1800` 5.8 dB, both under the 6 dB floor. Light load is where ignition
+  delay is longest and the premixed fraction largest, so the block is loudest
+  relative to the exhaust exactly where the balance criterion is tightest.
+  `rated-1800` crossed the line in milestone 9 from 6.0 dB, which is arithmetic
+  rather than a change in the engine: a gain that varies over the capture weights
+  each path's RMS by how its own envelope lines up with the reduction, and the
+  three paths have different envelopes. A criterion that a passing point can drift
+  across by 0.2 dB is a criterion with no margin in it, and both figures are
+  waiting on the same reference characterisation.
 
-None of these was visible before, for three separate reasons: two of the four
-operating points did not exist as scenarios, the limiter's engagement was never
-reported, and idle was being measured somewhere the engine does not idle.
+**Newly visible, because the clipper had been flattering it:**
+
+- **`brake-1300` puts 55.2% in `300 Hz–2 kHz` against a 30% ceiling**, and 42.8%
+  in `80–300 Hz` against a 45% floor. Under the old stage these read 40.4% and
+  54.4%, and that was attributed to clipping being broadband. It was the reverse.
+  The clipper was reducing the tall fast release-lobe pulses — which is where this
+  path's high-frequency energy lives — more than the quieter body of the signal
+  between them, so it was moving share *out* of the upper band. Passing the pulses
+  intact shows what the source actually produces, and its loudest octave is
+  `315–630 Hz`.
+
+  Whether that is wrong is genuinely undecided. A decompression brake's bark is a
+  hard high crack, and a criterion of 30% above 300 Hz was written against fuelled
+  operation where it is not one. This is the first measurement of what the brake
+  path really contains, and it belongs with the reference characterisation rather
+  than with a gain adjustment.
+
+None of the milestone 8 deficits was visible before it, for three separate
+reasons: two of the four operating points did not exist as scenarios, the
+limiter's engagement was never reported, and idle was being measured somewhere the
+engine does not idle. What made this round's diagnosis possible was one further
+measurement — the same mix with the limiter divided back out — which turns "the
+gain fell to 0.247" into "and it cost 5.5 dB of crest doing it". The first figure
+alone had been on record for a milestone and read as evidence about the brake.
 
 **The paths are summed at the listener, not in the solver.** Each is a channel
 of its own from the ring buffer through to the Web Audio graph, where `cabin.ts`
 gives it its own transfer. What the solver still does is decide the *saturation*,
-because that is a property of the mix: it clips the sum, takes the ratio of
-clipped to unclipped as a common gain, and scales all three paths by it. Which is
-what a limiter is. The gain is never above one, so the three channels sum to
-exactly the single sample this used to emit — which is why splitting the paths in
-milestone 7 left the **raw** listening stage bit-comparable to milestone 6, and
-every figure it had measured unchanged to the last digit.
+because that is a property of the mix: it derives one gain from the summed signal
+and scales all three paths by it. The gain is never above one, so the three
+channels sum to exactly the single sample this used to emit — which is why
+splitting the paths in milestone 7 left the **raw** listening stage
+bit-comparable to milestone 6.
 
-Two honest limits on that. The clip decision is made on the *pre-filter* mix, so
-once the cab filters each path differently the filtered sum can exceed the knee;
-the volume control and the cockpit compressor sit downstream of it. And each
-channel carries a final clamp to `[−1, 1]`, because bounding the sum does not by
-itself bound three signed terms — two paths in opposition could in principle each
-exceed it. Measurement says that never happens, and a test says so too, but a
-contract that holds only in practice is not a contract.
+**The gain follows the level rather than the sample.** When the mix needs less
+gain than it is getting it gets exactly what it needs, on that sample: an
+instantaneous attack, which is what bounds the output to the knee with no
+lookahead and no latency. Recovery has a time constant — a calibrated 0.3 s,
+about twenty firing periods — so over a steady passage the gain settles to very
+nearly a constant, and a constant gain preserves pulse shape and crest factor
+exactly. Below the knee nothing is touched at all.
+
+The predecessor did none of that. It was `knee · tanh(mix / knee)` evaluated per
+sample, which reduces tall samples more than short ones and reduces small ones
+too: 2.4 dB down *at* the knee and rounding everything below it. See the crest
+table above for what that cost, and the tenth entry in the list below for why the
+mistake is not specific to this model.
+
+Three honest limits. The gain decision is made on the *pre-filter* mix, so once
+the cab filters each path differently the filtered sum can exceed the knee; the
+volume control and the cockpit compressor sit downstream of it. Each channel
+carries a final clamp to `[−1, 1]`, because bounding the sum does not by itself
+bound three signed terms — two paths in opposition could in principle each exceed
+it. Measurement says that never happens, and a test says so too, but a contract
+that holds only in practice is not a contract. And a gain with a release time is
+a function of the run rather than of the sample, so it cannot be recovered from
+the output by arithmetic: the solver records what it applied to each frame, and
+the capture tool divides *that* out. The `atanh` inverse that did this job for two
+milestones is gone rather than left in place describing a stage that no longer
+exists.
 
 **Two measurements exist because band shares are blind to them.** A pulse train
 and a tone can hold identical energy in every band. *Crest factor* — peak over
@@ -368,7 +447,7 @@ rather than sound, and the probe reports it separately so it cannot satisfy a
 high-frequency target it is not signal for. The probe's four full-range bands sum
 to 100% as a self-check.
 
-Nine mistakes this chain invites, all of which were made:
+Ten mistakes this chain invites, all of which were made:
 
 - **A boundary condition cannot make a sound.** Clamping cylinder pressure to the
   manifold during the exhaust stroke makes the pressure difference across the
@@ -425,6 +504,18 @@ Nine mistakes this chain invites, all of which were made:
   crank *torque*, which swings at the firing rate itself, and until something was
   driven by it the model had no path that could make the sound. Adding gain to
   the wrong path is how an engine ends up loud and small at the same time.
+- **A ceiling applied to the sample is a waveshaper, not a limiter.**
+  `knee · tanh(x / knee)` bounds the output, keeps it continuous, keeps it
+  differentiable, sounds like the right answer, and reduces a tall sample by more
+  than a short one — which is *precisely* the operation that turns a train of
+  distinct combustion events into a buzz. It also acts below the knee, so it was
+  shaping the entire operating range rather than catching the top of it. A
+  limiter changes the level: it works out how much the passage needs turning down
+  and turns all of it down by that, which is why crest factor survives.
+  Diagnosing this needed a measurement that did not exist for two milestones —
+  the same mix with the gain divided back out — because how far the gain fell is
+  the same number either way. It read 0.247 on the brake in both cases; in one of
+  them the waveform came through and in the other it did not.
 
 ### Reproducible scenarios
 
@@ -485,17 +576,31 @@ with a steady one.
 | `mix.wav` | the three paths added up: the raw listening stage |
 | `exhaust.wav`, `block.wav`, `body.wav` | each radiating path on its own |
 | `*-unsaturated.wav` | the same paths with the limiter's gain divided out |
+| `mix-unsaturated.wav` | those paths summed: the mix before the limiter |
 
-**The unsaturated set needs no solver change, because the limiter is
-invertible.** It clips the mix and applies the ratio to all three paths as one
-common gain, so from the emitted sum — which *is* the clipped value — the
-pre-saturation mix is `knee · atanh(sum / knee)`, and dividing each path by that
-gain recovers what the solver produced before the limiter touched it. Exact
-wherever the clipper is, which is everywhere except the outer `[−1, 1]` clamp
-that measurement says never engages. The files are written only for scenarios
-where the limiter engaged, and the manifest records how far it did: a set of
-files identical to the ones beside them is a set someone will later compare and
-draw a conclusion from.
+**The unsaturated set is exact, because the solver reports the gain it applied.**
+The limiter derives one gain from the mix and scales all three paths by it, so
+dividing each sample by the gain its frame carried recovers what the solver
+produced before the limiter touched it. The gain rides alongside the frames in
+`Acoustics`, indexed off the same cursors so it cannot slide out of step with
+them, and `drain_audio_with_gains` hands both to the capture harness. The
+playback path does not drain it: the gain is already in the samples, and a fourth
+interleaved value would be a channel the listening stage has to know about and
+does not need.
+
+This used to be arithmetic instead. The clipper was a memoryless function of the
+mix, so `knee · atanh(sum / knee)` recovered the pre-saturation value from the
+emitted one, and no solver change was needed. A gain with a release time is a
+function of the whole passage, and nothing can be done to one output sample to
+find out what it was scaled by.
+
+The files are written only for scenarios where the limiter engaged, and the
+manifest records how far it did *and what it cost*: a set of files identical to
+the ones beside them is a set someone will later compare and draw a conclusion
+from. **The pair is also how the limiter itself is measured**, and it is what
+found the defect milestone 9 fixed. How far the gain fell says nothing about
+whether the waveform survived — a slow gain and a per-sample one report the same
+minimum. The crest factor of the two mixes is the difference.
 
 **There is no cockpit-stage file.** The cab is a Web Audio graph in `cabin.ts`;
 reimplementing it in Rust to export it would be a second copy of a listening
@@ -926,13 +1031,16 @@ none of it supplies these numbers.
   you are sitting, not what the engine does. The cab's transfer function was not
   measured and could not be — no such data exists for this vehicle — so the
   filter is plausible rather than correct, and bypassable for that reason.
-- **The saturation is shared, and the engine brake pays for it.** One limiter acts
-  on the mix, and its gains were set against fuelled operation. The brake's
-  release lobe is the fastest pressure event the model produces anywhere, so it is
-  the event the limiter cannot pass: at `brake-1300` the common gain falls to
-  0.247 and the crest factor with it. This is a real defect rather than a
-  simplification, and it is recorded under **Known deficits** rather than
-  corrected, because milestone 8 changed no calibration.
+- **The saturation is shared, and the engine brake still pays for it in level.**
+  One limiter acts on the mix, and the path gains were set against fuelled
+  operation. The brake drives the summed signal about four times past the knee, so
+  it runs with 12 dB of gain reduction — `brake-1300` sits at −13.8 dBFS where the
+  raw mix would be around −2. Milestone 9 made that a level reduction rather than
+  a deformation, which is the part that was audible; what remains is that the
+  loudest thing the engine does is the thing furthest from its own natural level,
+  and one static gain into one ceiling cannot hold the range from governed idle to
+  a decompression brake. Whether to spend the level or move the gains is a
+  calibration question waiting on the reference characterisation.
 - **A comparison is level-matched by RMS, not by loudness in the broadcast
   sense.** Both sides are engine noise in the same rough spectral region, which is
   the case where the simple measure and a weighted one agree. Comparing an engine
@@ -995,11 +1103,20 @@ repeating its last block, so a stall is audible rather than disguised.
   in this document.
 - Audio: exactly one **frame** per solver step, three paths interleaved;
   bit-identical across batch boundaries in every path; every sample of every path
-  finite and inside `[−1, 1]`, and their **sum** inside the soft-clip knee; a
+  finite and inside `[−1, 1]`, and their **sum** inside the limiter's knee; a
   reset engine silent and a reset click-free; the note at the firing frequency for
   any cylinder count; a standing torque and a standing cylinder pressure both
-  radiating nothing; the figures in **Results → Sound** met, except the four
-  recorded there as **Known deficits**.
+  radiating nothing; the figures in **Results → Sound** met, except those recorded
+  there as **Known deficits**.
+- **The ceiling changes the level, not the shape.** Below the knee it is exactly
+  transparent; above it, twenty times the gain on the same signal changes its
+  crest factor by less than 1 dB, and the gain does not swing by more than 10%
+  across a settled passage. Reaching the knee at full load is expected — the old
+  criterion required headroom *under* it, which was a true statement about a
+  waveshaper and is why that one was replaced rather than relaxed.
+- **A reported limiter gain is exact.** Dividing it out of a limited run
+  reproduces an unlimited run of the same input to within rounding, so the
+  unsaturated captures are the solver's own signal rather than an estimate of it.
 - **Every metric gives the wrong-looking answer for the wrong signal.** A steady
   tone reads unmodulated at any carrier and any level; a tone modulated to a
   stated depth reads that depth; a pulse train reads deeply modulated and a
@@ -1048,15 +1165,30 @@ Chasing a single number is what produced the fault; the replacements are
 deliberately a set that cannot all be satisfied by pushing energy in one
 direction.
 
-**And that replacement set is itself now known to be incomplete.** Two of its
-members were measured in milestone 8 against operating points they had never been
-applied to, and failed — see **Known deficits**. The `<80 Hz ≤ 35%` ceiling in
-particular is a fixed number asked of a firing fundamental that sweeps from
-27.5 Hz at governed idle to over 100 Hz governed, which is a factor of four; it is
-not obviously a criterion that can hold at both ends. It is left failing at idle,
-and un-widened, because a tolerance should come from characterising the reference
+**And that replacement set is itself now known to be incomplete.** Members of it
+were measured in milestone 8 against operating points they had never been applied
+to, and failed — see **Known deficits**. The `<80 Hz ≤ 35%` ceiling in particular
+is a fixed number asked of a firing fundamental that sweeps from 27.5 Hz at
+governed idle to over 100 Hz governed, which is a factor of four; it is not
+obviously a criterion that can hold at both ends. It is left failing at idle, and
+un-widened, because a tolerance should come from characterising the reference
 recordings rather than from whatever the model happens to produce on the day the
 question is first asked. That is exactly the mistake recorded above.
+
+The band criteria have a second problem milestone 9 exposed: **they were all
+written against fuelled operation and are applied to the engine brake as well.**
+Under brake the model now reads 55.2% in `300 Hz–2 kHz` and 42.8% in
+`80–300 Hz`, both outside their bounds, and a decompression brake genuinely is a
+hard high crack rather than a low roar. One set of band bounds for combustion and
+for a valve cracking at the top of compression is one number describing two
+mechanisms, which is the shape of every mistake in the list above. They are left
+failing rather than split, for the same reason as the idle ceiling: the split
+should come from the reference and not from the model.
+
+The crest-factor criterion is the one member of the set that has now caught a real
+defect rather than been fitted to one. It read 7.4 dB under brake against its
+9 dB floor while every band criterion in the table was being *satisfied* by the
+same clipping that caused it.
 
 ## Commands
 
@@ -1065,12 +1197,12 @@ pnpm install --frozen-lockfile
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 287 tests: geometry, provenance, catalog,
+cargo test --workspace          # 290 tests: geometry, provenance, catalog,
                                 # determinism, limits, combustion, heat transfer,
-                                # turbo, EGR, acoustics, brake, driveline,
-                                # dyno calibration, ID-branch guard, the metric
-                                # library against known signals, scenario
-                                # reproducibility
+                                # turbo, EGR, acoustics, the limiter, brake,
+                                # driveline, dyno calibration, ID-branch guard,
+                                # the metric library against known signals,
+                                # scenario reproducibility
 
 pnpm wasm:build                 # wasm-pack -> web/src/wasm (generated, gitignored)
 pnpm wasm:test                  # wasm-pack test --node: WASM API smoke test
@@ -1085,10 +1217,61 @@ pnpm build:subpath              # the same build under an absolute /diesel-hifi/
 The Playwright suite needs a browser once:
 `pnpm --filter web exec playwright install chromium`.
 
-### Verification, milestone 8
+### Verification, milestone 9
 
 Run on Windows 11, and recorded with what actually happened rather than with what
 was expected:
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --workspace` | 290 passed, 0 failed |
+| `pnpm wasm:build` | passed |
+| `pnpm wasm:test` | 17 passed, 0 failed |
+| `pnpm check` | 0 errors, 0 warnings |
+| `pnpm test:unit` | 83 passed, 0 failed, across 6 files |
+| `pnpm test:e2e` | **27 passed, 7 failed** — the same seven as milestone 8 |
+| `pnpm build` | passed; `verify-dist: OK`, 6 files, 587 KiB |
+| `pnpm build:subpath` | passed; `verify-dist: OK`, absolute `/diesel-hifi/` prefix |
+| `--example sweep` | ran; peak power −1.5%, peak torque +0.4%, 20.30 MPa peak — all unchanged |
+| `--example brake_sweep` | ran; stage III +9.0% at 1300 rpm, −8.6% at 2300 — unchanged |
+| `--example audio_probe` | ran; the figures in **Results → Sound** |
+| `--example audio_capture` | ran; 10 scenarios, no dropped frames |
+
+**The seven browser failures are the same seven recorded under milestone 8**, by
+name and by failure mode: the tests that drive the simulation in real time
+through `pullAway`, failing because the engine does not reach 1100 rpm within the
+30-second poll on this machine. Each one fails at `slice.spec.ts:58`, inside
+`pullAway`, before it reaches its own assertions — including the exhaust-output
+test, which never gets as far as measuring audio. Nothing in this milestone
+touches the worker or the pacing. The remaining 27, including the three audio
+tests and path soloing, pass.
+
+The three new native tests are the ones that pin the mechanism: the ceiling is
+exactly transparent below its knee, twenty times the gain on the same pulse train
+changes its crest factor by under 1 dB, and dividing a reported gain out of a
+limited run reproduces an unlimited run of the same input. The last of those is
+checked against *linearity* rather than against the output it came from, so it
+fails if the recorded gain is off by a frame, off by a scale, or read from the
+wrong ring position.
+
+**The fuelled and brake sweeps were re-run to show the change is audio-only**,
+and they are identical to milestone 8's to every digit reported. Nothing in this
+milestone touches combustion, the crank or the brake mechanism.
+
+**One acceptance criterion was replaced rather than relaxed.** The old form
+required full load to peak at or below 99% of the knee, on the grounds that the
+louder start transient needed room underneath the ceiling to arrive in. That was
+true of a static gain feeding a waveshaper and is not true of a level follower,
+which reaches the ceiling by turning the passage down. The question it was really
+asking — *is the loud end squared off* — is not answered by proximity to the
+ceiling at all, and is now asked directly as a crest-factor floor. The old form
+would have passed the very defect this milestone fixed: `full-1400` sat at 0.794
+under a 0.85 knee, comfortably inside the threshold, with its crest factor down
+3.4 dB.
+
+### Verification, milestone 8
 
 | Command | Result |
 |---|---|

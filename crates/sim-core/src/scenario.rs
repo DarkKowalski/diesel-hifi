@@ -140,6 +140,13 @@ pub struct ScenarioRun {
     pub paths: usize,
     /// Interleaved frames from the captured phases, in order.
     pub frames: Vec<f32>,
+    /// The limiter gain each captured frame carries: one entry per frame.
+    ///
+    /// Dividing it out of a frame recovers the mix the solver produced before
+    /// the limiter engaged. It is carried here rather than recomputed because
+    /// the gain has a release time, so it depends on the whole run rather than
+    /// on the sample it was applied to.
+    pub limiter_gains: Vec<f32>,
     pub phases: Vec<PhaseResult>,
     /// Frames the ring dropped because this harness fell behind.
     ///
@@ -470,7 +477,9 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
     // Drained every chunk whether or not the phase is captured, so the ring
     // never overflows and a capture cannot acquire a hole.
     let mut sink = vec![0.0f32; CHUNK_STEPS as usize * paths];
+    let mut gain_sink = vec![1.0f32; CHUNK_STEPS as usize];
     let mut frames: Vec<f32> = Vec::new();
+    let mut limiter_gains: Vec<f32> = Vec::new();
     let mut results: Vec<PhaseResult> = Vec::new();
 
     for phase in &scenario.phases {
@@ -492,9 +501,10 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
             if let Some(rpm) = phase.hold_rpm {
                 sim.pin_speed_rpm(rpm)?;
             }
-            let written = sim.drain_audio(&mut sink);
+            let written = sim.drain_audio_with_gains(&mut sink, &mut gain_sink);
             if phase.capture {
                 frames.extend_from_slice(&sink[..written * paths]);
+                limiter_gains.extend_from_slice(&gain_sink[..written]);
                 captured += written;
             }
 
@@ -531,6 +541,7 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
         sample_rate_hz: 1.0 / dt,
         paths,
         frames,
+        limiter_gains,
         phases: results,
         dropped_frames: sim.audio_dropped(),
     })
