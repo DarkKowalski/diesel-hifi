@@ -1,0 +1,76 @@
+# Build the static site and deploy it to GitHub Pages.
+#
+# Deliberately `workflow_dispatch` only. There is no `push` trigger, so merging
+# to the default branch publishes nothing: the site goes out when someone runs
+# this workflow and not before. Add a `push:` block here if that is ever wanted.
+#
+# GitHub Pages also has to be enabled for the repository (Settings -> Pages ->
+# Source: GitHub Actions) before the deploy step can succeed. On a **private**
+# repository that requires a paid plan — Pages for private repositories is a
+# Pro, Team or Enterprise feature, and on a free account the repository has to
+# be public first. Until then this workflow builds and uploads fine and only
+# the final deploy step would fail.
+#
+# The build is `pnpm build`, not `build:subpath`. `web/vite.config.ts` uses a
+# relative base, so one artifact works at a domain root and under any subpath —
+# including `https://<owner>.github.io/diesel-hifi/`. `build:subpath` exists for
+# hosts that need an absolute prefix, which Pages does not.
+name: Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let a newer run finish rather than cancelling it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No toolchain action needed: `rust-toolchain.toml` pins the channel, the
+      # components and the wasm32 target, and the runner's rustup honours it on
+      # the first cargo invocation.
+      - name: Show the pinned Rust toolchain
+        run: rustup show
+
+      # `cargo install` rather than a third-party action or a piped installer
+      # script: slower, but this only runs on demand and it is the version the
+      # lockfile resolves.
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Compiles the WASM module, builds the site, and runs verify-dist, which
+      # is what checks the artifact is genuinely self-contained: no runtime
+      # external requests, wasm and worker chunks present.
+      - run: pnpm build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
