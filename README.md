@@ -22,8 +22,10 @@ acceptance criteria, results, and every assumption the model makes.
 crank-angle-resolved four-stroke state; injection, ignition delay, heat release,
 cylinder pressure, crank dynamics, friction, load, idle control; a wastegate
 turbocharger and cooled EGR; the staged decompression engine brake; a rigid truck
-driveline; three-path engine audio; native deterministic tests; a static Svelte UI
-with the simulation off the UI thread.
+driveline; three-path engine audio; a tested metric library, named reproducible
+listening scenarios and WAV capture; native deterministic tests; a static Svelte
+UI with the simulation off the UI thread and a level-matched A/B against local
+recordings.
 
 **Out.** Gasoline engines or any multi-fuel abstraction. Engineering
 certification, emissions prediction, ECU reproduction, OEM map reverse
@@ -36,11 +38,14 @@ kinetics, aftertreatment chemistry.
 | Path | Responsibility |
 |---|---|
 | `crates/sim-core` | Configuration, validation, provenance, deterministic physics, air path, engine brake, driveline, all three acoustic sources and the exhaust duct, dynamometer harness, snapshots, native tests. **No browser, DOM, audio-device, or filesystem dependency.** |
+| `crates/sim-core/src/analysis.rs` | The measuring instruments: transform, band shares, comb share, crest factor, modulation depth. Pure, out of the hot loop, and tested against signals whose answer is known. Shared by the probes and the acoustic tests so a metric has one definition. |
+| `crates/sim-core/src/scenario.rs` | Named, reproducible listening scenarios: a seed, initial conditions and a script of control phases, returning audio plus the conditions the engine actually reached. A measurement harness like `dyno.rs`, and like it it touches nothing outside the simulation. |
 | `crates/sim-wasm` | `wasm-bindgen` adapter. Serialization and boundary only; no physics. |
 | `web/src/worker` | WASM lifecycle, fixed-step scheduling, batching, message protocol. |
 | `web/src` | Svelte UI, input, telemetry rendering, Web Audio orchestration. |
 | `web/src/audio` | `AudioWorklet` processor: ring of interleaved frames, resampler, underrun accounting. Dependency-free plain JavaScript. |
 | `web/src/lib/cabin.ts` | Cockpit listening stage as data: per-path transfers, shared filter table, reflection taps, seeded impulse response. Pure and Web-Audio-free, unit-tested under Node. |
+| `web/src/lib/compare.ts` | Level-matching arithmetic for the A/B against local recordings. Pure and Web-Audio-free. |
 | `scripts/verify-dist.mjs` | Static-build verification. |
 
 The production artifact is `web/dist` and must run from a domain root or a
@@ -103,7 +108,8 @@ Web Worker and needs neither `SharedArrayBuffer` nor cross-origin isolation.
 The UI provides an engine selector populated through the real catalog API,
 start/stop and reset, pedal and load controls, RPM with pressure/torque/state
 telemetry, visible error and worker lifecycle states, a solo toggle per
-radiating path, and **an explicit user action before Web Audio starts**.
+radiating path, a level-matched A/B against local audio files, and **an explicit
+user action before Web Audio starts**.
 
 ## Milestones
 
@@ -116,6 +122,13 @@ radiating path, and **an explicit user action before Web Audio starts**.
 | 5 | Engine acoustics: structural combustion noise, per-cylinder build scatter, radiated port flow, an exhaust duct with runners and turbine loss, and a retuned cockpit stage. |
 | 6 | Making it sound like a truck: a torque-driven body path, a bounded pipe-mouth radiation transfer, a lower and broader modal bank, cycle-to-cycle combustion variation, and acceptance criteria that measure firing orders and pulse dynamics rather than band shares alone. |
 | 7 | Three paths to the listener: the radiating paths cross the boundary interleaved instead of summed, each gets its own cab transfer, and the UI can solo them. |
+| 8 | **Measuring before changing**: a tested metric library, a broken modulation detector replaced, named reproducible scenarios covering idle through engine braking, a WAV capture tool, a level-matched A/B against local recordings, and an audit of the playback chain at both device rates. No acoustic source or calibration was changed. |
+
+Milestone 8 deliberately delivers **no change to how the engine sounds**. Every
+figure below that is measured at an operating point milestone 7 also measured is
+unchanged to the last digit. What changed is what can be measured, what can be
+regenerated, and what is now known to be wrong — see **Results → Sound → Known
+deficits**.
 
 Still out: aftertreatment chemistry, clutch slip and gear-change behaviour, the
 manual's shift-assist and engine-stop-assist brake functions, ABS interaction,
@@ -225,36 +238,100 @@ comes from the temperature the solver integrates. Permuting the firing order
 changes the waveform because the runners differ in length. None of that is
 written down as a rule.
 
-Where the energy sits, from `cargo run --release -p sim-core --example audio_probe`:
+Where the energy sits, from `cargo run --release -p sim-core --example audio_probe`.
+Every row is a named scenario from `sim-core::scenario`, so it can be regenerated
+rather than reproduced by hand:
 
-| | Idle | Cruise | Full load | Target |
-|---|---:|---:|---:|---:|
-| Firing orders `f0…4·f0` | 42.1% | 71.3% | 91.9% | ≥ 35% loaded |
-| Crest factor | 14.7 dB | 10.9 dB | 10.5 dB | ≥ 9 dB |
-| Firing-rate modulation | 0.45 | 0.37 | 0.83 | > 0 |
-| `<80 Hz` | 17.2% | 18.6% | 4.1% | ≤ 35% |
-| `80–300 Hz` | 66.2% | 56.2% | 90.3% | ≥ 45% |
-| `300 Hz–2 kHz` | 15.0% | 24.2% | 4.9% | ≤ 30% |
-| `150 Hz–15 kHz` | 55.3% | 49.6% | 58.8% | ≥ 35% |
-| `>15 kHz` residue | 0.64% | 0.00% | 0.00% | ≤ 1% |
-| Peak / dBFS | 0.184 / −29.4 | 0.543 / −16.2 | 0.796 / −12.4 | under the 0.85 knee |
+| | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` | `brake-1300` | Target |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Speed, rpm | 551 governed | 900 held | 1200 held | 1400 held | 1800 held | 1300 held | — |
+| Firing orders `f0…4·f0` | 49.3% | 64.3% | 71.3% | 91.9% | 73.8% | 57.8% | ≥ 35% loaded |
+| Crest factor | 16.6 dB | 11.7 dB | 10.9 dB | 10.4 dB | 10.0 dB | **7.4 dB** | ≥ 9 dB |
+| Modulation depth | 0.63 | 1.03 | 0.72 | 1.37 | 1.05 | 1.60 | > 0 |
+| `<80 Hz` | **40.9%** | 2.1% | 18.6% | 4.1% | 0.0% | 4.9% | ≤ 35% |
+| `80–300 Hz` | 41.7% | 80.3% | 56.2% | 90.3% | 75.7% | 54.4% | ≥ 45% |
+| `300 Hz–2 kHz` | 15.8% | 16.0% | 24.2% | 4.9% | 22.4% | **40.4%** | ≤ 30% |
+| `150 Hz–15 kHz` | 38.7% | 64.3% | 49.6% | 58.8% | 77.2% | 93.3% | ≥ 35% |
+| `>15 kHz` residue | 0.06% | 0.00% | 0.00% | 0.00% | 0.00% | 0.02% | ≤ 1% |
+| Peak | 0.110 | 0.347 | 0.542 | 0.794 | 0.751 | **0.849** | under the 0.85 knee |
+| Level, dBFS | −35.8 | −20.9 | −16.2 | −12.4 | −12.5 | −8.8 | — |
+| Exhaust over block | 9.2 dB | 5.1 dB | 6.3 dB | 10.6 dB | 6.0 dB | 20.7 dB | ≥ 6 dB |
 
-The loudest octave is now `80–160 Hz` at idle and cruise and `160–315 Hz` at full
-load, against `315–630 Hz` at idle and cruise before.
+Bold entries miss their target and are discussed under **Known deficits** below.
+
+`cruise-1200` and `full-1400` are the conditions milestone 7 called cruise and
+full load, and they reproduce its figures: every band share to the tenth of a
+percent it was quoted to, and the levels to a tenth of a decibel. The residual —
+a peak of 0.794 against 0.796, a crest of 10.4 dB against 10.5 — is the settling
+time, which the scenario now states as a number (3.0 s) rather than leaving it
+implicit in a loop count. That agreement is what says the metric library replaced
+the arithmetic without moving the answers.
+
+**The modulation column is the exception, and is not comparable with milestone 7's.**
+It is a different measurement; see **Measuring the sound** below.
+
+Three columns are new and two of them were not measurable before. `idle` is now
+**governed** — the engine sits where the governor puts it, at 551 rpm against the
+published 560 — where the old "idle" column was 600 rpm at 15% pedal with the
+crank re-pinned every 2.5 ms. That is a held speed with an idle-ish pedal, and it
+is a different signal: it was reading 17.2% below 80 Hz where governed idle reads
+40.9%, because 600 rpm puts the second order above 80 Hz and 551 rpm does not.
+The old number was not wrong about the signal it measured. It was measuring the
+wrong signal.
+
+The loudest octave is `40–80 Hz` at governed idle, `160–315 Hz` at 900, 1400,
+1800 and under brake, and `80–160 Hz` at cruise.
 
 The probe reports each path on its own, because the balance between them is the
 whole question and a mixed band share cannot say which one moved:
 
-| Alone, at full load | dBFS | `<80 Hz` | `80–300` | `300–2k` | `>2 kHz` | orders |
+| Alone, at `full-1400` | dBFS | `<80 Hz` | `80–300` | `300–2k` | `>2 kHz` | orders |
 |---|---:|---:|---:|---:|---:|---:|
-| Exhaust | −12.1 | 7.2% | 90.0% | 2.8% | 0.0% | 94.9% |
-| Block | −22.0 | 4.1% | 20.6% | 62.9% | 12.5% | 24.4% |
-| Body | −23.2 | 84.0% | 16.0% | 0.0% | 0.0% | 99.9% |
+| Exhaust | −12.0 | 7.3% | 89.5% | 3.1% | 0.1% | 94.5% |
+| Block | −22.6 | 3.6% | 23.3% | 62.3% | 10.8% | 26.6% |
+| Body | −23.5 | 84.6% | 15.3% | 0.1% | 0.0% | 99.8% |
 
-The exhaust leads the block by 7.3, 6.3 and 9.9 dB at the three points. That
-figure is the single one that decides whether this reads as a truck: the exhaust
-carries the firing orders and the block sits on top of them, and a block in front
-of the exhaust is a small engine however the bands come out.
+The exhaust leads the block by 6 to 21 dB at every point measured. That figure is
+the single one that decides whether this reads as a truck: the exhaust carries the
+firing orders and the block sits on top of them, and a block in front of the
+exhaust is a small engine however the bands come out.
+
+#### Known deficits
+
+Found by the milestone 8 measurements and **not fixed**. They are recorded here
+rather than tuned away, because tuning a number the day it is first measured is
+how the previous round of acceptance criteria came to enforce the defect they
+were meant to catch.
+
+- **The engine brake is being clipped, hard.** `brake-1300` peaks at 0.849 against
+  a 0.85 knee, and the capture tool reports the limiter's common gain falling to
+  **0.247** — a 12 dB reduction — at some point in the capture. The crest factor
+  is 7.4 dB against a 9 dB criterion, which is the signature the crest measurement
+  exists to catch: a train of distinct events squared off into a buzz. The release
+  lobe is deliberately the fastest pressure event in the model, so it is the one
+  event the shared limiter cannot pass, and the gains were set against fuelled
+  operation. `300 Hz–2 kHz` at 40.4% against a 30% ceiling is the same story from
+  the other side: clipping is broadband.
+- **Governed idle sits 40.9% below 80 Hz, against a 35% ceiling.** A six at 551 rpm
+  has its fundamental at 27.5 Hz and its second order at 55 Hz, so the energy is
+  genuinely there and the model is not obviously wrong. What is wrong is the
+  criterion: a fixed ceiling asks "can ordinary hardware reproduce this" at a
+  frequency that sweeps by a factor of four across the range, and at the bottom of
+  the range the honest answer is *not the fundamental, no*. The number is left as
+  it stands, failing, until there is reference characterisation to set a
+  speed-dependent tolerance from. It is not silently widened.
+- **The limiter engages at every fuelled point above idle**, down to 0.553 at
+  `full-1400`. It is doing its job, but it is doing it to the pulse shape, which is
+  the timbre. The capture tool exports unsaturated tracks alongside the saturated
+  ones for exactly this reason.
+- **`light-900` has the exhaust only 5.1 dB in front of the block**, under the 6 dB
+  floor. Light load is where ignition delay is longest and the premixed fraction
+  largest, so the block is loudest relative to the exhaust exactly where the
+  balance criterion is tightest.
+
+None of these was visible before, for three separate reasons: two of the four
+operating points did not exist as scenarios, the limiter's engagement was never
+reported, and idle was being measured somewhere the engine does not idle.
 
 **The paths are summed at the listener, not in the solver.** Each is a channel
 of its own from the ring buffer through to the Web Audio graph, where `cabin.ts`
@@ -262,9 +339,9 @@ gives it its own transfer. What the solver still does is decide the *saturation*
 because that is a property of the mix: it clips the sum, takes the ratio of
 clipped to unclipped as a common gain, and scales all three paths by it. Which is
 what a limiter is. The gain is never above one, so the three channels sum to
-exactly the single sample this used to emit — the **raw** listening stage is
-bit-comparable to the previous milestone, and every probe figure above is
-unchanged to the last digit.
+exactly the single sample this used to emit — which is why splitting the paths in
+milestone 7 left the **raw** listening stage bit-comparable to milestone 6, and
+every figure it had measured unchanged to the last digit.
 
 Two honest limits on that. The clip decision is made on the *pre-filter* mix, so
 once the cab filters each path differently the filtered sum can exceed the knee;
@@ -279,9 +356,9 @@ and a tone can hold identical energy in every band. *Crest factor* — peak over
 RMS — is 3 dB for a sine and double figures for a series of distinct combustion
 events, and it collapses long before saturation measures as distortion: during
 calibration it read 3.5 dB with the gains too high, which is a signal squared off
-into a buzz. *Firing-rate modulation depth* rectifies the signal, low-passes it
-to an envelope, and compares that envelope's content at `f0` and `2·f0` against
-its mean; a steady tone gives nearly zero however loud it is.
+into a buzz. *Firing-rate modulation depth* asks whether the signal's envelope
+swings at the firing rate, which is the difference between an engine and a hum at
+the right pitch.
 
 The audible band starts at 150 Hz because that is where a small speaker begins
 reproducing anything, which is the question that criterion asks — and only that
@@ -348,6 +425,204 @@ Nine mistakes this chain invites, all of which were made:
   crank *torque*, which swings at the firing rate itself, and until something was
   driven by it the model had no path that could make the sound. Adding gain to
   the wrong path is how an engine ends up loud and small at the same time.
+
+### Reproducible scenarios
+
+Every acoustic figure above names a scenario, and a scenario is a seed, initial
+conditions and a script of control phases. The point is that a comparison can be
+*regenerated*. Two recordings of "roughly full load" are not a comparison; two
+runs of `full-1400` are.
+
+| Scenario | Kind | What it is |
+|---|---|---|
+| `idle` | steady, **governed** | No pedal, no load, the governor holding it. 551 rpm against the published 560 target |
+| `light-900` | steady, held | 25% pedal at 900 rpm: long ignition delay, large premixed fraction, the rattle |
+| `cruise-1200` | steady, held | 60% pedal at 1200 rpm |
+| `full-1400` | steady, held | Full pedal at 1400 rpm, the peak-torque region |
+| `rated-1800` | steady, held | Full pedal at 1800 rpm, the calibrated power peak |
+| `start` | transient | Cranking from rest at 0 rpm, catching, settling to idle at 571 |
+| `stop` | transient | Idling, then ignition off: the run-down to rest |
+| `accelerate` | transient | Sixth gear, part pedal to full: 1110 → 2075 rpm over five seconds |
+| `release` | transient | Ninth gear on a 3% climb, pedal released: 1428 → 1301 rpm over three |
+| `brake-1300` | steady, held | Decompression brake, stage III, pedal released, at its published anchor speed |
+
+Three distinctions the table encodes, each of which was previously implicit:
+
+- **Held speed and free running are different measurements.** A held phase pins
+  the crank every 2.5 ms as a dynamometer does; a free phase lets it go where the
+  physics takes it. Holding is how a steady spectrum is measured — an unloaded
+  engine at full pedal leaves the point being measured inside a few hundred
+  milliseconds, and a spectrum taken across that is smeared over whatever it
+  swept — and it is *not* a claim that a truck behaves this way. Every result
+  reports the speed the engine actually reached, and whether it was held.
+- **Idle is governed, not held.** The governor is part of how an idling diesel
+  sounds. Pinning a chosen speed and calling it idle measures something else, and
+  did.
+- **The two free transients are driven in gear.** The engine's own inertia is
+  3.5 kg·m²; a full-pedal pull against a resisting torque either stalls it or
+  slams it into the governor inside a tenth of a second, and neither is what a
+  truck accelerating sounds like. In gear the forty-tonne combination appears at
+  the crank as tens to hundreds of kilogram-metres-squared and the speed rises at
+  a rate the ear can follow. The first attempt at `accelerate` — full pedal
+  against 900 N·m from idle, out of gear — stalled the engine to 22 rpm, which is
+  a scenario that measures a stall.
+
+A transient's metrics are reported as **null** rather than as numbers. The
+firing-rate metrics need a firing rate that stands still for the length of the
+window, and a run-down passes through every speed below idle; a comb share
+against the mean speed of a sweep is a measurement of a frequency the engine held
+for a fraction of the capture. Reporting a number there invites it to be compared
+with a steady one.
+
+### Capturing scenarios as files
+
+`cargo run --release -p sim-core --example audio_capture` writes every scenario to
+`target/audio-capture/<id>/` as 32-bit float WAV at 40 kHz, with a
+`manifest.json` recording the conditions and every metric for every track.
+
+| File | What it is |
+|---|---|
+| `mix.wav` | the three paths added up: the raw listening stage |
+| `exhaust.wav`, `block.wav`, `body.wav` | each radiating path on its own |
+| `*-unsaturated.wav` | the same paths with the limiter's gain divided out |
+
+**The unsaturated set needs no solver change, because the limiter is
+invertible.** It clips the mix and applies the ratio to all three paths as one
+common gain, so from the emitted sum — which *is* the clipped value — the
+pre-saturation mix is `knee · atanh(sum / knee)`, and dividing each path by that
+gain recovers what the solver produced before the limiter touched it. Exact
+wherever the clipper is, which is everywhere except the outer `[−1, 1]` clamp
+that measurement says never engages. The files are written only for scenarios
+where the limiter engaged, and the manifest records how far it did: a set of
+files identical to the ones beside them is a set someone will later compare and
+draw a conclusion from.
+
+**There is no cockpit-stage file.** The cab is a Web Audio graph in `cabin.ts`;
+reimplementing it in Rust to export it would be a second copy of a listening
+stage that would immediately start drifting from the one people actually hear.
+Cockpit comparison happens in the browser, against these files, through the
+comparison controls below.
+
+Float WAV rather than 16-bit PCM: quantising would put a dither decision, or a
+truncation artefact, between the solver and the comparison.
+
+### Measuring the sound
+
+Everything above is a number produced by `sim_core::analysis`, and this section
+is about that module rather than about the engine. It exists because the previous
+arrangement — the metrics defined inside the probe that printed them, and again
+inside the tests that asserted on them — produced a metric that was wrong for two
+milestones without anything noticing.
+
+**A metric that only ever sees engine output has nothing to fail against.** So
+`tests/analysis.rs` points every metric at four signals whose answer is known
+before the code runs, and asserts what each must read:
+
+| | steady tone | 50% AM tone | pulse train | white noise |
+|---|---:|---:|---:|---:|
+| Crest factor | 3.0 dB | 6.0 dB | 14.2 dB | ~4.8 dB |
+| Modulation depth | 0.00 | 0.50 | 2.59 | < 0.15 |
+| Firing orders | 100% at `f0`, 0% off it | 0% | 48.5% | < 1% |
+
+The probe prints that table on every run, above the engine figures, so the scale
+the engine numbers sit on is visible rather than assumed.
+
+**The modulation detector was replaced, and it was giving false positives.** The
+old one rectified the signal, low-passed it to an "envelope", and looked for
+content at `f0` and `2·f0`. But rectification *manufactures* what it then finds:
+`|A cos ωt|` is not constant — it is `2A/π` plus even harmonics of the carrier,
+the first of which sits at `2ω` with amplitude `4A/3π`. Point that detector at a
+steady 60 Hz sine and it reports **0.42**, against documentation promising
+"nearly zero however loud it is". It was measuring its own rectification, and
+0.42 comfortably satisfied the `> 0` criterion written against it.
+
+The replacement takes the **analytic envelope** — the magnitude of the signal
+after a frequency-domain Hilbert transform — for which a tone is exactly flat at
+any frequency, and reports the envelope's fractional swing at `f0` and `2·f0`
+against its mean. A tone reads 0. A tone modulated to depth *d* reads *d*. That
+last property is what makes it checkable rather than merely plausible, and it is
+why the figures in the table above are larger than milestone 7's: they are a
+different measurement, not a change in the engine.
+
+The same module now supplies crest factor, RMS and the firing frequency to
+`tests/acoustics.rs`, which had its own copies. Two definitions of one metric is
+how a test and the probe it is meant to agree with come to disagree.
+
+### Playback audit
+
+The worklet is the last thing between the solver and the speaker, and until
+milestone 8 nothing tested it. `web/test/worklet.test.ts` loads
+`exhaust-processor.js` — the file that ships, through the same `?raw` mechanism
+the app uses — evaluates it with the three globals a worklet realm provides, and
+drives it at **both** common device rates. Neither divides the solver's 40 kHz,
+which is the whole reason there is a resampler to audit.
+
+Eleven properties, at 48 kHz and at 44.1 kHz: silence until the cushion fills; a
+300 Hz tone in is a 300 Hz tone out; the three paths stay sample-aligned through
+the resampling; imaging stays below −38 dBc; a dry ring outputs silence rather
+than repeating itself, and counts it; both ends of a dry spell fade rather than
+cut; an overrun drops whole frames and stays aligned; a block with the wrong path
+count is refused rather than de-interleaved on a guess; the drift trim pushes
+towards the buffer target and not away from it, by no more than 1%; the source
+rate is taken from the message; and a flush clears the interpolator's state as
+well as the ring.
+
+Resampler imaging, measured with the buffer held still so the drift trim is not
+sweeping the read rate:
+
+| Input | 48 kHz worst product | 44.1 kHz worst product |
+|---|---|---|
+| 900 Hz | −64.3 dBc at 8.9 kHz | −65.3 dBc at 5.0 kHz |
+| 2.6 kHz | −46.0 dBc at 10.6 kHz | −47.0 dBc at 6.7 kHz |
+| 3.8 kHz | −39.7 dBc at 11.8 kHz | −38.0 dBc at 7.9 kHz |
+
+The 48 kHz column reproduces the figures recorded by hand in the worklet's own
+header, landing at the frequency it said they would. **44.1 kHz had never been
+measured**, and is no worse. Above about 16 kHz the products rise — the worst at
+900 Hz is −54.8 dBc at 23.1 kHz, a third-order image — which is inaudible and is
+excluded from the table on that basis rather than overlooked.
+
+Two things the audit found in its own harness rather than in the worklet, both
+worth recording because they would mislead the next person to measure this:
+feeding the ring one large buffer and rendering against it makes the buffer drain
+throughout, which sweeps the drift trim, which frequency-modulates the output and
+puts sidebands 10 to 25 dB above the real imaging. And any assertion on a counter
+has to render at least 32 quanta, because that is the reporting interval.
+
+**Not audited.** Sustained real-time throughput and latency drift under load are
+browser measurements, and this suite is not a browser. What is measured here is
+that the chain is arithmetically correct at both rates; what a machine can sustain
+is reported by the underrun counter in the sound panel, live.
+
+### Comparing against a recording
+
+The sound panel carries a **level-matched A/B** between three sources: the live
+engine, a `Reference` file, and a `Candidate` file. The two file slots are the
+same mechanism with different names — reference is what the model is compared
+*against*, candidate is what it is compared *with*, and the intended candidate is
+a `mix.wav` from `audio_capture` taken before a change.
+
+**An untrimmed comparison is a comparison of loudness.** Louder wins, and it does
+not take much: a decibel is enough to swing a preference and far too little to
+notice as a level difference. So the comparison is *switched* rather than mixed —
+one source at a time, because a crossfade would spend its duration playing a
+mixture — and every clip is trimmed to the engine's own measured output level
+before it plays. The clip's RMS and peak are measured from its decoded samples,
+the gain is shown in decibels, and it is clamped two ways: 24 dB of travel at
+most, and never enough to lift a clip past full scale. A clip that cannot reach
+the target says so rather than presenting a clamped gain as a match.
+
+Matching is explicit, not continuous. An automatic match would be a compressor
+keyed to the engine and would flatten the loudness differences between operating
+points, which is one of the things being judged — so it re-matches on load and on
+request, and the panel says to re-match after changing speed or load.
+
+The reference joins the graph **after** the cab stage and before the volume
+control. A recording made in a real cab has already been through one; running it
+through ours would filter a cab through a cab.
+
+**Files are read in the browser and never leave it.** There is no backend to send
+them to, and the reference material is somebody else's recording.
 
 ### Where you are listening from
 
@@ -450,6 +725,37 @@ exact mistake the input trim was introduced to stop.
 None of this is published. The manual says nothing about how the engine sounds
 and less about how its cab sounds; these are listening choices and the UI says so
 where you switch them.
+
+### The acoustic reference, and what it is not
+
+The comparison workflow is built to be used against a benchmark recording. The
+one it was built for is an ETS2 sound mod's demonstration video, whose author
+identifies the source as a **2018 Mercedes Arocs 3248 with a 12.8-litre OM 471**,
+recorded with synchronised microphones around the engine and exhaust. Its
+interior-engine chapter is the driver-seat segment of interest.
+
+Four things it is not, all of which bound what it can settle:
+
+- **It is a later engine.** This configuration is the 2011 OM 471.9 M3D; the
+  later 390 kW / 2600 N·m / 2700 bar figures are deliberately kept out of it, and
+  a recording of that engine cannot be treated as ground truth for this one.
+- **It is a processed game mix**, not isolated microphone tracks and not a
+  calibrated sound-pressure measurement. Levels in it mean nothing absolute, which
+  is why the comparison matches levels rather than reading them.
+- **Its description lists other sound mods.** Anything not the engine has to be
+  identified before a window is chosen.
+- **Nothing in it is annotated.** RPM and load are inferred, and stationary
+  revving does not establish what the engine sounds like under load.
+
+The files live in the gitignored `datasheet/audio-references/`, are loaded
+through the panel's file input at listening time, and are **not** part of the
+distributed build. The application ships no audio assets and fetches nothing at
+runtime.
+
+**No listening comparison against it has been made yet.** Milestone 8 delivered
+the apparatus — reproducible scenarios, exported captures, corrected metrics,
+level-matched A/B — and no ear has been applied to the result. Nothing below or
+above is a listening result, and a passing signal check is not one either.
 
 ## Reference engine and sources
 
@@ -620,6 +926,21 @@ none of it supplies these numbers.
   you are sitting, not what the engine does. The cab's transfer function was not
   measured and could not be — no such data exists for this vehicle — so the
   filter is plausible rather than correct, and bypassable for that reason.
+- **The saturation is shared, and the engine brake pays for it.** One limiter acts
+  on the mix, and its gains were set against fuelled operation. The brake's
+  release lobe is the fastest pressure event the model produces anywhere, so it is
+  the event the limiter cannot pass: at `brake-1300` the common gain falls to
+  0.247 and the crest factor with it. This is a real defect rather than a
+  simplification, and it is recorded under **Known deficits** rather than
+  corrected, because milestone 8 changed no calibration.
+- **A comparison is level-matched by RMS, not by loudness in the broadcast
+  sense.** Both sides are engine noise in the same rough spectral region, which is
+  the case where the simple measure and a weighted one agree. Comparing an engine
+  against something with a different spectrum is not what this is for.
+- **The playback audit is not a throughput measurement.** It establishes that the
+  worklet is arithmetically correct at both device rates. What a given machine can
+  sustain in real time is a browser question, and is reported live by the underrun
+  counter rather than asserted here.
 - **The brake's wastegate loop is deliberately slower than the fuelled one.** The
   brake carries positive feedback — more boost packs the cylinder harder, which
   dumps more energy into the turbine — and the fuelled gains hunt against it
@@ -677,7 +998,27 @@ repeating its last block, so a stall is audible rather than disguised.
   finite and inside `[−1, 1]`, and their **sum** inside the soft-clip knee; a
   reset engine silent and a reset click-free; the note at the firing frequency for
   any cylinder count; a standing torque and a standing cylinder pressure both
-  radiating nothing; the figures in **Results → Sound** met.
+  radiating nothing; the figures in **Results → Sound** met, except the four
+  recorded there as **Known deficits**.
+- **Every metric gives the wrong-looking answer for the wrong signal.** A steady
+  tone reads unmodulated at any carrier and any level; a tone modulated to a
+  stated depth reads that depth; a pulse train reads deeply modulated and a
+  high crest factor; noise reads neither; a comb at the firing rate reads as
+  orders and a tone between them does not. Passing on engine audio is not
+  evidence that a metric is correct.
+- **A scenario is reproducible.** The same scenario run twice is bit-identical in
+  every sample and in every recorded condition; a capture contains its measurement
+  phases and not the settling before them; a held phase holds; nothing is dropped
+  on the way out.
+- **Playback is arithmetically correct at 44.1 and 48 kHz**: the resampled pitch
+  is right, the three paths stay sample-aligned through it, imaging stays below
+  −38 dBc in band, an underrun outputs silence and is counted, an overrun drops
+  whole frames, a malformed block is refused, and the drift trim moves towards the
+  buffer target by no more than 1%.
+- **A listening comparison is level-matched**: clips are trimmed to the engine's
+  measured output level, the trim is bounded and cannot drive a clip into
+  clipping, a match that cannot reach its target reports the shortfall, and one
+  source plays at a time.
 
 **The audio criteria were rewritten, and the old ones are recorded here because
 they are the reason this shipped sounding wrong.** They were:
@@ -707,6 +1048,16 @@ Chasing a single number is what produced the fault; the replacements are
 deliberately a set that cannot all be satisfied by pushing energy in one
 direction.
 
+**And that replacement set is itself now known to be incomplete.** Two of its
+members were measured in milestone 8 against operating points they had never been
+applied to, and failed — see **Known deficits**. The `<80 Hz ≤ 35%` ceiling in
+particular is a fixed number asked of a firing fundamental that sweeps from
+27.5 Hz at governed idle to over 100 Hz governed, which is a factor of four; it is
+not obviously a criterion that can hold at both ends. It is left failing at idle,
+and un-widened, because a tolerance should come from characterising the reference
+recordings rather than from whatever the model happens to produce on the day the
+question is first asked. That is exactly the mistake recorded above.
+
 ## Commands
 
 ```bash
@@ -714,17 +1065,19 @@ pnpm install --frozen-lockfile
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 262 tests: geometry, provenance, catalog,
+cargo test --workspace          # 287 tests: geometry, provenance, catalog,
                                 # determinism, limits, combustion, heat transfer,
                                 # turbo, EGR, acoustics, brake, driveline,
-                                # dyno calibration, ID-branch guard
+                                # dyno calibration, ID-branch guard, the metric
+                                # library against known signals, scenario
+                                # reproducibility
 
 pnpm wasm:build                 # wasm-pack -> web/src/wasm (generated, gitignored)
 pnpm wasm:test                  # wasm-pack test --node: WASM API smoke test
 pnpm check                      # svelte-check
-pnpm test                       # wasm smoke + vitest units + Playwright browser suite
+pnpm test                       # wasm smoke + vitest units (83) + Playwright browser suite
 pnpm build                      # wasm + vite build + verify-dist
-pnpm build:subpath              # the same build under VITE_BASE=/diesel-hifi/
+pnpm build:subpath              # the same build under an absolute /diesel-hifi/ base
 ```
 
 **Do not report a command as passed unless it was run and exited successfully.**
@@ -732,17 +1085,71 @@ pnpm build:subpath              # the same build under VITE_BASE=/diesel-hifi/
 The Playwright suite needs a browser once:
 `pnpm --filter web exec playwright install chromium`.
 
-`vite.config.ts` uses a relative base by default, so one build works at a domain
-root *and* under any subpath. Set `VITE_BASE` for hosts needing an absolute prefix.
+### Verification, milestone 8
 
-Three calibration probes sit behind the figures above:
-`cargo run --release -p sim-core --example sweep` for the fuelled peaks,
-`--example brake_sweep` for the brake against its published anchors, and
-`--example audio_probe` for levels, where their energy sits, how much of it is in
-the firing orders, whether it is a pulse train or a tone, and which of the three
-paths is in front. The probe reads the paths as channels of one run rather than
-re-running the engine with gains zeroed, so the figures it compares cannot have
-drifted apart.
+Run on Windows 11, and recorded with what actually happened rather than with what
+was expected:
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --workspace` | 287 passed, 0 failed |
+| `pnpm wasm:build` | passed |
+| `pnpm wasm:test` | 17 passed, 0 failed |
+| `pnpm check` | 0 errors, 0 warnings |
+| `pnpm test:unit` | 83 passed, 0 failed, across 6 files |
+| `pnpm test:e2e` | **27 passed, 7 failed** — see below |
+| `pnpm build` | passed; `verify-dist: OK`, 6 files, 584 KiB |
+| `pnpm build:subpath` | passed; `verify-dist: OK`, absolute `/diesel-hifi/` prefix |
+| `--example audio_probe` | ran; the figures in **Results → Sound** |
+| `--example audio_capture` | ran; 10 scenarios, no dropped frames |
+
+**The seven browser failures are pre-existing and were reproduced with every
+milestone 8 change stashed.** They are the tests that drive the simulation in real
+time through `pullAway` — the air path, the EGR comparison, the exhaust output,
+and UI responsiveness — and they fail because the engine does not pick up speed
+within the 30-second poll on this machine. Nothing in milestone 8 touches the
+solver, the worker or the pacing. The remaining 27, including the three audio
+tests and path soloing, pass.
+
+**Two fixes were needed to run the documented commands at all**, both the same
+defect. `playwright.config.ts` and `pnpm build:subpath` each set the subpath
+build's base with a `VITE_BASE=… command` prefix, which is POSIX shell syntax.
+Both are spawned through the platform shell, and on Windows that is `cmd.exe`,
+which reads the prefix as a program name and fails before Vite is reached — so
+the browser suite and the subpath build were unrunnable there. The Playwright
+server now passes the base through Playwright's own `env` option, and the script
+passes Vite's own `--base` flag; neither needs shell syntax. Both produce the
+same artifact, and `verify-dist` confirms the absolute prefix reaches the emitted
+HTML.
+
+`vite.config.ts` uses a relative base by default, so one build works at a domain
+root *and* under any subpath. Set `VITE_BASE`, or pass Vite's own `--base`, for
+hosts needing an absolute prefix.
+
+Four probes sit behind the figures above:
+
+```bash
+cargo run --release -p sim-core --example sweep         # the fuelled peaks
+cargo run --release -p sim-core --example brake_sweep   # the brake's published anchors
+cargo run --release -p sim-core --example audio_probe   # every steady scenario, measured
+cargo run --release -p sim-core --example audio_capture # every scenario, as WAV files
+
+cargo run --release -p sim-core --example audio_capture -- --list
+cargo run --release -p sim-core --example audio_capture -- --only idle,brake-1300 --out captures
+```
+
+`audio_probe` reports levels, where the energy sits, how much of it is in the
+firing orders, whether it is a pulse train or a tone, and which of the three paths
+is in front — and prints the metrics' readings for a tone, a modulated tone and a
+pulse train first, so the scale the engine figures sit on is visible. It reads the
+paths as channels of one run rather than re-running the engine with gains zeroed,
+so the figures it compares cannot have drifted apart.
+
+`audio_capture` writes the same runs, plus the transients the probe skips, to
+`target/audio-capture/` with a manifest. Captures are build artefacts of a
+particular working tree and are not committed.
 
 ## Legal and fidelity boundaries
 

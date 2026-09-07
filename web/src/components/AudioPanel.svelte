@@ -1,5 +1,11 @@
 <script lang="ts">
   import type { AudioPath } from '../lib/audioEngine';
+  import {
+    CLIP_SLOTS,
+    matchShortfallDb,
+    type ClipSlot,
+    type CompareSource,
+  } from '../lib/compare';
   import { sim } from '../lib/state.svelte';
   import SpectrumView from './SpectrumView.svelte';
 
@@ -49,6 +55,28 @@
   async function onVolume(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
     sim.setAudioVolume(Number(input.value) / 100);
+  }
+
+  /** The A/B sources, in the order they are offered. */
+  const COMPARE_LABELS: Array<{ source: CompareSource; label: string }> = [
+    { source: 'engine', label: 'Engine' },
+    { source: 'reference', label: 'Reference' },
+    { source: 'candidate', label: 'Candidate' },
+  ];
+
+  const SLOT_LABELS: Record<ClipSlot, string> = {
+    reference: 'Reference',
+    candidate: 'Candidate',
+  };
+
+  const compare = $derived(sim.audioCompare);
+
+  async function onClipChosen(slot: ClipSlot, event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) await sim.loadComparisonClip(slot, file);
+    // Clear the input so choosing the same file twice re-loads it.
+    input.value = '';
   }
 </script>
 
@@ -133,6 +161,73 @@
       whether this sounds like a truck, and it is calibrated by measurement — the
       <code>audio_probe</code> example — rather than by ear.
     </p>
+
+    <details class="compare" data-testid="audio-compare">
+      <summary>Compare against a recording</summary>
+
+      <div class="stage" role="group" aria-label="Comparison source">
+        {#each COMPARE_LABELS as { source, label } (source)}
+          <button
+            type="button"
+            data-testid={`compare-source-${source}`}
+            aria-pressed={compare.source === source}
+            disabled={source !== 'engine' && compare.clips[source] === undefined}
+            onclick={() => sim.setComparisonSource(source)}
+          >
+            {label}
+          </button>
+        {/each}
+      </div>
+
+      {#each CLIP_SLOTS as slot (slot)}
+        {@const clip = compare.clips[slot]}
+        <label class="field">
+          <span>{SLOT_LABELS[slot]}</span>
+          <input
+            type="file"
+            accept="audio/*"
+            data-testid={`compare-file-${slot}`}
+            onchange={(event) => onClipChosen(slot, event)}
+          />
+        </label>
+        {#if clip}
+          <p class="muted small" data-testid={`compare-info-${slot}`}>
+            <b>{clip.name}</b> — {clip.durationS.toFixed(1)}&nbsp;s, {(
+              clip.sampleRateHz / 1000
+            ).toFixed(1)}&nbsp;kHz, {clip.channels === 1 ? 'mono' : `${clip.channels} ch`}. Measured
+            {clip.levelDb.toFixed(1)}&nbsp;dBFS RMS, peak {clip.peakDb.toFixed(1)}&nbsp;dBFS; played
+            at {(20 * Math.log10(compare.gains[slot])).toFixed(1)}&nbsp;dB.
+            {#if Math.abs(matchShortfallDb(clip, compare.targetDb)) > 0.5}
+              <b
+                >Short of the match by {matchShortfallDb(clip, compare.targetDb).toFixed(1)}&nbsp;dB</b
+              > — it has no headroom left to be lifted into.
+            {/if}
+          </p>
+        {/if}
+      {/each}
+
+      <button
+        type="button"
+        data-testid="compare-match"
+        disabled={compare.source !== 'engine'}
+        onclick={() => sim.matchComparisonLevels()}
+      >
+        Match levels to the engine now
+      </button>
+
+      {#if sim.audioCompareError}
+        <p class="muted small" data-testid="compare-error">{sim.audioCompareError}</p>
+      {/if}
+
+      <p class="muted small">
+        One source plays at a time and both are trimmed to the same measured level, because an
+        untrimmed comparison is a comparison of loudness: a decibel is enough to swing a preference
+        and too little to notice as a level difference. Match again after changing speed or load —
+        the engine moves twenty-odd decibels across its range and a recording does not move at all.
+        <b>Files are read in this browser and never leave it.</b> Load a capture from
+        <code>audio_capture</code> as the candidate to hear a change against the version before it.
+      </p>
+    </details>
 
     <label class="field">
       <span>Volume <b>{(sim.audioVolume * 100).toFixed(0)}%</b></span>
@@ -240,5 +335,26 @@
   .stage button[aria-pressed='true'] {
     border-color: var(--series-torque, #3987e5);
     color: var(--series-torque, #3987e5);
+  }
+  .stage button:disabled {
+    opacity: 0.45;
+  }
+  .compare {
+    border: 1px solid var(--rule);
+    border-radius: 0.25rem;
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.9rem;
+  }
+  .compare summary {
+    cursor: pointer;
+    color: var(--muted);
+  }
+  .compare > *:not(summary) {
+    margin-top: 0.5rem;
+  }
+  .compare input[type='file'] {
+    width: 100%;
+    font: inherit;
+    color: inherit;
   }
 </style>

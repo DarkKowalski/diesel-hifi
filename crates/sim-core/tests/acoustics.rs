@@ -9,6 +9,12 @@
 
 use std::path::Path;
 
+// Crest factor, RMS and the firing frequency come from `sim_core::analysis`
+// rather than being defined again here. They used to be local copies, which is
+// how a test and the probe it is meant to agree with come to disagree: one of
+// them gets a correction and the other does not. `analysis` is also the module
+// that is itself tested against known signals, in `tests/analysis.rs`.
+use sim_core::analysis::{crest_db, firing_hz, rms as rms_of};
 use sim_core::catalog::OM471_9_M3D_JSON;
 use sim_core::{
     Catalog, Controls, Engine, EngineConfig, ResetOptions, Simulation, ValidatedConfig,
@@ -189,11 +195,6 @@ fn fundamental_hz(samples: &[f32], sample_rate_hz: f64, min_hz: f64, max_hz: f64
                 .expect("the best score is its own match")
         });
     sample_rate_hz / (min_lag + index) as f64
-}
-
-/// Firing frequency of a four-stroke: one event per cylinder per two revolutions.
-fn firing_hz(rpm: f64, cylinders: usize) -> f64 {
-    rpm / 120.0 * cylinders as f64
 }
 
 #[test]
@@ -1494,30 +1495,6 @@ fn line_power(samples: &[f32], hz: f64) -> f64 {
         norm += w * w;
     }
     (re * re + im * im) / norm.max(1.0e-30)
-}
-
-/// Peak over RMS, in decibels.
-fn crest_db(samples: &[f32]) -> f64 {
-    let peak = f64::from(samples.iter().fold(0.0f32, |m, s| m.max(s.abs())));
-    let mean_square: f64 = samples
-        .iter()
-        .map(|s| f64::from(*s) * f64::from(*s))
-        .sum::<f64>()
-        / samples.len().max(1) as f64;
-    if mean_square <= 1.0e-30 {
-        return 0.0;
-    }
-    20.0 * (peak / mean_square.sqrt()).log10()
-}
-
-/// RMS of a trace.
-fn rms_of(samples: &[f32]) -> f64 {
-    (samples
-        .iter()
-        .map(|s| f64::from(*s) * f64::from(*s))
-        .sum::<f64>()
-        / samples.len().max(1) as f64)
-        .sqrt()
 }
 
 #[test]

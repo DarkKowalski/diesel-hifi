@@ -14,16 +14,22 @@
 //! - [`catalog::Catalog`] exposes list / active-ID / select-by-ID.
 //! - [`sim::Simulation`] integrates the physics at a fixed step.
 //! - [`Engine`] binds a catalog to a simulation and is what adapters wrap.
+//! - [`analysis`] measures the result. It is not part of the simulation and
+//!   nothing in the hot loop calls it; it is here so the probes, the capture
+//!   tool and the acoustic tests share one definition of every metric, and so
+//!   those definitions can be tested against signals whose answer is known.
 //!
 //! Solver code never branches on an engine ID; every engine-specific number
 //! arrives through [`config::ValidatedConfig`].
 
+pub mod analysis;
 pub mod catalog;
 pub mod config;
 pub mod dyno;
 pub mod error;
 pub mod geometry;
 pub mod rng;
+pub mod scenario;
 pub mod sim;
 pub mod snapshot;
 

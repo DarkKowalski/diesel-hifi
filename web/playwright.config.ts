@@ -49,9 +49,17 @@ export default defineConfig({
     },
     {
       // Absolute-base build served from a subpath.
+      //
+      // The base goes through `env` rather than through a `VAR=value command`
+      // prefix. Playwright spawns the server through the platform shell, and on
+      // Windows that is `cmd.exe`, which reads the prefix as a program name and
+      // fails before Vite is reached — so the whole browser suite was
+      // unrunnable there. `env` is passed to the process directly and needs no
+      // shell syntax at all.
       command:
-        'VITE_BASE=/diesel-hifi/ vite build --outDir dist-subpath && ' +
-        'VITE_BASE=/diesel-hifi/ vite preview --outDir dist-subpath --port 4174 --strictPort',
+        'vite build --outDir dist-subpath && ' +
+        'vite preview --outDir dist-subpath --port 4174 --strictPort',
+      env: { VITE_BASE: SUBPATH },
       url: `http://localhost:${SUBPATH_PORT}${SUBPATH}`,
       reuseExistingServer: false,
       timeout: 180_000,

@@ -8,6 +8,7 @@
 
 import { AudioEngine, type AudioPath, type AudioStage, type AudioStatus } from './audioEngine';
 import { AUDIO_PATHS } from './cabin';
+import { initialCompareState, type ClipSlot, type CompareSource, type CompareState } from './compare';
 import { SimClient, SimClientError, type ReadyInfo } from './simClient';
 import {
   DEFAULT_CONTROLS,
@@ -73,6 +74,16 @@ class SimStore {
     block: true,
     body: true,
   });
+  /**
+   * Level-matched A/B against local recordings.
+   *
+   * A listening control like the two above: it plays either the engine or a
+   * file, never both, and changes nothing about the simulation. Files are read
+   * in the browser and never leave it.
+   */
+  audioCompare = $state<CompareState>(initialCompareState());
+  /** Last thing that went wrong loading a comparison clip, for the panel. */
+  audioCompareError = $state<string>('');
 
   #client: SimClient | null = null;
   #audio: AudioEngine | null = null;
@@ -258,6 +269,10 @@ class SimStore {
     this.#audio = null;
     this.audioRunning = false;
     this.audioBuffered = 0;
+    // The clips lived in the context that has just been closed, so the panel
+    // must not go on offering them.
+    this.audioCompare = initialCompareState();
+    this.audioCompareError = '';
   }
 
   /** Current output spectrum, for the verification view. Null when silent. */
@@ -285,6 +300,54 @@ class SimStore {
   setAudioPath(path: AudioPath, enabled: boolean): void {
     this.audioPaths = { ...this.audioPaths, [path]: enabled };
     this.#audio?.setPathEnabled(path, enabled);
+  }
+
+  /**
+   * Load a local audio file into a comparison slot.
+   *
+   * Read in the browser through a file input and decoded by Web Audio. Nothing
+   * is uploaded — there is no backend to upload to, and the reference material
+   * is somebody else's recording.
+   */
+  async loadComparisonClip(slot: ClipSlot, file: File): Promise<void> {
+    if (!this.#audio) return;
+    this.audioCompareError = '';
+    try {
+      await this.#audio.loadClip(slot, file.name, await file.arrayBuffer());
+      this.audioCompare = this.#audio.comparison();
+      // Match on load against whatever the engine is currently doing, so a clip
+      // never arrives at whatever level it was mastered at.
+      this.matchComparisonLevels();
+    } catch (error) {
+      this.audioCompareError =
+        error instanceof Error ? error.message : 'that file could not be decoded';
+    }
+  }
+
+  /** Switch which source is audible. One at a time; louder never wins. */
+  setComparisonSource(source: CompareSource): void {
+    this.#audio?.setComparisonSource(source);
+    this.audioCompare = this.#audio?.comparison() ?? this.audioCompare;
+  }
+
+  /**
+   * Match the loaded clips to the engine's own measured output level.
+   *
+   * Only meaningful while the engine is the audible source, because the level
+   * being matched to is measured at the output — with a clip playing, it would
+   * be matching the clip to itself.
+   */
+  matchComparisonLevels(): void {
+    if (!this.#audio) return;
+    if (this.audioCompare.source !== 'engine') return;
+    const level = this.#audio.readOutputLevelDb();
+    if (level === null) return;
+    this.audioCompare = this.#audio.matchComparisonTo(level);
+  }
+
+  setComparisonLoop(loop: boolean): void {
+    this.#audio?.setComparisonLoop(loop);
+    this.audioCompare = this.#audio?.comparison() ?? this.audioCompare;
   }
 
   async resetSimulation(): Promise<void> {

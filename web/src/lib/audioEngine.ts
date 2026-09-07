@@ -45,6 +45,17 @@ import {
   type CabinSpec,
   type FilterStage,
 } from './cabin';
+import {
+  canSelect,
+  initialCompareState,
+  measureClip,
+  rematch,
+  sourceGains,
+  type ClipInfo,
+  type ClipSlot,
+  type CompareSource,
+  type CompareState,
+} from './compare';
 
 export type { AudioPath, AudioStage } from './cabin';
 
@@ -305,6 +316,17 @@ export function applyStageToGraph(
   graph.wetGain.gain.setTargetAtTime(wet, now, tau);
 }
 
+/**
+ * One loaded comparison clip: its decoded samples, its measurements, and the
+ * nodes playing it.
+ */
+interface LoadedClip {
+  info: ClipInfo;
+  buffer: AudioBuffer;
+  gain: GainNode;
+  source: AudioBufferSourceNode | null;
+}
+
 export class AudioEngine {
   private context: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
@@ -322,6 +344,17 @@ export class AudioEngine {
     block: true,
     body: true,
   };
+
+  /**
+   * Gain the whole engine chain passes through, for the A/B switch.
+   *
+   * Downstream of both stages and upstream of the volume control, so switching
+   * to a reference recording silences the engine without disturbing either
+   * stage's crossfade or the volume the listener set.
+   */
+  private engineBus: GainNode | null = null;
+  private compare: CompareState = initialCompareState();
+  private clips: Partial<Record<ClipSlot, LoadedClip>> = {};
 
   constructor(listener?: AudioStatusListener) {
     this.listener = listener ?? null;
@@ -388,14 +421,24 @@ export class AudioEngine {
     analyser.fftSize = FFT_SIZE;
     analyser.smoothingTimeConstant = 0.6;
 
+    // The A/B switch. The engine's whole chain passes through one gain, and each
+    // comparison clip has its own; only one is ever open. The clips join *after*
+    // this point and before the volume control, because a reference recording is
+    // already a recording of somebody's cab — running it through ours would
+    // filter a cab through a cab, and the thing being compared is the finished
+    // sound at the driver's ear.
+    const engineBus = context.createGain();
+
     node.connect(graph.input);
-    graph.output.connect(gainNode);
+    graph.output.connect(engineBus);
+    engineBus.connect(gainNode);
     gainNode.connect(analyser);
     analyser.connect(context.destination);
 
     this.context = context;
     this.node = node;
     this.graph = graph;
+    this.engineBus = engineBus;
     this.gainNode = gainNode;
     this.analyser = analyser;
     this.spectrum = new Uint8Array(analyser.frequencyBinCount);
@@ -525,6 +568,137 @@ export class AudioEngine {
     return this.volume;
   }
 
+  // --- level-matched comparison ------------------------------------------
+  //
+  // See `compare.ts` for why a comparison has to be matched and switched rather
+  // than mixed. Everything below is the graph side of that: the arithmetic is
+  // there, the nodes are here.
+
+  /** The comparison's current state, for the UI to render. */
+  comparison(): CompareState {
+    return this.compare;
+  }
+
+  /**
+   * Decode a local file into a comparison slot and measure it.
+   *
+   * The bytes come from a file input and are decoded in the browser. Nothing is
+   * uploaded: the deployment has no backend, and these are other people's
+   * recordings.
+   *
+   * Replacing a slot stops whatever it was playing first, so a re-load cannot
+   * leave two clips running into the same gain.
+   */
+  async loadClip(slot: ClipSlot, name: string, bytes: ArrayBuffer): Promise<ClipInfo> {
+    if (!this.context) throw new Error('audio is not running');
+    const buffer = await this.context.decodeAudioData(bytes);
+
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < buffer.numberOfChannels; c += 1) {
+      channels.push(buffer.getChannelData(c));
+    }
+    const { levelDb, peakDb } = measureClip(channels);
+    const info: ClipInfo = {
+      name,
+      durationS: buffer.duration,
+      sampleRateHz: buffer.sampleRate,
+      channels: buffer.numberOfChannels,
+      levelDb,
+      peakDb,
+    };
+
+    this.stopClip(slot);
+    const existing = this.clips[slot];
+    const gain = existing?.gain ?? this.context.createGain();
+    if (!existing) {
+      gain.gain.value = 0;
+      gain.connect(this.gainNode ?? this.context.destination);
+    }
+    this.clips[slot] = { info, buffer, gain, source: null };
+
+    this.compare = rematch(
+      { ...this.compare, clips: { ...this.compare.clips, [slot]: info } },
+      this.compare.targetDb,
+    );
+    this.applyComparison();
+    return info;
+  }
+
+  /**
+   * Choose which source is audible.
+   *
+   * Selecting a slot with nothing loaded is refused rather than silently
+   * producing silence, which would look exactly like a broken comparison.
+   */
+  setComparisonSource(source: CompareSource): void {
+    if (!canSelect(this.compare, source)) return;
+    this.compare = { ...this.compare, source };
+    this.applyComparison();
+  }
+
+  /**
+   * Match the loaded clips to a level, in dBFS.
+   *
+   * Normally the engine's own measured output level, so the switch is between
+   * two things at the same loudness. Re-matching is explicit rather than
+   * continuous: an automatic match would be a compressor keyed to the engine,
+   * and would flatten exactly the loudness differences between operating points
+   * that the comparison is trying to judge.
+   */
+  matchComparisonTo(targetDb: number): CompareState {
+    this.compare = rematch(this.compare, targetDb);
+    this.applyComparison();
+    return this.compare;
+  }
+
+  /** Whether the clips loop. */
+  setComparisonLoop(loop: boolean): void {
+    this.compare = { ...this.compare, loop };
+    for (const clip of Object.values(this.clips)) {
+      if (clip?.source) clip.source.loop = loop;
+    }
+  }
+
+  /** Apply the switch, ramping so nothing steps. */
+  private applyComparison(): void {
+    if (!this.context) return;
+    const gains = sourceGains(this.compare);
+    const now = this.context.currentTime;
+    this.engineBus?.gain.setTargetAtTime(gains.engine, now, 0.01);
+
+    for (const slot of ['reference', 'candidate'] as ClipSlot[]) {
+      const clip = this.clips[slot];
+      if (!clip) continue;
+      const target = gains[slot];
+      clip.gain.gain.setTargetAtTime(target, now, 0.01);
+      // Only the selected clip runs. A buffer source that has been stopped
+      // cannot be restarted, so a fresh one is created each time — which is what
+      // the Web Audio API expects of them.
+      if (target > 0 && !clip.source) {
+        const source = this.context.createBufferSource();
+        source.buffer = clip.buffer;
+        source.loop = this.compare.loop;
+        source.connect(clip.gain);
+        source.start();
+        clip.source = source;
+      } else if (target === 0 && clip.source) {
+        this.stopClip(slot);
+      }
+    }
+  }
+
+  private stopClip(slot: ClipSlot): void {
+    const clip = this.clips[slot];
+    if (!clip?.source) return;
+    try {
+      clip.source.stop();
+    } catch {
+      // Already stopped, or never started. Either way there is nothing to do.
+    }
+    clip.source.disconnect();
+    clip.source = null;
+  }
+
   /** Discard anything buffered, for a reset or an engine change. */
   flush(): void {
     this.node?.port.postMessage({ type: 'flush' });
@@ -537,10 +711,18 @@ export class AudioEngine {
     for (const node of this.graph?.nodes ?? []) {
       node.disconnect();
     }
+    for (const slot of ['reference', 'candidate'] as ClipSlot[]) {
+      this.stopClip(slot);
+      this.clips[slot]?.gain.disconnect();
+    }
+    this.clips = {};
+    this.compare = initialCompareState();
+    this.engineBus?.disconnect();
     this.gainNode?.disconnect();
     this.analyser?.disconnect();
     this.node = null;
     this.graph = null;
+    this.engineBus = null;
     this.gainNode = null;
     this.analyser = null;
     this.spectrum = null;

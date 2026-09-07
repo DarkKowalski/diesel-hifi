@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:subpath": "VITE_BASE=/diesel-hifi/ vite build --outDir dist-subpath",
+    "build:subpath": "vite build --outDir dist-subpath --base=/diesel-hifi/",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "test": "pnpm test:unit && pnpm test:e2e",
