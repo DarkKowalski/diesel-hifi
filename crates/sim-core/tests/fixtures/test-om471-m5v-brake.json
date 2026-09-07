@@ -62,7 +62,8 @@
       ]
     },
     "soi_load_retard_rad_per_mg": 0.00075,
-    "cylinder_delivery_spread": 0.015
+    "cylinder_delivery_spread": 0.015,
+    "cycle_delivery_spread": 0.02
   },
   "combustion": {
     "combustion_efficiency": 0.98,
@@ -294,6 +295,29 @@
         "frequency_hz": 3800.0,
         "q": 25.0,
         "gain": 11.0
+      }
+    ],
+    "body_gain": 0.09,
+    "body_modes": [
+      {
+        "frequency_hz": 60.0,
+        "q": 4.0,
+        "gain": 1.0
+      },
+      {
+        "frequency_hz": 95.0,
+        "q": 4.0,
+        "gain": 1.0
+      },
+      {
+        "frequency_hz": 150.0,
+        "q": 4.5,
+        "gain": 0.8
+      },
+      {
+        "frequency_hz": 220.0,
+        "q": 5.0,
+        "gain": 0.5
       }
     ]
   },
@@ -1718,6 +1742,36 @@
       "safe_range": [
         0.001,
         1.0
+      ]
+    },
+    {
+      "path": "injection.cycle_delivery_spread",
+      "status": "calibrated",
+      "value_note": "invented test value for `injection.cycle_delivery_spread`",
+      "purpose": "Gives each cycle its own delivered fuel quantity, so no two firing events are identical even from the same cylinder. The per-cylinder sibling gives each cylinder a fixed character; this is the other defect, and a different one. With build scatter alone every cycle of a given cylinder is bit-identical to its last and the output is a comb of infinitely narrow lines, which the ear hears as a synthesiser rather than as an engine. Real diesels run a few percent cycle-to-cycle variation in indicated work from injector shot-to-shot spread, residual mixing and turbulence, and that is what gives the firing orders their width. Drawn once per cylinder per cycle at intake valve closing from the reset seed, never per step, so determinism and batch invariance are untouched. The smoke limit still applies after the trim.",
+      "safe_range": [
+        0.0,
+        0.1
+      ]
+    },
+    {
+      "path": "audio.body_gain",
+      "status": "calibrated",
+      "value_note": "invented test value for `audio.body_gain`",
+      "purpose": "Sets the level of the torque-driven body path against the exhaust path. This is the path that carries the roar: the engine reacting against its mounts, shaking the frame and cab panels between roughly 20 and 200 Hz. It is not a variation on the structural path and cannot be replaced by one, because it is driven by a different quantity - crank torque swings through the whole cycle at the firing frequency and its low orders, while cylinder pressure spikes once per cycle with a fast premixed edge and drives the hundreds-of-hertz modes. Too low and a 12.8 litre six sounds like a much smaller engine; too high and the output is dominated by content below 80 Hz, which is headroom spent where no ordinary speaker reproduces anything.",
+      "safe_range": [
+        0.0,
+        100.0
+      ]
+    },
+    {
+      "path": "audio.body_modes",
+      "status": "calibrated",
+      "value_note": "invented test values for `audio.body_modes`",
+      "purpose": "The modal bank the fluctuating crank torque shakes through the engine mounts. Each mode is one two-pole resonator standing for a frame or cab panel resonance. The Q values are deliberately far lower than the structural bank's: a panel on a trimmed cab is heavily damped, and a sharp bank here would be a tonal drone that jumped in level as the firing frequency swept past each mode rather than a roar that tracks engine speed smoothly. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
+      "safe_range": [
+        0.0,
+        20000.0
       ]
     }
   ]

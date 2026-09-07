@@ -1,25 +1,63 @@
-//! Engine acoustic sources: the exhaust, and the engine's own structure.
+//! Engine acoustic sources: the exhaust, the engine's structure, and its body.
 //!
 //! The solver's fixed step is 25 us, which is a sample rate of 40 kHz. That is
 //! already an audio rate, so the sound does not need a synthesiser: one sample
 //! per step, taken from quantities the solver already integrates, *is* the
 //! signal. What you hear is the same cylinder pressure that drives the crank.
 //!
-//! Two paths radiate, and they are summed at the end rather than in series:
+//! Three paths radiate, and they are summed at the end rather than in series:
 //!
 //! ```text
 //! source     = the volume velocity at the tailpipe mouth, from `exhaust.rs`
-//! exhaust    = highpass(d(source)/dt)                      out of the pipe
-//! forcing    = d( sum over cylinders of p_cyl / p_ambient )/dt
-//! structural = sum over modes of  gain_k * resonator_k(forcing)   off the iron
-//! sample     = softclip(g_exh * exhaust + g_str * structural)
+//! exhaust    = highpass_20(radiation(source))              out of the pipe
+//! p_forcing  = d( sum over cylinders of p_cyl / p_ambient )/dt
+//! structural = sum over modes of  gain_k * resonator_k(p_forcing)  off the iron
+//! t_forcing  = (gas + pumping torque) / rated torque
+//! body       = sum over modes of  gain_k * resonator_k(t_forcing)  off the frame
+//! sample     = softclip(g_exh*exhaust + g_str*structural + g_body*body)
 //! ```
 //!
-//! The derivative on the exhaust path is not a brightness trick. A pipe mouth is
-//! an acoustic monopole, and a monopole radiates the time derivative of the
-//! volume flow through it. Radiating the flow itself instead loses 6 dB per
-//! octave, which pushes almost all the energy below the range an ordinary
-//! speaker can reproduce at all — the signal measures fine and is inaudible.
+//! ## Why three and not two
+//!
+//! The exhaust and the structure were the first two, and between them they leave
+//! a hole exactly where a heavy truck lives. The exhaust path is a clean comb at
+//! the firing frequency — measured on the shipped configuration, 82% of its
+//! energy sits in the first four orders at cruise and 94% at full load — but it
+//! arrives through metres of pipe, a turbine and an aftertreatment box. The
+//! structural path is driven by cylinder *pressure*, whose premixed edge is fast
+//! and whose modes are consequently in the hundreds of hertz and above: it is
+//! combustion noise, and only 15% of it lands in the firing orders at all.
+//!
+//! Neither is the roar. The roar is the engine reacting against its mounts:
+//! crank *torque* swings through the whole cycle at the firing frequency and its
+//! low orders, that reaction goes through the mounts into the frame, and the
+//! frame and cab panels radiate it between roughly 20 and 200 Hz. Torque and
+//! pressure are not the same signal and cannot substitute for one another —
+//! turning up the structural gain buys clatter, not weight, which is how a 12.8
+//! litre six ends up sounding like a motorbike.
+//!
+//! ## Why the radiation transfer stops rising
+//!
+//! A pipe mouth is an acoustic monopole and a monopole radiates the time
+//! derivative of the volume flow through it, so the exhaust path has to rise at
+//! 6 dB per octave rather than pass the flow itself — radiating the flow buries
+//! everything above a couple of hundred hertz below what an ordinary speaker can
+//! reproduce.
+//!
+//! But it rises only while `ka` is small. Once the wavelength is comparable with
+//! the mouth, around `c / (2 pi a)` — near 1 kHz for this duct's 50 mm radius —
+//! an unflanged pipe stops behaving like a point source and starts beaming down
+//! its own axis, and an off-axis listener sees the rise stop. A bare first
+//! difference rises for ever, which put about 25 dB between the 60 Hz firing
+//! fundamental and the 1 kHz clatter band and amplified the port transfer's
+//! near-Nyquist residue into a tenth of the idle output. A one-pole high pass at
+//! that corner is the same 6 dB per octave below it and flat above, which is the
+//! shape the physics actually has.
+//!
+//! It is also the corner `exhaust.rs` already uses on the *reflected* wave, for
+//! the same reason — a mouth radiates better with frequency, so what comes back
+//! is what did not get out. One physical corner, one configured value, used on
+//! both sides of it.
 //!
 //! ## What the exhaust source is, and what it used to be
 //!
@@ -52,15 +90,16 @@
 //! than by calibration, and the two can never both open the port in one step
 //! because a cylinder is in exactly one phase.
 //!
-//! ## Why the structural path is summed last
+//! ## Why the structural and body paths are summed last
 //!
 //! The block radiates straight to air. It does not go out of the tailpipe.
 //! Putting the structural term through the exhaust system would filter it with a
 //! transfer function that does not apply to it — a turbine and several metres of
 //! pipe are between the exhaust pulse and the listener, and nothing at all is
 //! between the block and the listener — and would attenuate precisely the band
-//! it exists to supply. So the two paths are shaped separately and summed after,
-//! before the clipper.
+//! it exists to supply. The body path reaches the listener through the mounts
+//! and the seat and does not go out of the tailpipe either. So all three paths
+//! are shaped separately and summed after, before the clipper.
 //!
 //! Until Milestone 5 the exhaust path's shaping was a two-pole lowpass called
 //! `audio.lowpass_cutoff_hz`, standing in for an entire exhaust system. That is
@@ -320,8 +359,9 @@ pub struct Acoustics {
     /// nothing and rings it, which is a bell struck by the simulation starting
     /// rather than by anything the engine did.
     primed_steps: u8,
-    /// Previous raw source, for the radiation derivative.
-    previous_source: f64,
+    /// One-pole radiation high pass: previous input and previous output.
+    radiation_previous_input: f64,
+    radiation_previous_output: f64,
     highpass_previous_input: f64,
     highpass_previous_output: f64,
 
@@ -329,6 +369,8 @@ pub struct Acoustics {
     previous_pressure_sum: f64,
     /// Modal bank, sized and tuned once at construction.
     resonators: Vec<Resonator>,
+    /// Body modal bank, driven by torque rather than by pressure.
+    body: Vec<Resonator>,
 
     buffer: Vec<f32>,
     write: usize,
@@ -346,15 +388,22 @@ impl Acoustics {
     ///
     /// Both the sample ring and the resonator bank are allocated here and never
     /// resized, so producing audio allocates nothing in the hot loop.
-    pub fn new(capacity: usize, modes: &[StructuralMode], dt: f64) -> Self {
+    pub fn new(
+        capacity: usize,
+        modes: &[StructuralMode],
+        body_modes: &[StructuralMode],
+        dt: f64,
+    ) -> Self {
         let capacity = capacity.max(1);
         Self {
             primed_steps: 0,
-            previous_source: 0.0,
+            radiation_previous_input: 0.0,
+            radiation_previous_output: 0.0,
             highpass_previous_input: 0.0,
             highpass_previous_output: 0.0,
             previous_pressure_sum: 0.0,
             resonators: modes.iter().map(|m| Resonator::new(m, dt)).collect(),
+            body: body_modes.iter().map(|m| Resonator::new(m, dt)).collect(),
             buffer: vec![0.0; capacity],
             write: 0,
             read: 0,
@@ -367,14 +416,15 @@ impl Acoustics {
     /// Clear filters and discard buffered samples.
     pub fn reset(&mut self) {
         self.primed_steps = 0;
-        self.previous_source = 0.0;
+        self.radiation_previous_input = 0.0;
+        self.radiation_previous_output = 0.0;
         self.highpass_previous_input = 0.0;
         self.highpass_previous_output = 0.0;
         self.previous_pressure_sum = 0.0;
         // The modes keep their tuning but lose their ringing. A bank still
         // carrying the last burn across a reset would sound it out into a
         // freshly reset engine, which is the click this method exists to avoid.
-        for resonator in &mut self.resonators {
+        for resonator in self.resonators.iter_mut().chain(self.body.iter_mut()) {
             resonator.clear();
         }
         // Zero the samples too, not just the cursors. Stale bytes would be
@@ -410,14 +460,27 @@ impl Acoustics {
         reference_spl_db + 20.0 * rms.log10()
     }
 
-    /// Filter one step's worth of both sources and push the resulting sample.
+    /// Filter one step's worth of all three sources and push the sample.
     ///
-    /// `source` is the summed exhaust-port term; `pressure_sum` is the summed
-    /// cylinder pressure normalised by ambient, which drives the structural
-    /// path. Both are dimensionless and both are differenced here rather than in
-    /// the caller, so the whole radiation model stays in one place.
+    /// `source` is the tailpipe mouth's volume velocity; `pressure_sum` is the
+    /// summed cylinder pressure normalised by ambient, which drives the
+    /// structural path; `torque_fraction` is the fluctuating crank torque
+    /// normalised by rated torque, which drives the body path.
+    /// `radiation_corner_hz` is the pipe mouth's own radiation corner, passed in
+    /// from the exhaust system rather than configured twice.
+    ///
+    /// Everything is shaped here rather than in the caller, so the whole
+    /// radiation model stays in one place.
     #[inline]
-    pub fn push(&mut self, audio: &AudioCalibration, source: f64, pressure_sum: f64, dt: f64) {
+    pub fn push(
+        &mut self,
+        audio: &AudioCalibration,
+        source: f64,
+        pressure_sum: f64,
+        torque_fraction: f64,
+        radiation_corner_hz: f64,
+        dt: f64,
+    ) {
         // What an open pipe radiates into the far field is proportional to the
         // *rate of change* of the flow leaving it, not to the flow itself: it is
         // an acoustic monopole, and a monopole radiates `d(volume flow)/dt`.
@@ -428,17 +491,19 @@ impl Acoustics {
         // whose energy sits almost entirely below the point where an ordinary
         // speaker can reproduce anything at all.
         //
-        // Differencing rather than dividing by `dt` keeps the numbers in a sane
-        // range; the constant that would come out of the division is absorbed
-        // into the calibrated gain.
+        // The rise stops, though. A one-pole high pass at the mouth's radiation
+        // corner rises at 6 dB per octave below it and is flat above, which is
+        // what a real mouth does: past `ka` of about one it beams rather than
+        // radiating as a point, and an off-axis listener stops hearing the rise.
+        // A bare first difference rises for ever instead, and the difference
+        // between the two is the whole low end. See the module header.
         //
-        // The first sample after a reset has no predecessor to difference
-        // against. Treating the missing one as zero would turn the standing
-        // pressure difference across an already-open exhaust port into a
-        // one-sample impulse — and an impulse is white, so after the muffler
-        // filter it rings at the cutoff and comes out as an audible crack every
-        // time the simulation is reset. Seed the history instead and emit
-        // silence for that one step.
+        // The first sample after a reset has no predecessor. Treating the
+        // missing one as zero would turn the standing pressure difference across
+        // an already-open exhaust port into a one-sample impulse — and an
+        // impulse is white, so it rings the filters and comes out as an audible
+        // crack every time the simulation is reset. Seed the history instead and
+        // emit silence for that one step.
         //
         // The structural forcing needs the same treatment for the same reason,
         // and needs it more: the cylinder-pressure sum sits at six atmospheres
@@ -447,15 +512,35 @@ impl Acoustics {
         // tens of milliseconds. That is a bell struck on every reset.
         let seeding_first_step = self.primed_steps == 0;
         if seeding_first_step {
-            self.previous_source = source;
+            self.radiation_previous_input = source;
             self.previous_pressure_sum = pressure_sum;
+            // The body bank is seeded here, on the *first* step, and not with
+            // the structural bank on the second. The difference is that its
+            // forcing is not a difference: the structural bank is fed
+            // `d(pressure)/dt`, which is exactly zero on this step by
+            // construction, whereas the body bank is fed torque itself and sees
+            // its full standing value immediately. Seeding it a step later would
+            // hand it that value as an edge and it would ring it — which is a
+            // frame struck by the simulation starting rather than by the engine.
+            for resonator in &mut self.body {
+                resonator.seed_input(torque_fraction);
+            }
             self.primed_steps = 1;
         }
-        let radiated = source - self.previous_source;
-        self.previous_source = source;
 
-        // One-pole high pass, differencing form. Removes any residual offset the
-        // derivative leaves behind.
+        // One-pole high pass, differencing form, at the radiation corner.
+        let radiation_alpha = 1.0 - pole(radiation_corner_hz.max(1.0e-6), dt);
+        let radiated = radiation_alpha
+            * (self.radiation_previous_output + source - self.radiation_previous_input);
+        self.radiation_previous_input = source;
+        self.radiation_previous_output = radiated;
+
+        // And a second one far below the audible band. The radiation high pass
+        // already nulls DC exactly, so this is not an offset remover any more;
+        // it is a rumble filter. Content below it is real and inaudible on any
+        // ordinary speaker, and spending output headroom on it is worse than
+        // wasteful, because the cab compressor downstream would duck the audible
+        // band to make room for something nobody can hear.
         let hp_alpha = 1.0 - pole(audio.highpass_cutoff_hz, dt);
         let highpassed =
             hp_alpha * (self.highpass_previous_output + radiated - self.highpass_previous_input);
@@ -485,8 +570,23 @@ impl Acoustics {
             structural += resonator.tick(forcing);
         }
 
+        // --- body path ---
+        //
+        // The engine reacting against its mounts. Unlike the two paths above,
+        // this one is fed the forcing *undifferenced*: the resonator's own zeros
+        // difference it once, which is enough, and a steady torque then produces
+        // silence exactly rather than approximately. A truck idling against its
+        // handbrake carries a large constant reaction torque and radiates
+        // nothing from it, which is what the null at DC says.
+        let mut body = 0.0;
+        for resonator in &mut self.body {
+            body += resonator.tick(torque_fraction);
+        }
+
         let sample = soft_clip(
-            audio.exhaust_gain * highpassed + audio.structural_gain * structural,
+            audio.exhaust_gain * highpassed
+                + audio.structural_gain * structural
+                + audio.body_gain * body,
             audio.soft_clip_knee,
         );
 
@@ -551,6 +651,22 @@ mod tests {
         ]
     }
 
+    /// Low, lightly damped modes standing for the frame and cab panels.
+    fn body_modes() -> Vec<StructuralMode> {
+        vec![
+            StructuralMode {
+                frequency_hz: 60.0,
+                q: 4.0,
+                gain: 1.0,
+            },
+            StructuralMode {
+                frequency_hz: 150.0,
+                q: 5.0,
+                gain: 0.8,
+            },
+        ]
+    }
+
     fn audio() -> AudioCalibration {
         AudioCalibration {
             reference_spl_db: 90.0,
@@ -559,18 +675,23 @@ mod tests {
             soft_clip_knee: 0.9,
             structural_gain: 0.02,
             structural_modes: modes(),
+            body_gain: 0.02,
+            body_modes: body_modes(),
         }
     }
 
-    /// An `Acoustics` with the bank these tests use.
+    /// The pipe mouth's radiation corner these tests assume.
+    const RADIATION_HZ: f64 = 2_000.0;
+
+    /// An `Acoustics` with the banks these tests use.
     fn bank(capacity: usize) -> Acoustics {
-        Acoustics::new(capacity, &modes(), DT)
+        Acoustics::new(capacity, &modes(), &body_modes(), DT)
     }
 
     /// A quiet engine: no exhaust source, no cylinder pressure change.
     fn silent(ac: &mut Acoustics, audio: &AudioCalibration, steps: usize) {
         for _ in 0..steps {
-            ac.push(audio, 0.0, 6.0, DT);
+            ac.push(audio, 0.0, 6.0, 0.0, RADIATION_HZ, DT);
         }
     }
 
@@ -602,7 +723,7 @@ mod tests {
         let mut ac = bank(4_000);
         let mut sum = 6.0;
         for _ in 0..4_000 {
-            ac.push(&a, 0.0, sum, DT);
+            ac.push(&a, 0.0, sum, 0.0, RADIATION_HZ, DT);
             sum += 1.35e-5;
         }
         let mut out = vec![0.0f32; 4_000];
@@ -611,6 +732,98 @@ mod tests {
         assert!(
             peak < 1.0e-9,
             "a constant drift is DC and must not ring the bank, peaked at {peak}"
+        );
+    }
+
+    #[test]
+    fn a_standing_torque_rings_nothing() {
+        // The body path is fed torque *undifferenced*, unlike the other two, so
+        // this is the property that makes that safe. An engine holding a
+        // constant reaction torque against a load is not radiating from it: the
+        // frame is deflected and staying deflected, and a deflection that is not
+        // changing moves no air. The resonator's zero at DC says exactly that.
+        //
+        // Without it a truck idling against its handbrake would sit on a large
+        // standing offset, which is a click on every state change and a broken
+        // "a reset engine is silent".
+        let a = audio();
+        let mut ac = bank(4_000);
+        for _ in 0..4_000 {
+            ac.push(&a, 0.0, 6.0, 0.35, RADIATION_HZ, DT);
+        }
+        let mut out = vec![0.0f32; 4_000];
+        ac.drain(&mut out);
+        for sample in &out {
+            assert_eq!(
+                *sample, 0.0,
+                "a standing torque must not ring the body bank"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fluctuating_torque_does_ring_the_body_bank() {
+        // The companion to the test above, and the reason it is not vacuously
+        // satisfied by a path that does nothing at all. A torque swinging at the
+        // lower body mode has to produce output.
+        let a = audio();
+        let mut ac = bank(40_000);
+        for step in 0..40_000 {
+            let t = step as f64 * DT;
+            let torque = 0.35 + 0.2 * (std::f64::consts::TAU * 60.0 * t).sin();
+            ac.push(&a, 0.0, 6.0, torque, RADIATION_HZ, DT);
+        }
+        let mut out = vec![0.0f32; 40_000];
+        ac.drain(&mut out);
+        // Skip the settling transient; measure where the bank has reached steady
+        // state, so this is the response and not the onset.
+        let peak = out[20_000..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            peak > 1.0e-4,
+            "a torque swinging on a body mode must radiate, peaked at only {peak}"
+        );
+    }
+
+    #[test]
+    fn the_radiation_transfer_rises_below_its_corner_and_flattens_above() {
+        // The fix at the heart of this module: a monopole rises at 6 dB per
+        // octave only while `ka` is small, and a bare first difference rises for
+        // ever. Two octaves below the corner must show the rise; two octaves
+        // above must not.
+        //
+        // Measured on the exhaust path alone, with both other gains zeroed, so
+        // what is left is the transfer under test and nothing else.
+        let mut a = audio();
+        a.structural_gain = 0.0;
+        a.body_gain = 0.0;
+        a.highpass_cutoff_hz = 1.0;
+
+        let response = |hz: f64| {
+            let mut ac = bank(80_000);
+            for step in 0..80_000 {
+                let t = step as f64 * DT;
+                let source = (std::f64::consts::TAU * hz * t).sin();
+                ac.push(&a, source, 6.0, 0.0, RADIATION_HZ, DT);
+            }
+            let mut out = vec![0.0f32; 80_000];
+            ac.drain(&mut out);
+            f64::from(out[40_000..].iter().fold(0.0f32, |m, s| m.max(s.abs())))
+        };
+
+        // Well below the corner: an octave must buy very nearly 6 dB.
+        let octave_below = response(500.0) / response(250.0);
+        assert!(
+            (1.7..2.3).contains(&octave_below),
+            "below the corner the transfer should double per octave, got {octave_below:.2}x"
+        );
+
+        // Well above it: an octave must buy almost nothing. A first difference
+        // would double here too, which is the whole defect.
+        let octave_above = response(16_000.0) / response(8_000.0);
+        assert!(
+            octave_above < 1.2,
+            "above the corner the transfer must flatten rather than keep rising; \
+             got {octave_above:.2}x, which is a differentiator that never stops"
         );
     }
 
@@ -650,7 +863,7 @@ mod tests {
         let mut ac = bank(1024);
         for i in 0..1024 {
             let source = if i % 2 == 0 { 1.0e6 } else { -1.0e6 };
-            ac.push(&a, source, 6.0, DT);
+            ac.push(&a, source, 6.0, 0.0, RADIATION_HZ, DT);
         }
         let mut out = vec![0.0f32; 1024];
         let n = ac.drain(&mut out);
@@ -666,7 +879,7 @@ mod tests {
         let mut ac = bank(200_000);
         // A steady source is a DC offset: it must decay away, not sit there.
         for _ in 0..200_000 {
-            ac.push(&a, 5.0, 6.0, DT);
+            ac.push(&a, 5.0, 6.0, 0.0, RADIATION_HZ, DT);
         }
         let mut out = vec![0.0f32; 200_000];
         ac.drain(&mut out);
@@ -682,7 +895,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(64);
         for i in 0..10 {
-            ac.push(&a, f64::from(i), 6.0, DT);
+            ac.push(&a, f64::from(i), 6.0, 0.0, RADIATION_HZ, DT);
         }
         assert_eq!(ac.available(), 10);
 
@@ -701,7 +914,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(8);
         for i in 0..20 {
-            ac.push(&a, f64::from(i), 6.0, DT);
+            ac.push(&a, f64::from(i), 6.0, 0.0, RADIATION_HZ, DT);
         }
         assert_eq!(ac.available(), 8, "capacity is the ceiling");
         assert_eq!(ac.dropped(), 12);
@@ -712,7 +925,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(32);
         for _ in 0..32 {
-            ac.push(&a, 100.0, 6.0, DT);
+            ac.push(&a, 100.0, 6.0, 0.0, RADIATION_HZ, DT);
         }
         ac.reset();
         assert_eq!(ac.available(), 0);

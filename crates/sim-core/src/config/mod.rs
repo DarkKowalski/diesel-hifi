@@ -155,6 +155,20 @@ pub struct Injection {
     /// per cylinder at reset from the reset seed, on the same terms as
     /// `valvetrain.exhaust_area_spread`.
     pub cylinder_delivery_spread: f64,
+    /// Fractional half-width of cycle-to-cycle delivery scatter.
+    ///
+    /// The sibling above gives each cylinder a fixed character. This gives each
+    /// *cycle* one, and it is a different defect it fixes. With per-cylinder
+    /// scatter alone every cycle of a given cylinder is bit-identical to its
+    /// last, so the spectrum is a comb of infinitely narrow lines — which is
+    /// what a synthesiser produces and not what an engine does. Real diesels
+    /// run a few percent cycle-to-cycle variation in indicated work, from
+    /// injector shot-to-shot spread, residual mixing and turbulence, and it is
+    /// what gives the firing orders their width.
+    ///
+    /// Drawn once per cylinder per cycle at intake valve closing, from the same
+    /// reset-seeded stream, so determinism is untouched.
+    pub cycle_delivery_spread: f64,
 }
 
 /// Double-Wiebe heat release.
@@ -571,15 +585,30 @@ pub struct StructuralMode {
 
 /// Engine acoustic model.
 ///
-/// Two radiating paths. The exhaust source is the computed blowdown through the
-/// exhaust ports; the structural source is the computed cylinder pressure
-/// shaking the engine's outer surface. These values shape both into one signal.
-/// All calibrated: the manual publishes nothing about how the engine sounds.
+/// Three radiating paths, each driven by a different quantity the solver already
+/// integrates, because they are three different mechanisms:
+///
+/// - the **exhaust**, driven by the mass flow through the ports, radiating from
+///   the tailpipe mouth after the duct in `sim::exhaust` has had it;
+/// - the **structure**, driven by cylinder *pressure*, which is the burn ringing
+///   the block, head and covers as bending and breathing modes — the clatter;
+/// - the **body**, driven by crank *torque*, which is the engine reacting against
+///   its mounts and shaking the frame and cab panels — the roar.
+///
+/// The third is not a variation on the second. Pressure and torque are different
+/// signals: pressure peaks once per cycle per cylinder with a fast premixed edge
+/// and drives the hundreds-of-hertz modes; torque swings through the whole cycle
+/// at the firing frequency and its low orders and drives 20 to 200 Hz. A model
+/// with only the pressure path has combustion noise but no low-order roar, and
+/// no amount of gain on it produces one.
+///
+/// These values shape all three into one signal. All calibrated: the manual
+/// publishes nothing about how the engine sounds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioCalibration {
     pub reference_spl_db: f64,
     pub exhaust_gain: f64,
-    /// Removes the standing pressure offset, leaving the pulses.
+    /// Rumble filter below the audible band, protecting output headroom.
     pub highpass_cutoff_hz: f64,
     /// Soft-clip knee keeping samples inside [-1, 1] without hard clipping.
     pub soft_clip_knee: f64,
@@ -587,6 +616,10 @@ pub struct AudioCalibration {
     pub structural_gain: f64,
     /// Modal bank the cylinder-pressure rise rings.
     pub structural_modes: Vec<StructuralMode>,
+    /// Level of the torque-driven body path against the exhaust path.
+    pub body_gain: f64,
+    /// Modal bank the fluctuating crank torque shakes through the mounts.
+    pub body_modes: Vec<StructuralMode>,
 }
 
 /// Published rated output.
@@ -689,6 +722,7 @@ impl EngineConfig {
             "injection.soi_schedule" => return None,
             "injection.soi_load_retard_rad_per_mg" => self.injection.soi_load_retard_rad_per_mg,
             "injection.cylinder_delivery_spread" => self.injection.cylinder_delivery_spread,
+            "injection.cycle_delivery_spread" => self.injection.cycle_delivery_spread,
 
             "combustion.combustion_efficiency" => self.combustion.combustion_efficiency,
             "combustion.cetane_number" => self.combustion.cetane_number,
@@ -834,6 +868,8 @@ impl EngineConfig {
             "audio.soft_clip_knee" => self.audio.soft_clip_knee,
             "audio.structural_gain" => self.audio.structural_gain,
             "audio.structural_modes" => return None,
+            "audio.body_gain" => self.audio.body_gain,
+            "audio.body_modes" => return None,
 
             "rated.max_power_w" => self.rated.max_power_w,
             "rated.max_power_hp" => self.rated.max_power_hp,

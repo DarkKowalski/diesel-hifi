@@ -106,25 +106,51 @@ export interface CabinSpec {
 /**
  * The cab.
  *
- * The four biquads are the transfer path in order: what the structure will not
- * pass, what it rings on, what makes a small box sound like a box, and what the
- * insulation takes off the top.
+ * The five biquads are the transfer path in order: what the structure will not
+ * pass, what it rings on, what a small speaker can actually carry, what makes a
+ * box sound like a box, and what the insulation takes off the top.
  *
  *   - **30 Hz high pass.** Below this the cab is felt rather than heard. It is
  *     real energy — a six fires at 28 Hz at idle — but no ordinary speaker
  *     reproduces it, so it is headroom spent on nothing, and spending it here is
  *     worse than usual because the compressor downstream would duck the audible
  *     band to make room for it.
- *   - **+5 dB at 85 Hz.** The boom. A cab is a panelled box on air springs with a
- *     low fundamental, and it is the one part of an engine you hear as much
- *     through the seat as through the air.
- *   - **−3 dB at 380 Hz.** Boxiness. Everything with a hard mid resonance sounds
+ *   - **+5 dB low shelf at 150 Hz.** The boom. A cab is a panelled box on air
+ *     springs with a low fundamental, and it is the one part of an engine you
+ *     hear as much through the seat as through the air.
+ *
+ *     This was a narrow +5 dB peak at 85 Hz, and it was tuned against a source
+ *     that had almost nothing down there — a bump that narrow is a resonance,
+ *     and picking one frequency out of a firing comb that sweeps from 28 Hz at
+ *     idle to over 100 Hz governed means the boost lands on the fundamental at
+ *     one engine speed and between orders at every other. A shelf lifts the
+ *     whole region the orders move through, so the weight tracks the engine
+ *     instead of appearing at one point in the rev range.
+ *   - **+2.5 dB at 200 Hz.** The small-speaker provision, and the one stage here
+ *     that is about the listener's hardware rather than about the cab.
+ *
+ *     A MacBook speaker reproduces essentially nothing below about 150 Hz, and
+ *     in-ear monitors are not much better below 50. What carries the pitch on
+ *     hardware like that is not the fundamental but its harmonics: the ear
+ *     reconstructs a missing fundamental from them, which is why a truck heard
+ *     through a laptop still sounds like a truck. Measured on the solver's
+ *     output, half to nine tenths of the exhaust path's energy already sits at
+ *     the second through tenth orders — 90 to 270 Hz at idle, 140/210/280 Hz at
+ *     full load — so this emphasises content that is there rather than
+ *     manufacturing content that is not. That distinction is the whole of the
+ *     "nothing is added" rule: a filter is allowed, a harmonic generator is not.
+ *   - **−2 dB at 600 Hz.** Boxiness. Everything with a hard mid resonance sounds
  *     like a cardboard tube until this is pulled down.
+ *
+ *     It used to sit at 380 Hz. The block's modal bank now has a mode there —
+ *     the bank starts at 210 Hz rather than 480, to give the engine the size a
+ *     12.8 litre iron structure ought to have — so a cut at 380 Hz had stopped
+ *     removing boxiness and started removing the engine.
  *   - **2.6 kHz low pass.** Glass, insulation, and several metres of air.
  *
  *     This was 1.7 kHz, and it was chosen when the solver produced nothing above
  *     it — which made it free. It is not free now. The structural radiation path
- *     puts real content at 2.6 and 3.8 kHz, and clatter is emphatically audible
+ *     puts real content at 2.4 and 3.6 kHz, and clatter is emphatically audible
  *     from a truck's driver seat, especially at idle. A cab takes the sharp edge
  *     off the exhaust; it does not silence the engine two feet away through the
  *     bulkhead, and a figure that did was describing the glass rather than what
@@ -139,8 +165,9 @@ export interface CabinSpec {
 export const CABIN_SPEC: CabinSpec = {
   filters: [
     { type: 'highpass', frequencyHz: 30, q: 0.7, gainDb: 0 },
-    { type: 'peaking', frequencyHz: 85, q: 1.1, gainDb: 5 },
-    { type: 'peaking', frequencyHz: 380, q: 1.0, gainDb: -3 },
+    { type: 'lowshelf', frequencyHz: 150, q: 0.7, gainDb: 5 },
+    { type: 'peaking', frequencyHz: 200, q: 0.9, gainDb: 2.5 },
+    { type: 'peaking', frequencyHz: 600, q: 1.0, gainDb: -2 },
     { type: 'lowpass', frequencyHz: 2600, q: 0.7, gainDb: 0 },
   ],
   directGain: 0.75,
@@ -160,14 +187,23 @@ export const CABIN_SPEC: CabinSpec = {
     inputGain: 0.42,
     thresholdDb: -18,
     kneeDb: 12,
-    ratio: 3,
-    attackS: 0.006,
+    // Ratio 2 and a 25 ms attack, where these were 3 and 6 ms.
+    //
+    // A diesel is a series of distinct events, and the edge of each one is most
+    // of what makes it sound like an engine rather than like a tone. At 1200 rpm
+    // a six fires every 16.7 ms, so a 6 ms attack was biting *inside* every
+    // pulse: it caught the leading edge of each firing event and pulled it down,
+    // which is exactly the part worth keeping. An attack longer than the firing
+    // period lets the transient through and acts on the average instead, which
+    // is what a compressor in a listening chain is for.
+    ratio: 2,
+    attackS: 0.025,
     releaseS: 0.18,
-    // 1.9. Measured through the output analyser, this puts the cab +1.5 dB
-    // against raw at idle and −1.2 dB under load. It is a measurement rather
-    // than a derivation — it depends on the source spectrum — so the browser
-    // suite measures both ends rather than trusting the pair.
-    makeupGain: 1.9,
+    // Measured through the output analyser. It is a measurement rather than a
+    // derivation — it depends on the source spectrum, and both the source and
+    // the ratio above have changed — so the browser suite measures both ends
+    // rather than trusting the pair.
+    makeupGain: 1.55,
   },
   crossfadeS: 0.04,
 };

@@ -135,6 +135,93 @@ fn band_energy(power: &[f64], lo_hz: f64, hi_hz: f64) -> f64 {
         .sum()
 }
 
+/// Half-width, in bins, of the window a spectral line is collected over.
+///
+/// The Hann window's main lobe is two bins either side of the line, so a
+/// narrower window would report a fraction of a peak that is genuinely there and
+/// a wider one would start counting the noise between the orders as if it were
+/// an order.
+const LINE_HALF_WIDTH_BINS: usize = 2;
+
+/// Energy in the main lobe centred on `hz`.
+fn line_energy(power: &[f64], hz: f64) -> f64 {
+    let bin_hz = SAMPLE_RATE_HZ / ((power.len() - 1) * 2) as f64;
+    let centre = (hz / bin_hz).round() as isize;
+    let half = LINE_HALF_WIDTH_BINS as isize;
+    (centre - half..=centre + half)
+        .filter(|k| *k >= 0 && (*k as usize) < power.len())
+        .map(|k| power[k as usize])
+        .sum()
+}
+
+/// Firing frequency: an engine fires `cylinders` times per two revolutions.
+fn firing_hz(rpm: f64, cylinders: usize) -> f64 {
+    rpm / 60.0 * cylinders as f64 * 0.5
+}
+
+/// Share of the total energy sitting in the first `orders` firing orders.
+///
+/// This is the measurement band shares cannot make. A diesel puts its energy
+/// into a comb at its firing frequency; an electric motor, a resonance being
+/// rung, and a filtered noise floor all put it somewhere else. A spectrum can
+/// satisfy every band target ever written and still have nothing at `f0` or its
+/// first few multiples, which is exactly what "sounds like a motorbike rather
+/// than a truck" turned out to mean.
+fn comb_share(power: &[f64], f0_hz: f64, orders: usize) -> f64 {
+    let total: f64 = power.iter().sum();
+    let comb: f64 = (1..=orders)
+        .map(|n| line_energy(power, f0_hz * n as f64))
+        .sum();
+    100.0 * comb / total.max(1e-30)
+}
+
+/// Peak over RMS, in decibels.
+///
+/// A sine is 3.0 dB and a pulse train is well into double figures, so this
+/// separates "a tone at roughly the right pitch" from "a series of distinct
+/// combustion events" without any reference to where the energy sits. Both can
+/// hold identical band shares.
+fn crest_db(samples: &[f32]) -> f64 {
+    let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let rms = rms_of(samples);
+    if rms <= 1e-30 {
+        return 0.0;
+    }
+    20.0 * (f64::from(peak) / rms).log10()
+}
+
+/// How deeply the signal's envelope is modulated at the firing rate.
+///
+/// Rectify, low-pass to an envelope, transform that envelope, and compare the
+/// amplitude at `f0` and `2 f0` against the envelope's mean. A steady tone gives
+/// nearly zero however loud it is; a train of distinct firing events gives a
+/// large number. This is the other half of what a band share cannot see, and
+/// between them they are the difference between an engine and a buzz.
+///
+/// The detector's corner is set at four times the firing rate so it follows the
+/// pulses without following the carrier: too low and it smooths the modulation
+/// being measured away, too high and it passes the waveform itself.
+fn modulation_depth(samples: &[f32], f0_hz: f64) -> f64 {
+    let corner_hz = (4.0 * f0_hz).clamp(20.0, 1_000.0);
+    let dt = 1.0 / SAMPLE_RATE_HZ;
+    let rc = 1.0 / (std::f64::consts::TAU * corner_hz);
+    let alpha = dt / (rc + dt);
+
+    let mut envelope = vec![0.0f32; samples.len()];
+    let mut y = 0.0f64;
+    for (slot, sample) in envelope.iter_mut().zip(samples) {
+        y += (f64::from(sample.abs()) - y) * alpha;
+        *slot = y as f32;
+    }
+
+    let power = power_spectrum(&envelope);
+    // Bins 0..=2 are the window's main lobe at DC, which is the mean envelope -
+    // the level the modulation is being measured against.
+    let mean: f64 = power.iter().take(LINE_HALF_WIDTH_BINS + 1).sum();
+    let modulated = line_energy(&power, f0_hz) + line_energy(&power, 2.0 * f0_hz);
+    (modulated / mean.max(1e-30)).sqrt()
+}
+
 /// Bands the acceptance criteria are written against. They partition the whole
 /// spectrum, so their shares must sum to 100%.
 const BANDS: [(&str, f64, f64); 4] = [
@@ -167,9 +254,13 @@ const OCTAVES: [(&str, f64, f64); 10] = [
 /// changes level, so the mixed table cannot say which one moved. Silencing one
 /// gain and measuring the other is the same trick `tests/acoustics.rs` uses, and
 /// it turns the balance into a number rather than an impression.
-fn config_without(gain: &str) -> Result<ValidatedConfig, Box<dyn std::error::Error>> {
+fn config_with_only(gain: &str) -> Result<ValidatedConfig, Box<dyn std::error::Error>> {
     let mut document: serde_json::Value = serde_json::from_str(OM471_9_M3D_JSON)?;
-    document["audio"][gain] = serde_json::json!(0.0);
+    for other in ["exhaust_gain", "structural_gain", "body_gain"] {
+        if other != gain {
+            document["audio"][other] = serde_json::json!(0.0);
+        }
+    }
     Ok(EngineConfig::from_json(&document.to_string())?.validate()?)
 }
 
@@ -226,8 +317,10 @@ fn rms_of(samples: &[f32]) -> f64 {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: ValidatedConfig = EngineConfig::from_json(OM471_9_M3D_JSON)?.validate()?;
     let knee = config.config().audio.soft_clip_knee;
-    let exhaust_only = config_without("structural_gain")?;
-    let structural_only = config_without("exhaust_gain")?;
+    let cylinders = config.config().geometry.cylinders;
+    let exhaust_only = config_with_only("exhaust_gain")?;
+    let structural_only = config_with_only("structural_gain")?;
+    let body_only = config_with_only("body_gain")?;
 
     println!("exhaust audio levels (dBFS, not sound pressure)");
     println!(
@@ -313,6 +406,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // probe checking its own normalisation rather than a claim about audio.
         println!("           {:>8}: {checksum:>5.1}%  (must be 100.0)", "sum");
 
+        // Character, which is the part band shares are blind to. Two signals can
+        // hold identical shares in every band above and be a diesel and a
+        // doorbell respectively; these three say which.
+        let f0 = firing_hz(rpm, cylinders);
+        println!(
+            "           {:>8}: {:>5.1} Hz   orders f0..4f0 {:>5.1}%  crest {:>5.1} dB  \
+             modulation {:>5.2}",
+            "firing",
+            f0,
+            comb_share(&power, f0, 4),
+            crest_db(&trace),
+            modulation_depth(&trace, f0),
+        );
+
         // The acceptance bands stop at 15 kHz rather than running to Nyquist.
         // The explicit port transfer leaves a two-sample limit cycle near
         // equilibrium, which lands within a whisker of Nyquist and is arithmetic
@@ -370,7 +477,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // modal bank should sit above them, and a mixed spectrum cannot say
         // which of the two moved when a band share changes.
         println!("           each path alone (dBFS, and its own band shares):");
-        for (path, path_config) in [("exhaust", &exhaust_only), ("block", &structural_only)] {
+        let mut levels_db: Vec<(&str, f64)> = Vec::new();
+        for (path, path_config) in [
+            ("exhaust", &exhaust_only),
+            ("block", &structural_only),
+            ("body", &body_only),
+        ] {
             let trace = trace_at(path_config, rpm, pedal, WINDOW)?;
             let level = rms_of(&trace);
             let power = power_spectrum(&trace);
@@ -382,10 +494,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("{name} {pct:.1}%")
                 })
                 .collect();
+            let level_db = 20.0 * level.max(1e-30).log10();
+            levels_db.push((path, level_db));
             println!(
-                "           {path:>8}: {:>6.1} dBFS   {}",
-                20.0 * level.max(1e-30).log10(),
-                bands.join("  ")
+                "           {path:>8}: {level_db:>6.1} dBFS   {}   orders {:>4.1}%",
+                bands.join("  "),
+                comb_share(&power, f0, 4),
+            );
+        }
+        // The balance as a signed number rather than as two lines to subtract in
+        // your head. This is the single figure that decides whether the result
+        // reads as a truck or as a generic motor: the exhaust carries the firing
+        // orders and the block carries the clatter, so a block sitting in front
+        // of the exhaust is a small engine however the bands come out.
+        if let [(_, exhaust_db), (_, block_db), (_, body_db)] = levels_db[..] {
+            println!(
+                "           {:>8}: exhaust leads block by {:>5.1} dB, body by {:>5.1} dB",
+                "balance",
+                exhaust_db - block_db,
+                exhaust_db - body_db
             );
         }
         println!();

@@ -22,7 +22,7 @@ acceptance criteria, results, and every assumption the model makes.
 crank-angle-resolved four-stroke state; injection, ignition delay, heat release,
 cylinder pressure, crank dynamics, friction, load, idle control; a wastegate
 turbocharger and cooled EGR; the staged decompression engine brake; a rigid truck
-driveline; two-path engine audio; native deterministic tests; a static Svelte UI
+driveline; three-path engine audio; native deterministic tests; a static Svelte UI
 with the simulation off the UI thread.
 
 **Out.** Gasoline engines or any multi-fuel abstraction. Engineering
@@ -35,7 +35,7 @@ kinetics, aftertreatment chemistry.
 
 | Path | Responsibility |
 |---|---|
-| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, air path, engine brake, driveline, both acoustic sources and the exhaust duct, dynamometer harness, snapshots, native tests. **No browser, DOM, audio-device, or filesystem dependency.** |
+| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, air path, engine brake, driveline, all three acoustic sources and the exhaust duct, dynamometer harness, snapshots, native tests. **No browser, DOM, audio-device, or filesystem dependency.** |
 | `crates/sim-wasm` | `wasm-bindgen` adapter. Serialization and boundary only; no physics. |
 | `web/src/worker` | WASM lifecycle, fixed-step scheduling, batching, message protocol. |
 | `web/src` | Svelte UI, input, telemetry rendering, Web Audio orchestration. |
@@ -111,6 +111,7 @@ action before Web Audio starts**.
 | 3 | Air path and sound: wastegate turbo and EGR dynamics, exhaust pulse output, gesture-gated Web Audio. |
 | 4 | Truck load and engine brake: rigid driveline and the staged decompression brake, against the published M5U anchors. |
 | 5 | Engine acoustics: structural combustion noise, per-cylinder build scatter, radiated port flow, an exhaust duct with runners and turbine loss, and a retuned cockpit stage. |
+| 6 | Making it sound like a truck: a torque-driven body path, a bounded pipe-mouth radiation transfer, a lower and broader modal bank, cycle-to-cycle combustion variation, and acceptance criteria that measure firing orders and pulse dynamics rather than band shares alone. |
 
 Still out: aftertreatment chemistry, clutch slip and gear-change behaviour, the
 manual's shift-assist and engine-stop-assist brake functions, ABS interaction,
@@ -124,9 +125,9 @@ and orifice flow through the *intake* valve.
 |---|---:|---:|---:|
 | Peak power | 369.2 kW at **1800 rpm** | 375 kW | −1.5% |
 | Peak torque | 2509 N·m at **1000 rpm** | 2500 N·m | +0.4% |
-| Max cylinder pressure | 20.31 MPa | 23 MPa envelope | 12% margin |
+| Max cylinder pressure | 20.30 MPa | 23 MPa envelope | 12% margin |
 | Idle | 560 rpm | 560 rpm | on target |
-| Best fuel consumption | 180 g/kW·h | not published | — |
+| Best fuel consumption | 179.9 g/kW·h | not published | — |
 
 The **magnitudes** are published; the **speeds in bold are an outcome of our
 calibration** and must never be quoted as OEM data. The UI labels them
@@ -141,7 +142,7 @@ they are the whole acceptance criterion:
 | | Model | Published | Error |
 |---|---:|---:|---:|
 | Brake power at 1300 rpm | 109.0 kW | 100 kW | +9.0% |
-| Brake power at 2300 rpm | 274.4 kW | 300 kW | −8.5% |
+| Brake power at 2300 rpm | 274.3 kW | 300 kW | −8.6% |
 
 Held to ±10% rather than the ±3% the fuelled peaks carry: the manual publishes no
 brake cam contour, lift, timing, effective area or MCM target, so there is far
@@ -173,58 +174,100 @@ as an interpretation, not as published fact.
 
 The engine note is not synthesised. The 25 µs step is a 40 kHz sample rate, so
 the solver emits **one audio sample per step** from quantities it already
-integrates. Two paths radiate, because a diesel has two:
+integrates. Three paths radiate, each driven by a different quantity, because
+they are three different mechanisms:
 
-- **The exhaust.** The net mass flow the ports actually passed — the same
-  clamped, settled flow `flow::exchange` applies to the gas, not a second
-  estimate of it — down per-cylinder manifold runners, through the turbine's
-  insertion loss, into a tailpipe modelled as a waveguide with a reflecting,
-  lossy open end. What leaves at the end is the **volume velocity at the mouth**,
-  `p+ − p−`; the aftertreatment substrate takes its cut on each traverse.
-- **The engine itself.** The premixed burn is a near-step pressure rise inside a
-  stiff iron box, and the box rings. Five resonators standing for bending and
-  breathing modes of the block, head and covers turn cylinder pressure into
-  combustion noise that radiates straight to air and never goes near the exhaust.
-  The lowest is the whole block bending at 480 Hz — a 12.8 L iron structure bends
-  in the low hundreds of hertz — and the four above it carry the clatter from
-  roughly 900 Hz to 4 kHz, which is what makes the ear say *diesel* rather than
-  *engine*.
+- **The exhaust**, driven by port mass flow. The net flow the ports actually
+  passed — the same clamped, settled flow `flow::exchange` applies to the gas,
+  not a second estimate of it — down per-cylinder manifold runners, through the
+  turbine's insertion loss, into a tailpipe modelled as a waveguide with a
+  reflecting, lossy open end. What leaves at the end is the **volume velocity at
+  the mouth**, `p+ − p−`; the aftertreatment substrate takes its cut on each
+  traverse. This is the firing comb: 83% of this path's energy sits in the first
+  four orders at cruise and 95% at full load.
+- **The structure**, driven by cylinder *pressure*. The premixed burn is a
+  near-step pressure rise inside a stiff iron box, and the box rings. Six
+  resonators standing for bending and breathing modes of the block, head and
+  covers turn cylinder pressure into combustion noise that radiates straight to
+  air and never goes near the exhaust. This is the clatter — what makes the ear
+  say *diesel* rather than *engine* — and only about a quarter of it lands in the
+  firing orders at all.
+- **The body**, driven by crank *torque*. Gas and pumping torque swing through
+  the whole cycle at the firing frequency and its low orders. The engine reacts
+  against its mounts, the frame and cab panels take that reaction, and they
+  radiate it between roughly 20 and 200 Hz. This is the roar.
+
+**The third path is why this section was rewritten.** Torque and cylinder
+pressure are not the same signal and cannot substitute for one another: pressure
+spikes once per cylinder per cycle with a fast premixed edge and drives modes in
+the hundreds of hertz and above, while torque swings at the firing rate itself.
+With only the first two paths there is combustion noise and an exhaust note and
+no low-order weight anywhere, and turning up the structural gain buys more
+clatter rather than more engine. Measured before the third path existed, the
+loudest octave at cruise was **315–630 Hz**, only 21% of the energy sat in the
+firing orders, and the clatter path ran **5.2 dB in front of** the exhaust. That
+is a motorbike, and it passed every acceptance criterion then written down.
 
 **Nothing is scheduled.** The engine rattles at light load and mellows under it
 because ignition delay lengthens when lightly loaded, which raises the premixed
-fraction, which sharpens the rise. The brake barks because its release lobe is
-the fastest pressure event in the model. The pipe resonance shifts as the exhaust
-heats because the speed of sound comes from the temperature the solver
-integrates. Permuting the firing order changes the waveform because the runners
-differ in length. None of that is written down as a rule.
+fraction, which sharpens the rise. The roar tracks engine speed because the body
+bank straddles the firing frequency across the whole range rather than because
+anything sweeps it. The brake barks because its release lobe is the fastest
+pressure event in the model, and it thumps because that lobe is a torque event
+too. The pipe resonance shifts as the exhaust heats because the speed of sound
+comes from the temperature the solver integrates. Permuting the firing order
+changes the waveform because the runners differ in length. None of that is
+written down as a rule.
 
 Where the energy sits, from `cargo run --release -p sim-core --example audio_probe`:
 
-| Band | Idle | Cruise | Full load | Target |
+| | Idle | Cruise | Full load | Target |
 |---|---:|---:|---:|---:|
-| `<80 Hz` | 3.4% | 7.2% | 8.8% | ≤ 35% |
-| `80–300 Hz` | 38.2% | 15.0% | 45.4% | ≤ 55% |
-| `150 Hz–15 kHz` | 76.8% | 82.0% | 67.9% | ≥ 60% |
-| `2–15 kHz` | 3.7% | 3.1% | 6.5% | ≥ 3% idle |
-| Peak / dBFS | 0.292 / −25.1 | 0.697 / −12.2 | 0.833 / −10.5 | under the 0.85 knee |
+| Firing orders `f0…4·f0` | 42.1% | 71.3% | 91.9% | ≥ 35% loaded |
+| Crest factor | 14.7 dB | 10.9 dB | 10.5 dB | ≥ 9 dB |
+| Firing-rate modulation | 0.45 | 0.37 | 0.83 | > 0 |
+| `<80 Hz` | 17.2% | 18.6% | 4.1% | ≤ 35% |
+| `80–300 Hz` | 66.2% | 56.2% | 90.3% | ≥ 45% |
+| `300 Hz–2 kHz` | 15.0% | 24.2% | 4.9% | ≤ 30% |
+| `150 Hz–15 kHz` | 55.3% | 49.6% | 58.8% | ≥ 35% |
+| `>15 kHz` residue | 0.64% | 0.00% | 0.00% | ≤ 1% |
+| Peak / dBFS | 0.184 / −29.4 | 0.543 / −16.2 | 0.796 / −12.4 | under the 0.85 knee |
 
-The probe also reports each path on its own, because the balance between them is
-the whole question and a mixed band share cannot say which of the two moved:
+The loudest octave is now `80–160 Hz` at idle and cruise and `160–315 Hz` at full
+load, against `315–630 Hz` at idle and cruise before.
 
-| Alone, at full load | dBFS | `<80 Hz` | `80–300` | `300–2k` | `>2 kHz` |
-|---|---:|---:|---:|---:|---:|
-| Exhaust | −13.0 | 7.1% | 89.3% | 3.5% | 0.0% |
-| Block | −12.3 | 3.5% | 11.9% | 70.0% | 14.5% |
+The probe reports each path on its own, because the balance between them is the
+whole question and a mixed band share cannot say which one moved:
+
+| Alone, at full load | dBFS | `<80 Hz` | `80–300` | `300–2k` | `>2 kHz` | orders |
+|---|---:|---:|---:|---:|---:|---:|
+| Exhaust | −12.1 | 7.2% | 90.0% | 2.8% | 0.0% | 94.9% |
+| Block | −22.0 | 4.1% | 20.6% | 62.9% | 12.5% | 24.4% |
+| Body | −23.2 | 84.0% | 16.0% | 0.0% | 0.0% | 99.9% |
+
+The exhaust leads the block by 7.3, 6.3 and 9.9 dB at the three points. That
+figure is the single one that decides whether this reads as a truck: the exhaust
+carries the firing orders and the block sits on top of them, and a block in front
+of the exhaust is a small engine however the bands come out.
+
+**Two measurements exist because band shares are blind to them.** A pulse train
+and a tone can hold identical energy in every band. *Crest factor* — peak over
+RMS — is 3 dB for a sine and double figures for a series of distinct combustion
+events, and it collapses long before saturation measures as distortion: during
+calibration it read 3.5 dB with the gains too high, which is a signal squared off
+into a buzz. *Firing-rate modulation depth* rectifies the signal, low-passes it
+to an envelope, and compares that envelope's content at `f0` and `2·f0` against
+its mean; a steady tone gives nearly zero however loud it is.
 
 The audible band starts at 150 Hz because that is where a small speaker begins
-reproducing anything, which is the question the criterion asks. Bands run to
-15 kHz rather than to Nyquist: the explicit port transfer leaves a
-two-sample limit cycle within a whisker of Nyquist which is arithmetic rather
-than sound, and the probe reports it separately so it cannot satisfy a
+reproducing anything, which is the question that criterion asks — and only that
+question. Bands run to 15 kHz rather than to Nyquist: the explicit port transfer
+leaves a two-sample limit cycle within a whisker of Nyquist which is arithmetic
+rather than sound, and the probe reports it separately so it cannot satisfy a
 high-frequency target it is not signal for. The probe's four full-range bands sum
 to 100% as a self-check.
 
-Six mistakes this chain invites, all of which were made:
+Eight mistakes this chain invites, all of which were made:
 
 - **A boundary condition cannot make a sound.** Clamping cylinder pressure to the
   manifold during the exhaust stroke makes the pressure difference across the
@@ -254,6 +297,25 @@ Six mistakes this chain invites, all of which were made:
   damping lives — the aftertreatment is. Modelled as a pure compliance with no
   loss, the duct rings for a T60 near 360 ms and whichever firing order lands on
   a resonance swallows the rest of the note.
+- **A monopole only rises to `ka ≈ 1`.** Having established that a pipe mouth
+  radiates `dQ/dt` rather than `Q`, the model differentiated *for ever*. A real
+  mouth stops behaving like a point source once the wavelength is comparable with
+  it — near 1 kHz for this duct's 50 mm radius — and beams down its own axis
+  instead, so an off-axis listener sees the rise stop. A bare first difference
+  put about 25 dB between the 60 Hz firing fundamental and the 1 kHz clatter
+  band, and amplified the port transfer's near-Nyquist residue into a tenth of
+  the idle output. Replacing it with a one-pole high pass at that corner — same
+  6 dB per octave below, flat above — moved the firing-order share from 11% to
+  36% at idle and from 21% to 53% at cruise, on its own. It is also the corner
+  the duct already used on the *reflected* wave for exactly the same reason; the
+  two sides of one physical corner had been given different treatment.
+- **A path driven by the wrong quantity cannot be fixed with gain.** Cylinder
+  pressure drives the block's bending and breathing modes and produces clatter.
+  No setting of its gain produces low-order weight, because the drive has none:
+  a premixed spike is a fast edge once per cylinder per cycle. The roar is
+  crank *torque*, which swings at the firing rate itself, and until something was
+  driven by it the model had no path that could make the sound. Adding gain to
+  the wrong path is how an engine ends up loud and small at the same time.
 
 ### Where you are listening from
 
@@ -262,33 +324,62 @@ the stage is switchable: **raw tailpipe** (unfiltered, what the spectrum view wa
 built to verify) or **truck cockpit** (default).
 
 The cab is a Web Audio chain in `cabin.ts` and `audioEngine.ts`, not a change to
-the physics: 30 Hz high pass, +5 dB at 85 Hz, −3 dB at 380 Hz, a 2.6 kHz low
-pass, two early reflections at 7.3 and 11.9 ms panned apart, a seeded impulse
-response, and a compressor. Both paths always run; switching crossfades over
-40 ms. The low pass sits at 2.6 kHz rather than lower because a cab takes the
-sharp edge off an exhaust; it does not silence an engine two feet away through
-the bulkhead, and clatter is emphatically audible from a driver's seat.
+the physics: 30 Hz high pass, a +5 dB low shelf at 150 Hz, +2.5 dB at 200 Hz,
+−2 dB at 600 Hz, a 2.6 kHz low pass, two early reflections at 7.3 and 11.9 ms
+panned apart, a seeded impulse response, and a compressor. Both paths always run;
+switching crossfades over 40 ms. The low pass sits at 2.6 kHz rather than lower
+because a cab takes the sharp edge off an exhaust; it does not silence an engine
+two feet away through the bulkhead, and clatter is emphatically audible from a
+driver's seat.
 
-**Nothing is added.** No road noise, no synthesised rumble, no samples. Every
-value reaching the speaker is still the solver's cylinder pressure, and a unit
-test asserts the stage builds nothing that can produce sound on its own.
+Three of those stages moved when the source did, because each had been tuned
+against a signal that no longer exists:
+
+- **The 85 Hz peak became a 150 Hz shelf.** A bump that narrow is a resonance,
+  and picking one frequency out of a firing comb that sweeps from 28 Hz at idle
+  to over 100 Hz governed lands the boost on the fundamental at one engine speed
+  and between orders everywhere else. A shelf lifts the whole region the orders
+  travel through, so the weight tracks the engine.
+- **The 380 Hz cut moved to 600 Hz.** The block's modal bank now starts at
+  210 Hz rather than 480, so a cut at 380 Hz had stopped removing boxiness and
+  started removing the engine.
+- **The compressor was eased**, from ratio 3 with a 6 ms attack to ratio 2 with
+  25 ms. At 1200 rpm a six fires every 16.7 ms, so a 6 ms attack was biting
+  *inside* every pulse: it caught the leading edge of each firing event and
+  pulled it down, which is the part worth keeping. An attack longer than the
+  firing period lets the transient through and acts on the average instead.
+
+**The +2.5 dB at 200 Hz is for the listener's hardware, not for the cab**, and it
+is the one stage here that says so. A laptop speaker reproduces essentially
+nothing below about 150 Hz. What carries the pitch on hardware like that is not
+the fundamental but its harmonics, from which the ear reconstructs a missing
+fundamental — which is why a truck heard through a laptop still sounds like a
+truck. Measured on the solver's output, half to nine tenths of the exhaust path's
+energy already sits at the second through tenth orders: 90–270 Hz at idle,
+120/180/240 Hz at cruise, 140/210/280 Hz at full load.
+
+**Nothing is added.** No road noise, no synthesised rumble, no samples, and **no
+harmonic generation** — that last is the line this stage came closest to, and the
+distinction it turns on is that emphasising harmonics the solver produced is a
+filter while manufacturing harmonics it did not is not. Every value reaching the
+speaker is still the solver's cylinder pressure, and a unit test asserts the
+stage builds nothing that can produce sound on its own.
 
 **It is level-matched, and that needed two gains.** Matched with an output gain
 alone the cab sat level under load and 6.3 dB louder at idle, because the
 compressor works at the loud end and does nothing at the quiet end. Trimming
 ahead of the compressor moves the quiet end nearly decibel for decibel and the
-compressed loud end far less, so trim-then-make-up (0.42 in, 1.90 out) brings
+compressed loud end far less, so trim-then-make-up (0.42 in, 1.55 out) brings
 both together:
 
 | Measured at the output | Idle | 90% pedal, 300 N·m |
 |---|---:|---:|
-| Cockpit level relative to raw | +1.46 dB | −1.17 dB |
-| 2–8 kHz band | — | −30% |
-| 60–400 Hz band | — | +2% |
+| Cockpit level relative to raw | +0.89 dB | −0.74 dB |
+| 2–8 kHz band | — | −34% |
+| 60–400 Hz band | — | +5% |
 
 Both ends are asserted within 3 dB by the browser suite through the same analyser
-the spectrum view uses, repeating to within ±0.05 dB. The remaining spread is the
-compressor doing its job.
+the spectrum view uses. The remaining spread is the compressor doing its job.
 
 None of this is published. The manual says nothing about how the engine sounds
 and less about how its cab sounds; these are listening choices and the UI says so
@@ -395,12 +486,14 @@ none of it supplies these numbers.
 | Starter | 1500 N·m at the crank, tapering to zero at 300 rpm |
 | Governed speed | fuelling tapers from 1900 rpm to zero at 2100 rpm |
 | Solver step | 25 µs fixed |
-| Exhaust acoustics | 20 Hz high pass, soft-clip knee 0.85, exhaust gain 26 and structural gain 2.2, set so the start transient approaches the knee without saturating and so the exhaust carries the firing orders while the block carries the clatter. There is no muffler roll-off parameter: a two-pole low pass standing in for an entire exhaust system is a tone control, and the duct below replaced it |
-| Structural modes | 480, 900, 1600, 2600 and 3800 Hz at Q 11, 15, 20, 22 and 25, weighted 0.55, 1.0, 4.0, 6.0 and 11.0. The 480 Hz mode is the block's own bending mode. The four above it ascend, which is the opposite of the radiating physics and is deliberate: the premixed Wiebe rise starts with zero slope, so the model's burn onset drives the upper modes more weakly than a real one would |
+| Exhaust acoustics | 20 Hz rumble filter, soft-clip knee 0.85, exhaust gain 9.5, structural gain 0.40 and body gain 0.09, set so the start transient approaches the knee without saturating and so the exhaust leads the block by 6 to 10 dB across the range. The pipe mouth's radiation transfer is a one-pole high pass at `exhaust_system.radiation_cutoff_hz` rather than a bare difference — the same corner the duct uses on the reflected wave, because it is the same physical corner. There is no muffler roll-off parameter: a two-pole low pass standing in for an entire exhaust system is a tone control, and the duct below replaced it |
+| Structural modes | 210, 380, 750, 1400, 2400 and 3600 Hz at Q 9, 10, 11, 12, 13 and 14, weighted 0.25, 0.4, 0.9, 3.0, 7.0 and 12.0. The bank used to start at 480 Hz; a 12.8 L iron structure bends lower than that, and the lowest mode is the cue for how big the engine is. Q is in the low tens throughout rather than up to 25, so the clatter is broadband texture instead of a pitched ring |
 | **Exhaust system** | 3.5 m tailpipe of 0.008 m² section; open-end reflection −0.8 with 2 kHz radiation loss; 12 L of free aftertreatment volume acting as 1.5 m of added acoustic length, and a substrate transmission of 0.61 per traverse acting as its flow resistance; 14 dB turbine insertion loss above 400 Hz; runners spanning 100–700 mm. **None of this geometry is published** |
-| **Combustion noise** | Four modes at 900/1600/2600/3800 Hz, Q 15/20/22/25, weighted 1.0/4.0/6.0/11.0, overall gain 3.0. The weights *ascend* with frequency, which is the opposite of the radiating physics: the premixed rise starts with zero slope and drives the upper modes weakly, so the weights compensate for a shortfall in the drive rather than claiming an engine radiates more at 3.8 kHz than at 900 Hz |
+| **Combustion noise** | The weights still *ascend* with frequency, which is the opposite of the radiating physics. This was re-examined and kept: descending weights were tried, on the argument that a big engine should ring low, and they starved the top end to under 1% above 2 kHz because the drive genuinely falls that steeply — the premixed Wiebe rise starts with zero slope, so the model's burn onset drives the upper modes far more weakly than a real one would. The weights compensate for a shortfall in the drive rather than claiming an engine radiates more at 3.6 kHz than at 750 Hz. What changed instead is where the bank *starts* and how sharp it is |
 | **Cylinder build scatter** | ±2% exhaust port area, ±1.5% injector delivery, drawn once per cylinder at reset from the reset seed and never per step. Six bit-identical cylinders sum to a pure harmonic comb the ear hears as synthesised. Far too small to move any calibration result, and a test asserts peak power and torque are unchanged by it |
-| **Cockpit listening stage** | 30 Hz high pass; +6 dB at 85 Hz, Q 1.1; −1.5 dB at 380 Hz, Q 1.0; 2.6 kHz low pass; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 3, 6/180 ms, trimmed 0.42 in and 1.90 out. Presentation only — downstream of everything, changes no state, bypassable |
+| **Cycle-to-cycle scatter** | ±2% delivered fuel, drawn once per cylinder *per cycle* at intake valve closing from the same seeded stream. Build scatter makes the cylinders differ from each other; this makes a cylinder differ from its own last cycle, without which the engine is a six-event loop on repeat. Its effect is honestly modest — see **Modelling simplifications** — and it is held to the same no-calibration-change standard as the build spreads |
+| **Cockpit listening stage** | 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; 2.6 kHz low pass; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.55 out. Presentation only — downstream of everything, changes no state, bypassable |
+| **Body and mount response** | Four modes at 60, 95, 150 and 220 Hz at Q 4.0, 4.0, 4.5 and 5.0, weighted 1.0, 1.0, 0.8 and 0.5, driven by gas plus pumping torque normalised by rated torque. Q in the single figures because a trimmed cab panel is heavily damped and a sharp bank here jumps in level as the firing frequency sweeps past each mode. This is a *vehicle* response excited by the engine, not an engine property; the source is an engine manual and publishes nothing about either |
 
 ## Modelling simplifications
 
@@ -419,11 +512,36 @@ none of it supplies these numbers.
   cannot raise exhaust above intake. Real behaviour for a fixed-geometry
   high-pressure loop, but it means the scheduled rate is a target the hardware
   cannot always meet.
-- **Audio covers the exhaust and the engine's structure, not everything that
-  radiates.** There is no turbocharger whine and no intake noise. Blade-pass at
-  the modelled shaft speeds is ultrasonic, so audible intake content would be
-  low-order shaft harmonics and diffuser noise — the least grounded thing on the
-  list, and deliberately excluded.
+- **Audio covers the exhaust, the engine's structure and its reaction against
+  its mounts, not everything that radiates.** There is no turbocharger whine and
+  no intake noise. Blade-pass at the modelled shaft speeds is ultrasonic, so
+  audible intake content would be low-order shaft harmonics and diffuser noise —
+  the least grounded thing on the list, and deliberately excluded.
+- **The body path is a lumped vehicle response, not a structural model.** Four
+  damped resonators stand for everything between the engine mounts and the cab
+  panels. The forcing is engine state and genuinely belongs in `sim-core`; the
+  frame and cab are the *vehicle*, and about those the source manual says nothing
+  at all, exactly as it says nothing about the driveline that is modelled on the
+  same footing.
+- **Cycle-to-cycle variation is physically right and acoustically minor.** It is
+  measurable — a cylinder's pulse height varies 1.5 times more with it than
+  without, at idle — but it is not what fixed the sound, and saying otherwise
+  would be overselling it. Two reasons. The acoustic source is the mass flow
+  through the port, and by exhaust valve opening 140° after top dead centre the
+  cylinder has expanded far enough that trapped mass, not the last 2% of fuel, is
+  setting the pressure. And at full load the smoke limit clamps commanded fuel to
+  the trapped air, which erases the trim entirely: measured at full pedal the
+  variation is 1.00 times, exactly none. That load dependence matches published
+  behaviour — a few percent at light load, under one at high — and it emerges
+  from a limiter that is there for another reason rather than from a schedule.
+- **The three paths are summed in the solver, not at the listener.** The whole
+  chain from the ring buffer to the worklet is mono, and the soft clipper acts on
+  the mix. Filtering each path with its own cab transfer would be more correct —
+  the exhaust reaches a driver from a stack behind and below, the block through
+  the bulkhead, the body through the seat — and is the obvious next milestone. It
+  is not done here because it moves the clipper downstream of the mix, which is
+  what the "one sample per solver step, finite and inside `[−1, 1]`" criteria are
+  written against.
 - **The exhaust duct is one-dimensional.** A waveguide with a lumped turbine loss
   and the aftertreatment box as an equivalent added length. The added-length
   approximation is a low-frequency one and stops describing the box once a
@@ -486,8 +604,37 @@ repeating its last block, so a stall is audible rather than disguised.
   in this document.
 - Audio: exactly one sample per solver step; bit-identical across batch
   boundaries; every sample finite and inside `[−1, 1]`; a reset engine silent and
-  a reset click-free; the note at the firing frequency for any cylinder count;
-  the band shares in **Results → Sound** met.
+  a reset click-free; the note at the firing frequency for any cylinder count; a
+  standing torque and a standing cylinder pressure both radiating nothing; the
+  figures in **Results → Sound** met.
+
+**The audio criteria were rewritten, and the old ones are recorded here because
+they are the reason this shipped sounding wrong.** They were:
+
+| | Old | New |
+|---|---|---|
+| firing orders `f0…4·f0` | — | **≥ 35%** loaded |
+| crest factor | — | **≥ 9 dB** |
+| exhaust over block | — | **≥ 6 dB** |
+| `80–300 Hz` | ≤ 55% | **≥ 45%** |
+| `300 Hz–2 kHz` | — | **≤ 30%** |
+| `150 Hz–15 kHz` | ≥ 60% | **≥ 35%** |
+| `<80 Hz` | ≤ 35% | ≤ 35%, unchanged |
+| `>15 kHz` residue | reported only | **≤ 1%** |
+
+The old set was written to answer one question — *can an ordinary speaker
+reproduce any of this* — and was then read as though it described what an engine
+sounds like. It does not. A `150 Hz–15 kHz ≥ 60%` floor cannot be met by anything
+that sounds heavy, so it was not a criterion the model happened to fail: it was a
+criterion enforcing the defect. `<80 Hz ≤ 35%` is a ceiling with no matching
+floor, and nothing anywhere asked where the firing orders were, which of the
+paths was in front, or whether the output was a pulse train or a tone.
+
+The audibility question is still asked, as its own floor, set low enough to be
+about audibility rather than about balance. What is new is everything else.
+Chasing a single number is what produced the fault; the replacements are
+deliberately a set that cannot all be satisfied by pushing energy in one
+direction.
 
 ## Commands
 
@@ -496,7 +643,7 @@ pnpm install --frozen-lockfile
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 246 tests: geometry, provenance, catalog,
+cargo test --workspace          # 257 tests: geometry, provenance, catalog,
                                 # determinism, limits, combustion, heat transfer,
                                 # turbo, EGR, acoustics, brake, driveline,
                                 # dyno calibration, ID-branch guard
@@ -520,7 +667,9 @@ root *and* under any subpath. Set `VITE_BASE` for hosts needing an absolute pref
 Three calibration probes sit behind the figures above:
 `cargo run --release -p sim-core --example sweep` for the fuelled peaks,
 `--example brake_sweep` for the brake against its published anchors, and
-`--example audio_probe` for levels and where their energy sits.
+`--example audio_probe` for levels, where their energy sits, how much of it is in
+the firing orders, whether it is a pulse train or a tone, and which of the three
+paths is in front.
 
 ## Legal and fidelity boundaries
 

@@ -349,10 +349,33 @@ pub(super) fn step(
             c.profile = heat_release::Profile::NONE;
 
             let smoke_limit_kg = air_kg / inj.smoke_limit_afr;
-            // The trim scales what this injector delivers for a given command.
-            // The smoke limit still applies after it: a generous injector on a
+            // Cycle-to-cycle variation, drawn here because here is where a cycle
+            // begins: the charge has just been trapped and the injection for it
+            // is about to be scheduled. One draw per cylinder per cycle, never
+            // per step.
+            //
+            // Without it every cycle of a given cylinder is bit-identical to its
+            // last, and the output is a comb of infinitely narrow lines. That is
+            // audible, and what it is audible as is a synthesiser: a real diesel
+            // runs a few percent variation in indicated work from injector
+            // shot-to-shot spread, residual mixing and turbulence, and it is
+            // what gives the firing orders their width.
+            //
+            // Deterministic despite being random. `state.rng` is seeded from the
+            // reset seed, the draw order is fixed by this loop, and how many
+            // draws a step makes is a function of crank angle — so the same seed
+            // still gives the same engine bit for bit, `advance(n)` still equals
+            // n calls of `advance(1)`, and batch invariance is untouched.
+            //
+            // It is louder at idle than at load without being scheduled to be: a
+            // lightly loaded cycle has a long ignition delay and a large
+            // premixed fraction, so the same wobble in fuel moves the pressure
+            // rise further.
+            let cycle_trim = 1.0 + inj.cycle_delivery_spread * (2.0 * state.rng.next_f64() - 1.0);
+            // The trims scale what this injector delivers for a given command.
+            // The smoke limit still applies after them: a generous injector on a
             // cylinder short of air is still held to the air it has.
-            let commanded_kg = demand_mg * 1.0e-6 * c.fuel_trim;
+            let commanded_kg = demand_mg * 1.0e-6 * c.fuel_trim * cycle_trim;
             let fuel_kg = commanded_kg.min(smoke_limit_kg).max(0.0);
             c.injection =
                 injection::schedule(inj, fuel_kg, rpm, state.omega_rad_per_s, c.pressure_pa);
@@ -633,7 +656,7 @@ pub(super) fn step(
             .clamp(0.0, 1.0);
     }
 
-    // --- acoustic sample, one per step, both radiating paths ---
+    // --- acoustic sample, one per step, all three radiating paths ---
     //
     // Normalising by ambient makes the structural forcing dimensionless and
     // keeps the calibrated gain from carrying a unit conversion inside it. The
@@ -641,6 +664,26 @@ pub(super) fn step(
     // quantity with a name rather than a proxy needing a scale.
     let structural_forcing = if ambient_pa > 0.0 {
         cylinder_pressure_sum_pa / ambient_pa
+    } else {
+        0.0
+    };
+
+    // The body path's forcing: what the engine is doing to its own mounts.
+    //
+    // Gas torque and pumping torque are the two terms the *cylinders* apply to
+    // the crank, and by reaction to the block and thence to the frame. Friction
+    // and accessory drag are deliberately left out — they are internal to the
+    // engine and roughly steady, so they add a DC term the resonator bank would
+    // null anyway, and the driveline torque is the load's, not the engine's.
+    //
+    // Normalised by the published rated torque so the forcing is order one and
+    // `body_gain` stays a level rather than a unit conversion, exactly as
+    // `structural_forcing` is normalised by ambient pressure. This swings at the
+    // firing frequency and its low orders, which is where the body bank sits, so
+    // the roar follows engine speed with nothing scheduling it.
+    let rated_torque_nm = cfg.rated.max_torque_nm;
+    let torque_fraction = if rated_torque_nm > 0.0 {
+        (torque_gas_nm + torque_pumping_nm) / rated_torque_nm
     } else {
         0.0
     };
@@ -657,9 +700,14 @@ pub(super) fn step(
         state.exhaust.temperature_k,
         dt,
     );
-    state
-        .acoustics
-        .push(&cfg.audio, radiated, structural_forcing, dt);
+    state.acoustics.push(
+        &cfg.audio,
+        radiated,
+        structural_forcing,
+        torque_fraction,
+        cfg.exhaust_system.radiation_cutoff_hz,
+        dt,
+    );
 
     state.peak_pressure_pa_cycle = state.peak_pressure_pa_cycle.max(step_peak_pressure_pa);
     state.peak_pressure_pa_session = state.peak_pressure_pa_session.max(step_peak_pressure_pa);

@@ -404,6 +404,7 @@ impl Simulation {
             acoustics: Acoustics::new(
                 config.config().solver.max_steps_per_batch as usize,
                 &config.config().audio.structural_modes,
+                &config.config().audio.body_modes,
                 config.config().solver.fixed_step_s,
             ),
             exhaust_system: ExhaustSystem::new(

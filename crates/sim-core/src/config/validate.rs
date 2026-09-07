@@ -9,7 +9,7 @@ use std::f64::consts::PI;
 
 use super::paths::PARAMETER_PATHS;
 use super::provenance::{ProvenanceReport, ProvenanceStatus};
-use super::{EngineConfig, SCHEMA_VERSION};
+use super::{EngineConfig, StructuralMode, SCHEMA_VERSION};
 use crate::error::{Result, SimError};
 
 /// Largest cylinder count the fixed-size hot state supports.
@@ -643,6 +643,10 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         au.structural_gain.is_finite() && au.structural_gain >= 0.0,
         "audio.structural_gain must be finite and not negative",
     )?;
+    require(
+        au.body_gain.is_finite() && au.body_gain >= 0.0,
+        "audio.body_gain must be finite and not negative",
+    )?;
 
     // Build scatter. Zero is legal and means a perfect engine; the upper bound
     // is what keeps a "realism" knob from quietly becoming a calibration
@@ -658,41 +662,63 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         inj_spread.is_finite() && (0.0..=0.1).contains(&inj_spread),
         "injection.cylinder_delivery_spread must be finite and fall in [0, 0.1]",
     )?;
+    // The per-cycle sibling, held to the same bound for the same reason.
+    let cycle_spread = config.injection.cycle_delivery_spread;
     require(
-        !au.structural_modes.is_empty(),
-        "audio.structural_modes must name at least one mode",
+        cycle_spread.is_finite() && (0.0..=0.1).contains(&cycle_spread),
+        "injection.cycle_delivery_spread must be finite and fall in [0, 0.1]",
     )?;
+
+    // Both modal banks, checked identically because they are the same filter
+    // structure driven by different quantities. Sharing the check rather than
+    // duplicating it means a bank cannot be added later that skips the stability
+    // condition, which is the one that matters: an unstable pole grows without
+    // bound in the hot loop where nothing can recover it.
     let nyquist_hz = 0.5 / config.solver.fixed_step_s;
-    for (index, mode) in au.structural_modes.iter().enumerate() {
-        finite_positive(
-            mode.frequency_hz,
-            &format!("audio.structural_modes[{index}].frequency_hz"),
-        )?;
-        finite_positive(mode.q, &format!("audio.structural_modes[{index}].q"))?;
+    let check_modes = |modes: &[StructuralMode], name: &str| -> crate::error::Result<()> {
         require(
-            mode.gain.is_finite() && mode.gain >= 0.0,
-            "audio.structural_modes gains must be finite and not negative",
+            !modes.is_empty(),
+            format!("audio.{name} must name at least one mode"),
         )?;
-        require(
-            mode.frequency_hz < nyquist_hz,
-            "audio.structural_modes frequencies must stay below the Nyquist \
-             frequency of the solver step",
-        )?;
-        // Stability of the two-pole resonator, which is the whole reason this
-        // check exists rather than a bare range on `q`. The pole radius is
-        // `r = 1 - theta / (2 Q)` with `theta = 2 pi f dt`; the filter is stable
-        // only for `0 < r < 1`. A high frequency paired with a low Q drives `r`
-        // negative or past zero and the mode would grow without bound in the hot
-        // loop, where nothing can recover it. Reject it here instead.
-        let theta = std::f64::consts::TAU * mode.frequency_hz * config.solver.fixed_step_s;
-        let r = 1.0 - theta / (2.0 * mode.q);
-        require(
-            r > 0.0 && r < 1.0,
-            "audio.structural_modes must give a stable resonator: the pole radius \
-             1 - pi f dt / Q must fall in (0, 1), so a high frequency needs a \
-             correspondingly high Q",
-        )?;
-    }
+        for (index, mode) in modes.iter().enumerate() {
+            finite_positive(
+                mode.frequency_hz,
+                &format!("audio.{name}[{index}].frequency_hz"),
+            )?;
+            finite_positive(mode.q, &format!("audio.{name}[{index}].q"))?;
+            require(
+                mode.gain.is_finite() && mode.gain >= 0.0,
+                format!("audio.{name} gains must be finite and not negative"),
+            )?;
+            require(
+                mode.frequency_hz < nyquist_hz,
+                format!(
+                    "audio.{name} frequencies must stay below the Nyquist \
+                     frequency of the solver step"
+                ),
+            )?;
+            // Stability of the two-pole resonator, which is the whole reason
+            // this check exists rather than a bare range on `q`. The pole radius
+            // is `r = 1 - theta / (2 Q)` with `theta = 2 pi f dt`; the filter is
+            // stable only for `0 < r < 1`. A high frequency paired with a low Q
+            // drives `r` negative or past zero and the mode would grow without
+            // bound in the hot loop, where nothing can recover it. Reject it
+            // here instead.
+            let theta = std::f64::consts::TAU * mode.frequency_hz * config.solver.fixed_step_s;
+            let r = 1.0 - theta / (2.0 * mode.q);
+            require(
+                r > 0.0 && r < 1.0,
+                format!(
+                    "audio.{name} must give a stable resonator: the pole radius \
+                     1 - pi f dt / Q must fall in (0, 1), so a high frequency needs a \
+                     correspondingly high Q"
+                ),
+            )?;
+        }
+        Ok(())
+    };
+    check_modes(&au.structural_modes, "structural_modes")?;
+    check_modes(&au.body_modes, "body_modes")?;
 
     let gov = &config.governor;
     finite_positive(gov.idle_target_rpm, "governor.idle_target_rpm")?;

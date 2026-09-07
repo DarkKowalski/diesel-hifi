@@ -313,19 +313,28 @@ fn the_synthetic_fixture_sweeps_through_the_same_harness() {
     );
 }
 
-/// Build scatter is a realism device and must not be a calibration change.
+/// Build and cycle scatter are realism devices and must not be calibration
+/// changes.
 ///
 /// The per-cylinder trims exist so the six cylinders stop being bit-identical
-/// copies of one another, which is audible. They are deliberately far too small
-/// to matter to torque or power, and this is the test that holds them there: a
-/// plus or minus 2% cylinder trim that shifts peak power is a trim that is too
+/// copies of one another, and the per-cycle trim exists so each cylinder stops
+/// being a bit-identical copy of its own last cycle. Both are audible and both
+/// are deliberately far too small to matter to torque or power. This is the test
+/// that holds them there: a trim that shifts peak power is a trim that is too
 /// large, whatever it does for the sound.
+///
+/// The per-cycle one needs saying explicitly because it is drawn in the hot loop
+/// rather than at reset, which makes it the one that could plausibly drift a
+/// sweep. It is zero-mean, so it averages out over a sweep long enough to
+/// measure a peak — but "should average out" is exactly the kind of claim that
+/// wants an assertion rather than an argument.
 #[test]
 fn the_per_cylinder_build_scatter_does_not_move_the_calibration() {
     let mut document: serde_json::Value =
         serde_json::from_str(sim_core::catalog::OM471_9_M3D_JSON).expect("config parses as JSON");
     document["valvetrain"]["exhaust_area_spread"] = serde_json::json!(0.0);
     document["injection"]["cylinder_delivery_spread"] = serde_json::json!(0.0);
+    document["injection"]["cycle_delivery_spread"] = serde_json::json!(0.0);
     let perfect = EngineConfig::from_json(&document.to_string())
         .expect("mutated config parses")
         .validate()

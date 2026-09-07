@@ -62,7 +62,8 @@
       ]
     },
     "soi_load_retard_rad_per_mg": 0.00075,
-    "cylinder_delivery_spread": 0.015
+    "cylinder_delivery_spread": 0.015,
+    "cycle_delivery_spread": 0.02
   },
   "combustion": {
     "combustion_efficiency": 0.98,
@@ -265,35 +266,63 @@
   },
   "audio": {
     "reference_spl_db": 94.0,
-    "exhaust_gain": 26.0,
+    "exhaust_gain": 9.5,
     "highpass_cutoff_hz": 20.0,
     "soft_clip_knee": 0.85,
-    "structural_gain": 2.2,
+    "structural_gain": 0.4,
     "structural_modes": [
       {
-        "frequency_hz": 480.0,
-        "q": 11.0,
-        "gain": 0.55
+        "frequency_hz": 210.0,
+        "q": 9.0,
+        "gain": 0.25
       },
       {
-        "frequency_hz": 900.0,
-        "q": 15.0,
+        "frequency_hz": 380.0,
+        "q": 10.0,
+        "gain": 0.4
+      },
+      {
+        "frequency_hz": 750.0,
+        "q": 11.0,
+        "gain": 0.9
+      },
+      {
+        "frequency_hz": 1400.0,
+        "q": 12.0,
+        "gain": 3.0
+      },
+      {
+        "frequency_hz": 2400.0,
+        "q": 13.0,
+        "gain": 7.0
+      },
+      {
+        "frequency_hz": 3600.0,
+        "q": 14.0,
+        "gain": 12.0
+      }
+    ],
+    "body_gain": 0.09,
+    "body_modes": [
+      {
+        "frequency_hz": 60.0,
+        "q": 4.0,
         "gain": 1.0
       },
       {
-        "frequency_hz": 1600.0,
-        "q": 20.0,
-        "gain": 4.0
+        "frequency_hz": 95.0,
+        "q": 4.0,
+        "gain": 1.0
       },
       {
-        "frequency_hz": 2600.0,
-        "q": 22.0,
-        "gain": 6.0
+        "frequency_hz": 150.0,
+        "q": 4.5,
+        "gain": 0.8
       },
       {
-        "frequency_hz": 3800.0,
-        "q": 25.0,
-        "gain": 11.0
+        "frequency_hz": 220.0,
+        "q": 5.0,
+        "gain": 0.5
       }
     ]
   },
@@ -566,6 +595,16 @@
       "status": "calibrated",
       "value_note": "0.015, so plus or minus 1.5% about the commanded quantity. Real injectors are matched to a tolerance, not to each other. The manual publishes the rail and amplified pressure limits and nothing about delivery scatter.",
       "purpose": "Gives each cylinder its own delivered fuel quantity for the same command, so the six burns differ slightly in heat release and therefore in pulse amplitude and in clatter. Companion to `valvetrain.exhaust_area_spread` and drawn on the same terms: once per cylinder at reset, from the reset seed. The smoke limit still applies after the trim, so a generous injector on a cylinder short of air is still held to the air it has.",
+      "safe_range": [
+        0.0,
+        0.1
+      ]
+    },
+    {
+      "path": "injection.cycle_delivery_spread",
+      "status": "calibrated",
+      "value_note": "0.02, so plus or minus 2% about the commanded quantity for each cycle. Published measurements of coefficient of variation in indicated mean effective pressure for heavy-duty diesels run a few percent at light load and under one percent at high load; this value sits inside that range, and the load dependence is not scheduled - it emerges, because a lightly loaded cycle has a long ignition delay and a large premixed fraction, so the same wobble in fuel moves the pressure rise further. The source manual publishes nothing about combustion variability.",
+      "purpose": "Gives each cycle its own delivered fuel quantity, so no two firing events are identical even from the same cylinder. The per-cylinder sibling gives each cylinder a fixed character; this is the other defect, and a different one. With build scatter alone every cycle of a given cylinder is bit-identical to its last and the output is a comb of infinitely narrow lines, which the ear hears as a synthesiser rather than as an engine. Real diesels run a few percent cycle-to-cycle variation in indicated work from injector shot-to-shot spread, residual mixing and turbulence, and that is what gives the firing orders their width. Drawn once per cylinder per cycle at intake valve closing from the reset seed, never per step, so determinism and batch invariance are untouched. The smoke limit still applies after the trim.",
       "safe_range": [
         0.0,
         0.1
@@ -1694,6 +1733,26 @@
       "status": "calibrated",
       "value_note": "Five modes at 480, 900, 1600, 2600 and 3800 Hz with Q of 11, 15, 20, 22 and 25, weighted 0.55, 1.0, 4.0, 6.0 and 11.0. Plausible for the block, head and covers of an engine of this size and nothing more than that. The source manual publishes no mode shapes, no frequencies and no damping. The 480 Hz mode is the block's own bending mode: a 12.8 L iron structure bends in the low hundreds of hertz, and it fills the span between the exhaust orders and the clatter. Its Q is the lowest in the bank because a whole-block mode is the most heavily damped one. The four weights above it ascend with frequency, which is the opposite of the radiating physics and is deliberate: the premixed Wiebe rise starts with zero slope, so the model's burn onset is smoother than a real one and drives the upper modes weakly. The ascending weights compensate for that shortfall in the drive, not for a belief that an engine radiates more at 3.8 kHz than at 900 Hz.",
       "purpose": "The modal bank the cylinder-pressure rise rings. Each mode is one two-pole resonator standing for a bending or breathing mode of the engine's outer surface, which radiates straight to air rather than down the exhaust. The frequencies set where the clatter sits and the Q values set how long it rings; an iron structure rings for a few milliseconds, which is Q in the tens. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
+      "safe_range": [
+        0.0,
+        20000.0
+      ]
+    },
+    {
+      "path": "audio.body_gain",
+      "status": "calibrated",
+      "value_note": "0.09. Calibrated against the audio_probe path balance so the exhaust leads the body by roughly 2 to 11 dB across the operating range, the spread being physical rather than sloppy: torque fluctuation grows with load faster than port flow does. The ceiling is set by where the energy lands, not by taste - at 0.4 the body path alone carried three quarters of the total output below 80 Hz, which measures as a magnificent low end and is inaudible on a laptop speaker and on in-ear monitors alike. The source manual publishes nothing about this.",
+      "purpose": "Sets the level of the torque-driven body path against the exhaust path. This is the path that carries the roar: the engine reacting against its mounts, shaking the frame and cab panels between roughly 20 and 200 Hz. It is not a variation on the structural path and cannot be replaced by one, because it is driven by a different quantity - crank torque swings through the whole cycle at the firing frequency and its low orders, while cylinder pressure spikes once per cycle with a fast premixed edge and drives the hundreds-of-hertz modes. Too low and a 12.8 litre six sounds like a much smaller engine; too high and the output is dominated by content below 80 Hz, which is headroom spent where no ordinary speaker reproduces anything.",
+      "safe_range": [
+        0.0,
+        100.0
+      ]
+    },
+    {
+      "path": "audio.body_modes",
+      "status": "calibrated",
+      "value_note": "Four modes at 60, 95, 150 and 220 Hz with Q of 4.0, 4.0, 4.5 and 5.0, weighted 1.0, 1.0, 0.8 and 0.5. Plausible for the frame and cab panels of a vehicle of this class and nothing more than that: the source manual is an engine manual and publishes nothing about the vehicle, let alone about its structural modes. Placed to straddle the firing frequency across the whole speed range - an inline six runs 28 Hz at idle to about 105 Hz governed - so the roar follows engine speed with nothing scheduling it. Four modes rather than three, and Q in the single figures rather than the tens, because a sparser or sharper bank made the path's level jump by 6 dB between operating points purely on whether the firing frequency happened to land on a mode.",
+      "purpose": "The modal bank the fluctuating crank torque shakes through the engine mounts. Each mode is one two-pole resonator standing for a frame or cab panel resonance. The Q values are deliberately far lower than the structural bank's: a panel on a trimmed cab is heavily damped, and a sharp bank here would be a tonal drone that jumped in level as the firing frequency swept past each mode rather than a roar that tracks engine speed smoothly. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
       "safe_range": [
         0.0,
         20000.0

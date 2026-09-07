@@ -709,11 +709,19 @@ fn the_structural_path_is_what_puts_energy_above_the_firing_harmonics() {
     // total collapses when the modal bank is silenced, so the exhaust path's
     // *share* of its own much smaller output can look large while the energy up
     // there is negligible. The claim being made is about how much is up there.
-    let with_energy = high_band_energy(&with, 500.0);
-    let without_energy = high_band_energy(&without, 500.0);
+    //
+    // Measured above 1 kHz rather than above 500 Hz. This boundary was chosen
+    // when the bank's lowest mode was at 480 Hz, so "above 500 Hz" meant "where
+    // only the block is". The bank now starts at 210 Hz, to give the engine the
+    // size a 12.8 litre iron structure ought to have, and the exhaust path
+    // legitimately carries content through the same region — so 500 Hz stopped
+    // separating the two paths and started straddling both. A kilohertz is
+    // where the block is still the only thing radiating.
+    let with_energy = high_band_energy(&with, 1_000.0);
+    let without_energy = high_band_energy(&without, 1_000.0);
     assert!(
         with_energy > without_energy * 4.0,
-        "the modal bank should dominate above 500 Hz: {with_energy:.4e} with it \
+        "the modal bank should dominate above 1 kHz: {with_energy:.4e} with it \
          against {without_energy:.4e} without, which is not a large enough difference \
          to be the mechanism this path claims to be"
     );
@@ -1009,6 +1017,9 @@ fn perfect_engine() -> ValidatedConfig {
         serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
     document["valvetrain"]["exhaust_area_spread"] = serde_json::json!(0.0);
     document["injection"]["cylinder_delivery_spread"] = serde_json::json!(0.0);
+    // The per-cycle spread too, or the seed still has something to vary and
+    // "perfect" would mean "perfectly built and still running unevenly".
+    document["injection"]["cycle_delivery_spread"] = serde_json::json!(0.0);
     EngineConfig::from_json(&document.to_string())
         .expect("mutated config parses")
         .validate()
@@ -1402,6 +1413,318 @@ fn a_manifold_with_no_runner_spread_is_rejected() {
     assert!(
         error.message.contains("runner_length_max_m"),
         "the rejection should name the field, got: {}",
+        error.message
+    );
+}
+
+// --- what a heavy truck sounds like -----------------------------------------
+//
+// The tests above prove the audio is finite, bounded, deterministic and pitched
+// at the firing frequency. A signal can satisfy every one of them and still
+// sound like a motorbike, and for a while this one did: the loudest octave at
+// cruise was 315-630 Hz, the clatter path ran 5 dB in front of the exhaust, and
+// only a fifth of the energy sat in the firing orders. Band shares did not catch
+// it, because a band share cannot tell a pulse train from a tone.
+//
+// These are the assertions that would have. They are about *character* rather
+// than about level or bandwidth.
+
+/// Power at one frequency, by direct correlation against a windowed sinusoid.
+///
+/// A resonator cannot answer this: its skirts are 6 dB per octave and the
+/// firing orders here are 30 Hz apart, so a neighbouring order leaks into any
+/// filter narrow enough to be interesting. Correlating against the exact
+/// frequency does not have skirts at all.
+fn line_power(samples: &[f32], hz: f64) -> f64 {
+    let n = samples.len();
+    let (mut re, mut im, mut norm) = (0.0, 0.0, 0.0);
+    for (i, sample) in samples.iter().enumerate() {
+        let w = 0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / n as f64).cos());
+        let phase = std::f64::consts::TAU * hz * i as f64 / 40_000.0;
+        let v = f64::from(*sample) * w;
+        re += v * phase.cos();
+        im += v * phase.sin();
+        norm += w * w;
+    }
+    (re * re + im * im) / norm.max(1.0e-30)
+}
+
+/// Peak over RMS, in decibels.
+fn crest_db(samples: &[f32]) -> f64 {
+    let peak = f64::from(samples.iter().fold(0.0f32, |m, s| m.max(s.abs())));
+    let mean_square: f64 = samples
+        .iter()
+        .map(|s| f64::from(*s) * f64::from(*s))
+        .sum::<f64>()
+        / samples.len().max(1) as f64;
+    if mean_square <= 1.0e-30 {
+        return 0.0;
+    }
+    20.0 * (peak / mean_square.sqrt()).log10()
+}
+
+/// RMS of a trace.
+fn rms_of(samples: &[f32]) -> f64 {
+    (samples
+        .iter()
+        .map(|s| f64::from(*s) * f64::from(*s))
+        .sum::<f64>()
+        / samples.len().max(1) as f64)
+        .sqrt()
+}
+
+/// The shipped configuration with only one of the three audio gains left alive.
+fn config_with_only(gain: &str) -> ValidatedConfig {
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    for other in ["exhaust_gain", "structural_gain", "body_gain"] {
+        if other != gain {
+            document["audio"][other] = serde_json::json!(0.0);
+        }
+    }
+    EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect("mutated config validates")
+}
+
+#[test]
+fn the_energy_sits_in_the_firing_orders_and_not_between_them() {
+    // What a diesel is, spectrally: a comb at the firing frequency. What it is
+    // not: a resonance being rung, which puts its energy wherever the resonance
+    // happens to be and pays no attention to engine speed.
+    //
+    // Asserted as on-order against off-order rather than as a share of the
+    // total, so it needs no normalisation and no window-bandwidth bookkeeping.
+    // The half-order points are where a comb has nothing and a rung resonance
+    // has just as much as anywhere else.
+    let rpm = 1_400.0;
+    let cylinders = config().config().geometry.cylinders;
+    let f0 = firing_hz(rpm, cylinders);
+    let samples = samples_at(config(), rpm, 1.0, 293.15, 32_768);
+
+    let on: f64 = (1..=4).map(|n| line_power(&samples, f0 * n as f64)).sum();
+    let off: f64 = (1..=4)
+        .map(|n| line_power(&samples, f0 * (n as f64 + 0.5)))
+        .sum();
+
+    assert!(
+        on > off * 20.0,
+        "the firing orders should tower over the gaps between them: {on:.3e} on the \
+         orders against {off:.3e} halfway between. A signal that scores near even here \
+         is a resonance being rung rather than an engine firing"
+    );
+}
+
+#[test]
+fn the_exhaust_path_leads_the_clatter_path() {
+    // The balance that decides whether this reads as a truck or as a motorbike,
+    // and the single number that was wrong. The exhaust carries the firing
+    // orders; the block carries the clatter on top of them. A block sitting in
+    // front of the exhaust is a small engine however the band shares come out —
+    // and for a while this one led by 5 dB in the wrong direction.
+    //
+    // Six decibels rather than "louder": a margin small enough to be an accident
+    // is not a balance, and the clatter still has to be plainly audible, so this
+    // is a floor and not a target.
+    for (rpm, pedal) in [(600.0, 0.15), (1_200.0, 0.60), (1_400.0, 1.0)] {
+        let exhaust = rms_of(&samples_at(
+            config_with_only("exhaust_gain"),
+            rpm,
+            pedal,
+            293.15,
+            32_768,
+        ));
+        let block = rms_of(&samples_at(
+            config_with_only("structural_gain"),
+            rpm,
+            pedal,
+            293.15,
+            32_768,
+        ));
+        let lead_db = 20.0 * (exhaust / block.max(1.0e-30)).log10();
+        assert!(
+            lead_db > 6.0,
+            "at {rpm:.0} rpm and {pedal:.2} pedal the exhaust leads the block by only \
+             {lead_db:.1} dB; below 6 dB the clatter starts carrying the engine and a \
+             12.8 litre six stops sounding like one"
+        );
+    }
+}
+
+#[test]
+fn the_output_is_a_pulse_train_and_not_a_tone() {
+    // The measurement band shares are blind to. A sine and a train of distinct
+    // combustion events can hold identical energy in every band; a sine has a
+    // crest factor of 3.0 dB and a pulse train is well into double figures.
+    //
+    // This also catches the soft clipper being driven into: saturation flattens
+    // the peaks and the crest factor collapses long before the output measures
+    // as distorted. During calibration this read 3.5 dB with the gains too high,
+    // which is a signal that has been squared off into a buzz.
+    for (rpm, pedal) in [(600.0, 0.15), (1_200.0, 0.60), (1_400.0, 1.0)] {
+        let samples = samples_at(config(), rpm, pedal, 293.15, 32_768);
+        let crest = crest_db(&samples);
+        assert!(
+            crest > 9.0,
+            "at {rpm:.0} rpm and {pedal:.2} pedal the crest factor is {crest:.1} dB; \
+             a diesel is a series of distinct events, and a figure approaching a sine's \
+             3 dB means the pulses have been flattened into a tone"
+        );
+    }
+}
+
+#[test]
+fn the_body_path_is_what_supplies_the_low_orders() {
+    // The third path's whole claim, stated as a property of the path rather than
+    // as a level: torque-driven radiation belongs below a few hundred hertz.
+    // Both other gains are silenced, so what is measured is this path alone.
+    let samples = samples_at(config_with_only("body_gain"), 1_400.0, 1.0, 293.15, 32_768);
+    let f0 = firing_hz(1_400.0, config().config().geometry.cylinders);
+
+    let low: f64 = (1..=3).map(|n| line_power(&samples, f0 * n as f64)).sum();
+    let high: f64 = [1_000.0, 2_000.0, 3_000.0]
+        .iter()
+        .map(|hz| line_power(&samples, *hz))
+        .sum();
+
+    assert!(
+        low > high * 100.0,
+        "the body path must live in the low orders: {low:.3e} in the first three \
+         against {high:.3e} in the kilohertz. A body path with content up there is \
+         not modelling a frame"
+    );
+}
+
+#[test]
+fn silencing_the_body_path_changes_the_output() {
+    // Guards against the path being wired up but never reaching the sample — the
+    // failure mode where every other test above still passes and the parameter
+    // is decoration. Compare against the shipped configuration rather than
+    // against a threshold, so it stays true whatever the gain is calibrated to.
+    let with = samples_at(config(), 1_400.0, 1.0, 293.15, 8_000);
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["audio"]["body_gain"] = serde_json::json!(0.0);
+    let without = samples_at(
+        EngineConfig::from_json(&document.to_string())
+            .expect("mutated config parses")
+            .validate()
+            .expect("mutated config validates"),
+        1_400.0,
+        1.0,
+        293.15,
+        8_000,
+    );
+    assert_ne!(with, without, "body_gain must actually reach the solver");
+}
+
+/// Coefficient of variation of a cylinder's pulse height against its own history.
+///
+/// Chops the trace into firing windows, then walks every `cylinders`-th window
+/// so each series is one cylinder meeting itself one engine cycle later. Build
+/// scatter makes cylinders differ from *each other* and would inflate a figure
+/// taken across all of them; this asks the different question - does a cylinder
+/// differ from its own last cycle - which is the one the per-cycle spread is
+/// about.
+fn per_cylinder_pulse_variation(samples: &[f32], rpm: f64, cylinders: usize) -> f64 {
+    let window = (40_000.0 / firing_hz(rpm, cylinders)).round() as usize;
+    let peaks: Vec<f64> = samples
+        .chunks(window)
+        .filter(|chunk| chunk.len() == window)
+        .map(|chunk| f64::from(chunk.iter().fold(0.0f32, |m, x| m.max(x.abs()))))
+        .collect();
+
+    let mut total = 0.0;
+    for offset in 0..cylinders {
+        let series: Vec<f64> = peaks
+            .iter()
+            .skip(offset)
+            .step_by(cylinders)
+            .copied()
+            .collect();
+        let mean = series.iter().sum::<f64>() / series.len().max(1) as f64;
+        let variance =
+            series.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / series.len().max(1) as f64;
+        total += variance.sqrt() / mean.max(1.0e-30);
+    }
+    total / cylinders as f64
+}
+
+#[test]
+fn the_per_cycle_spread_makes_a_cylinder_differ_from_its_own_last_cycle() {
+    // The defect this parameter exists for: with build scatter alone the six
+    // cylinders differ from each other but every cylinder is a bit-identical
+    // copy of its own previous cycle, so the engine is a six-event loop played
+    // on repeat. That is audible, and what it is audible as is a synthesiser.
+    //
+    // Measured at idle, which is not a convenience. At full pedal the smoke
+    // limit sets the fuel - the commanded quantity is clamped to the air the
+    // cylinder trapped - so the trim is clipped away and this spread does
+    // nothing at all, measuring 1.00x there. That is the right behaviour rather
+    // than a gap: published cycle-to-cycle variation for heavy-duty diesels runs
+    // a few percent at light load and under one percent at high load, and the
+    // model reproduces the load dependence without being told to, because the
+    // limiter that erases the variation is already there for another reason.
+    let cylinders = config().config().geometry.cylinders;
+    let rpm = 600.0;
+
+    let variation = |spread: f64| {
+        let mut document: serde_json::Value =
+            serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+        document["injection"]["cycle_delivery_spread"] = serde_json::json!(spread);
+        let cfg = EngineConfig::from_json(&document.to_string())
+            .expect("mutated config parses")
+            .validate()
+            .expect("mutated config validates");
+        per_cylinder_pulse_variation(&samples_at(cfg, rpm, 0.15, 293.15, 120_000), rpm, cylinders)
+    };
+
+    let identical = variation(0.0);
+    let varying = variation(0.02);
+    assert!(
+        varying > identical * 1.3,
+        "the per-cycle spread must make a cylinder differ from its own last cycle: \
+         pulse-height variation {varying:.5} with it against {identical:.5} without. \
+         An engine whose every cycle is a copy of its last is a loop, not a machine"
+    );
+}
+
+#[test]
+fn a_negative_per_cycle_spread_is_rejected() {
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["injection"]["cycle_delivery_spread"] = serde_json::json!(-0.01);
+    let error = EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect_err("a negative spread must be rejected");
+    assert!(
+        error.message.contains("cycle_delivery_spread"),
+        "the rejection should name the field, got: {}",
+        error.message
+    );
+}
+
+#[test]
+fn an_unstable_body_mode_is_rejected() {
+    // The body bank runs Q in the single figures, which is far closer to the
+    // stability boundary than the structural bank's tens. A high frequency
+    // paired with a low Q drives the pole radius negative and the mode grows
+    // without bound in the hot loop, so validation has to cover this bank too
+    // rather than only the one it was originally written for.
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
+    document["audio"]["body_modes"] = serde_json::json!([
+        { "frequency_hz": 18_000.0, "q": 0.5, "gain": 1.0 }
+    ]);
+    let error = EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect_err("an unstable body mode must be rejected");
+    assert!(
+        error.message.contains("body_modes"),
+        "the rejection should name the bank, got: {}",
         error.message
     );
 }
