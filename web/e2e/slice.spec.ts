@@ -43,14 +43,45 @@ async function rpm(page: Page): Promise<number> {
 }
 
 /**
+ * Wait for the engine to reach governed idle.
+ *
+ * `run-state` reads `running` as soon as the worker is stepping, which is while
+ * the starter is still dragging the crank up through a few hundred rpm — a long
+ * way below the 560 rpm the governor holds. Loading it there is loading an
+ * engine that has not caught yet.
+ *
+ * **This is a real margin rather than a theoretical one.** Reproduced natively,
+ * applying 500 N·m at 395 rpm dips the crank to 269 rpm before the turbo has any
+ * boost to give, and 269 rpm is close enough to a stall that how many steps the
+ * worker got through in the last animation frame decides the outcome. Browser
+ * step counts come from wall-clock time by design, so under load the dip goes
+ * deeper. Six of these tests failed on the previous solver and five on the
+ * current one, in a *different combination* each run and all with the same
+ * symptom — an engine reading `stopped` where a speed was expected.
+ *
+ * Waiting for idle is what a driver does and it removes the coupling to machine
+ * timing entirely.
+ */
+async function awaitIdle(page: Page): Promise<void> {
+  await expect
+    .poll(() => rpm(page), {
+      timeout: 30_000,
+      message: 'the engine should reach governed idle before it is loaded',
+    })
+    .toBeGreaterThan(500);
+}
+
+/**
  * Bring a running engine up to a loaded working point.
  *
  * The load is ramped rather than dropped on all at once. Boost is no longer
  * prescribed from a schedule — it has to be earned from exhaust energy — so an
  * idling engine buried under full load simply stalls, and a stalled engine makes
- * no boost. A real truck pulls away the same way.
+ * no boost. A real truck pulls away the same way, and it waits for the engine to
+ * be idling first.
  */
 async function pullAway(page: Page): Promise<void> {
+  await awaitIdle(page);
   await page.getByTestId('pedal').fill('90');
   await page.getByTestId('load').fill('500');
   await expect
@@ -189,6 +220,10 @@ test('the UI stays responsive while the simulation runs', async ({ page }) => {
   await page.getByTestId('start').click();
   await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
 
+  // Idle first, for the reason `awaitIdle` gives: 500 N·m applied to an engine
+  // still on the starter is a coin toss decided by how many steps the last frame
+  // managed, and this test is about input latency rather than about that.
+  await awaitIdle(page);
   const before = await rpm(page);
 
   // Interacting with the page while the worker is stepping must be immediate.

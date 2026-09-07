@@ -1927,15 +1927,37 @@ Run on Windows 11.
 | `cargo run --release -p sim-core --example brake_sweep` | passed; the figures under **Results → Engine brake** |
 | `cargo run --release -p sim-core --example audio_probe` | passed; the figures under **Results → Sound** |
 | `cargo run --release -p sim-core --example trace_probe` | passed; the figures under **What the traces contain** |
+| `cargo run --release -p sim-core --example audio_capture` | passed; 10 scenarios written, limiter engaging at three of them and costing 0.3 to 0.7 dB of crest |
+| `pnpm install --frozen-lockfile` | passed |
+| `pnpm wasm:build` | passed; the blob carries the new configuration |
+| `pnpm wasm:test` | 17 passed, 0 failed |
+| `pnpm check` | 0 errors, 0 warnings |
+| `pnpm test` | 83 unit passed, 34 browser passed at root and subpath, 0 failed |
+| `pnpm build` | passed; `verify-dist` OK, 6 files, 590 KiB |
+| `pnpm build:subpath` | passed; `verify-dist` OK under an absolute base |
 
-**The web checks were not run, and unlike milestones 10 and 11 that needs a
-reason rather than a scope rule.** This milestone changes the physics, so the
-audio the browser plays changes with it — but no TypeScript, no worker protocol,
-no channel descriptor, no worklet and no routing was touched, and nothing in
-`web/src` references any configuration value that moved. What the browser would
-be re-verifying is a different WASM blob through an unchanged pipe. `pnpm build`,
-`pnpm check` and the Playwright suite are the checks for that pipe and are stale
-rather than failing; they should be run before this reaches a deployment.
+**The browser suite was failing before this milestone and the fix is in the
+test.** Running it turned up five failures, all reading `stopped` where a speed
+was expected. The suspicion was the obvious one — retarding intake valve closing
+cost low-speed torque, so the engine can no longer pull away — and it was wrong.
+Reproduced natively, applying 500 N·m at 395 rpm dips the crank to **269 rpm and
+then pulls away**; on the previous solver the same manoeuvre dipped to **256 rpm**,
+so milestone 12 made that margin slightly *better*.
+
+The suite was then run against the previous solver, which failed **six** of the
+same tests — in a different combination, with the identical symptom. The defect is
+that `run-state` reads `running` while the starter is still dragging the crank
+through a few hundred rpm, and the test helper applied load there. A 269 rpm dip is
+close enough to a stall that how many steps the worker completed in the last
+animation frame decides it, and browser step counts come from wall-clock time by
+design. `pullAway` now waits for governed idle before loading, which is what a
+driver does; the suite went from 4.8 minutes with six failures to 2.4 minutes with
+none, the difference being timeouts it is no longer waiting out.
+
+This is the third time in three milestones that a test failing alongside a change
+turned out not to be caused by it, and the method was the same each time: measure
+the previous version at the same operating point before believing the new one
+broke something.
 
 **Four tests changed, and none of them changed to accommodate a regression.** The
 distinction matters enough to itemise:
@@ -1946,6 +1968,7 @@ distinction matters enough to itemise:
 | `the_structural_path_is_what_puts_energy_above_the_firing_harmonics` | modal bank dominates above 1 kHz by 4× | by 3× | The 4× was fitted while a fifth of the block path's content above 2 kHz was the artefact. It measured 3.98 after the fix. The claim is dominance; the constant was carrying a defect |
 | `the_per_cycle_spread_makes_a_cylinder_differ_from_its_own_last_cycle` | the spread at 0.02 raises variation 1.3× over zero | the engine varies at zero, **and** 0.05 raises it 1.3× | The model now has intrinsic cycle coupling larger than the shipped spread contributes. Split into two assertions because only one of them used to be true |
 | `running_under_load_spins_the_shaft_up_and_makes_real_boost`, `boost_decays_back_toward_ambient_when_fuelling_stops` | boost at one instant > 30 kPa | mean boost over a second > 30 kPa | The plant limit-cycles there and always has. Verified by measuring the previous solver at the same point. See **Known deficits** |
+| `e2e/slice.spec.ts`, `pullAway` and the responsiveness test | load applied as soon as `run-state` reads `running` | load applied once the engine reaches governed idle | The engine was being loaded at a few hundred rpm while still on the starter. Failed six tests on the previous solver and five on this one, in different combinations. See the note below |
 
 One test is new: `the_intake_port_is_shut_at_overlap_and_at_valve_closing`, which
 holds the intake window shut at both ends. An intake port still open at valve

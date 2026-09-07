@@ -496,6 +496,14 @@ both probes as well; `README.md` records every command and its result under
 passing — the physics moved, no TypeScript did, and that distinction should be
 stated rather than assumed.
 
+**The web chain is verified and the captures are fresh**, which is what a
+listening comparison needs and what milestone 12 originally left stale. Running
+it found a sixth thing: five browser tests failing with an engine reading
+`stopped`, which was *not* the intake change — the previous solver failed six of
+the same tests, and the native pull-away margin actually improved from a 256 rpm
+dip to 269. The test helper had been loading the engine while it was still on the
+starter. Recorded in `README.md` under **Verification, milestone 12**.
+
 The next package is a choice between three, and the plan no longer dictates it:
 
 - **The idle low-band criterion.** Two pieces of evidence against it, none for it,
