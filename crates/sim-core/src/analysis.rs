@@ -29,10 +29,16 @@
 //! | [`Spectrum::comb_share`] | is the energy at the firing rate and its orders | whether the orders arrive as pulses |
 //! | [`crest_db`] | peaks over average: distinct events, or a steady buzz | where the energy sits |
 //! | [`modulation_depth`] | does the *envelope* swing at the firing rate | absolute level |
+//! | [`estimate_firing_hz`] | what speed is this thing turning at | whether it is an engine at all |
 //!
 //! They are deliberately a set that cannot all be satisfied by pushing energy in
 //! one direction. A tone can hold any band share you like and fails the last
 //! two; noise passes the crest test at the wrong value and fails the comb.
+//!
+//! The last of them is the odd one out, and it is here because a *recording*
+//! does not come with an rpm reading. Everything above it needs an `f0` before
+//! it can say anything, and for the model that comes from the solver's own crank
+//! speed. For a reference recording it has to be recovered from the signal.
 
 use std::f64::consts::{PI, TAU};
 
@@ -442,6 +448,236 @@ pub fn modulation_depth(samples: &[f32], sample_rate_hz: f64, f0_hz: f64) -> f64
 #[must_use]
 pub fn firing_hz(rpm: f64, cylinders: usize) -> f64 {
     rpm / 60.0 * cylinders as f64 * 0.5
+}
+
+/// Inverse of [`firing_hz`]: the speed an engine of `cylinders` cylinders must
+/// be turning to fire at `f0_hz`.
+#[must_use]
+pub fn rpm_from_firing_hz(f0_hz: f64, cylinders: usize) -> f64 {
+    if cylinders == 0 {
+        return 0.0;
+    }
+    f0_hz * 60.0 * 2.0 / cylinders as f64
+}
+
+/// A firing rate recovered from a signal that did not come with one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FiringEstimate {
+    /// The estimated firing frequency, in hertz.
+    pub f0_hz: f64,
+    /// [`Spectrum::comb_share`] at the estimate: how much of the signal's energy
+    /// the comb actually accounts for. **This is the confidence.** A window of
+    /// road noise still has a best-scoring `f0`; what it does not have is a
+    /// comb holding a meaningful share of the energy.
+    pub comb_share: f64,
+    /// The weighted harmonic sum the estimate maximised. Comparable between
+    /// candidates within one window and meaningless between windows.
+    pub score: f64,
+}
+
+/// Candidates per FFT bin in the coarse scan.
+const COARSE_CANDIDATES_PER_BIN: usize = 4;
+
+/// Half-width, in bins, of the search for each order's peak during refinement.
+const REFINE_HALF_WIDTH_BINS: usize = 2;
+
+/// How much energy must sit *between* a candidate's lines, relative to the
+/// energy on them, before the candidate is judged to be every second line of a
+/// comb spaced half as far apart.
+///
+/// The octave guard in the weighted sum handles the case where there is nothing
+/// at the half — a lone tone at 120 Hz is not a 60 Hz comb, because 60 Hz is
+/// empty. It cannot handle a comb whose fundamental is merely *weak*, and the
+/// model's own captures are full of them: `idle` at a known 551 rpm has its
+/// firing fundamental at 27.5 Hz holding 5.4% of the energy against 19.8% at its
+/// second order, and `light-900` is worse — 1.3% at 45 Hz against 13.6% at 90.
+/// Both were reported at exactly twice their true speed, which is a
+/// plausible-looking number and the wrong one.
+///
+/// **A comb is defined by its spacing.** So the test is not whether the
+/// fundamental is loud, which in these cases it is not, but whether the lines
+/// *between* the candidate's lines are there: at `f0/2`, `3f0/2`, `5f0/2` and
+/// `7f0/2`. For `light-900` those hold half again as much energy as the
+/// candidate's own comb, because they are its real third and fifth orders. For
+/// a comb that genuinely is spaced `f0` they hold essentially nothing.
+///
+/// The two populations are not close. Measured across the model's six steady
+/// captures the ratio is either above 0.5 or below 0.05; 0.2 sits between them
+/// with a factor of two and a half either side.
+const SUBHARMONIC_RATIO: f64 = 0.2;
+
+/// Most times the subharmonic check may halve the estimate.
+///
+/// Two, so a comb read two octaves high can still come back, and bounded so a
+/// spectrum with energy all the way down cannot walk the estimate to the floor
+/// of the search range.
+const SUBHARMONIC_STEPS: usize = 2;
+
+/// True frequency of a spectral peak whose apex is bin `k`.
+///
+/// Quadratic interpolation through the three bins around the apex. A windowed
+/// line does not land on a bin centre, and its neighbours' magnitudes say where
+/// between them it fell; the vertex of the parabola through them is that place.
+/// Standard, and worth a comment only because the alternative — reporting the
+/// apex bin — quantises the answer to a bin, and a bin here is 15 rpm.
+fn interpolated_peak_hz(power: &[f64], k: usize, bin_hz: f64) -> f64 {
+    if k == 0 || k + 1 >= power.len() {
+        return k as f64 * bin_hz;
+    }
+    let (left, centre, right) = (power[k - 1].sqrt(), power[k].sqrt(), power[k + 1].sqrt());
+    let denominator = left - 2.0 * centre + right;
+    let offset = if denominator.abs() < 1e-30 {
+        0.0
+    } else {
+        0.5 * (left - right) / denominator
+    };
+    // A vertex further than half a bin from the apex means the three points are
+    // not a peak, so trust the apex instead of extrapolating off it.
+    (k as f64 + offset.clamp(-0.5, 0.5)) * bin_hz
+}
+
+/// Recover the firing rate of a signal that does not report its own speed.
+///
+/// The model knows its rpm and calls [`firing_hz`]. A recording does not, and
+/// every metric that distinguishes an engine from a noise — [`Spectrum::comb_share`],
+/// [`modulation_depth`] — needs an `f0` before it can say anything. This is the
+/// only measurement here that has to *find* its own reference frequency.
+///
+/// Searches `[lo_hz, hi_hz]` and returns the best candidate, or `None` if the
+/// range holds nothing or the signal is silent.
+///
+/// ## Harmonic sum, weighted by `1/n`, then a subharmonic check
+///
+/// The score for a candidate is
+///
+/// ```text
+/// score(f0) = sum over n in 1..=orders of line_energy(n * f0) / n
+/// ```
+///
+/// and the `1/n` is not cosmetic — it is the entire octave guard. An *unweighted*
+/// sum is happy to report a harmonic instead of the fundamental: for a tone at
+/// 120 Hz, the candidates 60 and 120 each collect exactly one real line, score
+/// identically, and the answer is then decided by floating-point noise. Weighting
+/// by `1/n` puts a line found at the candidate's own fundamental ahead of the same
+/// line found at its second harmonic, so 120 wins. The subharmonic direction is
+/// guarded by the same arithmetic from the other side: a candidate at `f0/2`
+/// spends half its `orders` on empty bins between the real lines and scores below
+/// the candidate that lands on all of them.
+///
+/// Both directions are the sort of failure that reads as plausible — an engine
+/// reported at half or double its speed produces a sane-looking rpm — so
+/// `tests/analysis.rs` puts a signal at each trap and asserts the estimator does
+/// not fall in.
+///
+/// The weighting alone is not enough, and the model's own idle proved it: see
+/// [`SUBHARMONIC_RATIO`] for the case it misses and the check that catches it.
+///
+/// ## Two stages, because a bin is 15 rpm wide
+///
+/// The coarse scan runs on bin centres, and at a 65536-sample window and 48 kHz
+/// a bin is 0.73 Hz — which on a six is 15 rpm, too coarse to report. So each
+/// order's peak is then located and quadratically interpolated, and the `f0`
+/// estimates the orders imply are averaged, weighted by the energy each holds.
+/// The reported `f0_hz` is that refined figure.
+///
+/// Weighting matters as much as interpolating. An order that is barely present
+/// contributes almost nothing, so a comb missing its third order is refined by
+/// the orders it has rather than by whatever noise happens to sit where the
+/// third should have been.
+#[must_use]
+pub fn estimate_firing_hz(
+    samples: &[f32],
+    sample_rate_hz: f64,
+    lo_hz: f64,
+    hi_hz: f64,
+    orders: usize,
+) -> Option<FiringEstimate> {
+    if samples.is_empty() || orders == 0 || !lo_hz.is_finite() || lo_hz <= 0.0 || hi_hz < lo_hz {
+        return None;
+    }
+    let spectrum = Spectrum::of(samples, sample_rate_hz);
+    if spectrum.total() <= 1e-30 {
+        return None;
+    }
+
+    let step = spectrum.bin_hz() / COARSE_CANDIDATES_PER_BIN as f64;
+    if step <= 0.0 {
+        return None;
+    }
+    let steps = ((hi_hz - lo_hz) / step).floor() as usize;
+
+    let mut best_hz = lo_hz;
+    let mut best_score = f64::NEG_INFINITY;
+    for i in 0..=steps {
+        let f0 = lo_hz + step * i as f64;
+        let score: f64 = (1..=orders)
+            .map(|n| spectrum.line_energy(f0 * n as f64) / n as f64)
+            .sum();
+        if score > best_score {
+            best_score = score;
+            best_hz = f0;
+        }
+    }
+    if !best_score.is_finite() || best_score <= 0.0 {
+        return None;
+    }
+
+    // Is the winner actually every second line of a comb spaced half as far
+    // apart? Ask what sits between its lines.
+    for _ in 0..SUBHARMONIC_STEPS {
+        let half = best_hz / 2.0;
+        if half < lo_hz {
+            break;
+        }
+        let on: f64 = (1..=orders)
+            .map(|n| spectrum.line_energy(best_hz * n as f64))
+            .sum();
+        let between: f64 = (1..=orders)
+            .map(|n| spectrum.line_energy(half * (2 * n - 1) as f64))
+            .sum();
+        if between < on * SUBHARMONIC_RATIO {
+            break;
+        }
+        best_hz = half;
+    }
+
+    // Refine. The coarse winner is only accurate to a bin, and a bin is worth
+    // 15 rpm on a six. Each order's own peak is located and interpolated, and
+    // the estimates they imply are averaged weighted by how much energy each
+    // order actually holds — so an order that is barely present barely votes,
+    // and a missing one cannot drag the answer off with whatever noise sits
+    // where its line should have been.
+    let power = spectrum.power();
+    let bin_hz = spectrum.bin_hz();
+    let (mut weighted, mut weight) = (0.0f64, 0.0f64);
+    for n in 1..=orders {
+        let centre = (best_hz * n as f64 / bin_hz).round() as isize;
+        let half = REFINE_HALF_WIDTH_BINS as isize;
+        let Some(apex) = (centre - half..=centre + half)
+            .filter(|k| *k > 0 && (*k as usize) < power.len())
+            .max_by(|a, b| power[*a as usize].total_cmp(&power[*b as usize]))
+        else {
+            continue;
+        };
+        let energy = power[apex as usize];
+        if energy <= 0.0 {
+            continue;
+        }
+        let implied = interpolated_peak_hz(power, apex as usize, bin_hz) / n as f64;
+        weighted += implied * energy;
+        weight += energy;
+    }
+    let refined_hz = if weight > 0.0 {
+        (weighted / weight).clamp(lo_hz, hi_hz)
+    } else {
+        best_hz
+    };
+
+    Some(FiringEstimate {
+        f0_hz: refined_hz,
+        comb_share: spectrum.comb_share(refined_hz, orders),
+        score: best_score,
+    })
 }
 
 /// A synthetic train of raised-cosine pulses at `f0_hz`, for exercising the

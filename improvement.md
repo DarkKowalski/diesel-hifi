@@ -3,7 +3,9 @@
 Status: phases 1-3 delivered 2026-09-07 as milestone 8. The first item of phase 5
 — the shared saturation stage — delivered 2026-09-07 as milestone 9, ahead of
 phase 4, because the measurements said the listening stage was flattening the
-pulses the source already produced. Phases 4, 6 and 7 remain proposed.
+pulses the source already produced. Phase 2's carried-forward reference
+annotation delivered 2026-09-07 as milestone 10, by measurement rather than by
+ear. Phases 4, 6 and 7 remain proposed.
 
 Delivered behaviour, the measurements it produced and the deficits it exposed are
 recorded in `README.md`, which stays the specification. See
@@ -32,11 +34,15 @@ The creator identifies a 2018 Mercedes Arocs 3248 with a 12.8-litre OM 471 as th
 recording source, using synchronized microphones around the engine and exhaust.
 The video demonstrates the resulting ETS2 sound mix.
 
-| Segment | Proposed use |
+| Segment | Use, after milestone 10 measured it |
 |---|---|
 | 0:05-1:33, exterior engine | Supporting source-character comparison |
-| 1:33-2:49, interior engine | Primary driver-seat benchmark |
-| 6:17 onward, test drive | Acceleration, load changes and shifting context |
+| 1:33-2:49, interior engine | Primary driver-seat benchmark. Three steady idle stretches at 499-507 rpm; everything else in it is a stationary rev sweep |
+| 6:17 onward, test drive | **Not usable.** Dominated by a component at half the firing rate; no operating point can be inferred from it |
+
+The video is the mod running **in the game**: recorded samples pitch-shifted,
+looped and crossfaded to an interior camera, not a rendering and not raw
+microphone tracks. Every measurement of it inherits that.
 
 Local files are in the existing gitignored directory
 `datasheet/audio-references/max2712-om471/`:
@@ -47,8 +53,13 @@ Local files are in the existing gitignored directory
 
 The full audio decoded without errors. The extracted chapter's decoded samples
 match the same source interval exactly; no EQ or loudness normalization was
-applied. Listening review, operating-point annotation and comparative analysis
-remain pending.
+applied.
+
+Operating-point annotation was delivered as milestone 10, by signal measurement.
+The interior chapter yields three steady idle stretches at 499-507 rpm and
+nothing else steady; the test drive yields no usable operating point at all. See
+`README.md`, **Results → Characterising the reference**. Listening review remains
+pending and is not substitutable by measurement.
 
 This is a processed stereo benchmark from a later engine, not isolated microphone
 tracks or a calibrated sound-pressure measurement. Its description also lists
@@ -263,12 +274,13 @@ audit at both device rates. No acoustic source or calibration changed.
 
 Two items of the package were **not** delivered and are carried forward:
 
-- **Reference segment annotation.** The recording's windows are still
-  un-annotated and no listening comparison has been made against it. The
-  apparatus to make one exists; the ear has not been applied.
+- **Reference segment annotation.** Delivered as milestone 10 in its measurable
+  half: the windows are annotated with inferred speed, confidence and the full
+  metric set. **No listening comparison has been made against it**, and no
+  measurement substitutes for one.
 - **Cockpit-output export.** The cab is a Web Audio graph, and a second copy of
   it in Rust would drift from the one people hear. Cockpit comparison happens in
-  the browser against the exported raw captures instead.
+  the browser against the exported raw captures instead. Still open.
 
 Phase 4 experiments can now be selected from measured deficits rather than
 guessed at. Phases 4 and 5 can iterate together; phase 6 remains conditional.
@@ -286,21 +298,60 @@ clipper had been reporting as 40.4% — the first honest measurement of that pat
 and one that the band criteria, written against fuelled operation, have no
 business judging yet.
 
-**The reference recording is still un-annotated**, and it is now the blocking
-item for three separate things: the speed-dependent low-band tolerance at idle,
-the exhaust-over-block floor that two operating points sit just under, and
-whether the brake's upper-band share is a defect at all. Every one of those is a
-criterion waiting on characterisation rather than a model waiting on a change.
+It left the reference recording as the blocking item for three separate things:
+the speed-dependent low-band tolerance at idle, the exhaust-over-block floor that
+two operating points sit just under, and whether the brake's upper-band share is
+a defect at all. Every one of those is a criterion waiting on characterisation
+rather than a model waiting on a change. The next package measures it.
+
+## Third Implementation Package
+
+The reference characterisation, delivered as milestone 10. A firing-rate
+estimator in `sim_core::analysis`, so a signal that does not report its own speed
+can still be measured; `examples/reference_probe.rs`, which annotates any WAV
+into operating-point segments with a confidence attached; and the benchmark
+measured with it. No acoustic source, calibration or acceptance criterion
+changed.
+
+It answers the blocking item above in three different ways, which is the result:
+
+| Blocked criterion | Outcome |
+|---|---|
+| Speed-dependent low-band tolerance at idle | **Evidence, not a verdict.** The reference reads 89-92% below 80 Hz at idle against the model's 40.8%. The criterion is left at 35%, failing |
+| Exhaust over block by 6 dB | **Not blocked on this reference, and never was.** A stereo mix has no path separation; no analysis of it yields a per-path ratio |
+| Whether the brake's upper-band share is a defect | **Still blocked, on material that does not exist here.** No engine-brake passage could be identified |
+
+Two findings beyond the plan. The estimator read two of the model's six steady
+captures an octave high before it was fixed — pointing a new instrument at
+signals whose answer is already known caught it, which is the same method that
+caught the modulation detector in milestone 8. And the benchmark's 14-minute test
+drive is **unusable**: its loudest component sits at half the firing rate, over a
+firing comb holding 18% of the energy.
+
+The reference is a **sampled source played back by a game**, heard from its
+interior camera — recorded audio pitch-shifted, looped and crossfaded, not a
+rendering. That bounds every figure taken from it, explains the drive's
+half-firing-rate component, and is the reason the idle result is evidence about a
+convincing sound *design* rather than about an engine. Recorded in `README.md`
+under **The acoustic reference, and what it is not**.
+
+What phase 4 gets from this is narrower than hoped. The idle low-band question
+has evidence behind it; the other two do not, and one of them cannot get any from
+this source. A reference that could settle physical band balance would have to be
+an unprocessed multi-microphone recording of a real truck, which this project does
+not have and this plan does not assume.
 
 Primary ownership:
 
 | Area | Files/modules |
 |---|---|
 | Specification and results | `README.md` |
-| Capture and measurement | `crates/sim-core/examples/audio_probe.rs`, focused analysis tooling and acoustic tests |
+| Capture and measurement | `crates/sim-core/examples/audio_probe.rs`, `audio_capture.rs`, `reference_probe.rs`, `src/analysis.rs` and the acoustic tests |
 | Physics and acoustic sources | `crates/sim-core/src/sim/`, validated engine configuration and provenance |
 | Boundary and transport | `crates/sim-wasm`, `web/src/worker/`, `web/src/audio/exhaust-processor.js` |
 | Listening and comparison | `web/src/lib/cabin.ts`, `web/src/lib/audioEngine.ts`, existing audio controls and browser tests |
 
-This document-only addition changes no simulator behaviour or calibration and
-does not require a full test run.
+Nothing delivered so far changes simulator behaviour or calibration. Milestone 10
+adds measurement code, so it carries formatting, Clippy and the workspace tests;
+it touches neither physics nor browser audio, so the web suite does not apply.
+`README.md` records the commands run and their results.

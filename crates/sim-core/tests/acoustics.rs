@@ -14,7 +14,9 @@ use std::path::Path;
 // how a test and the probe it is meant to agree with come to disagree: one of
 // them gets a correction and the other does not. `analysis` is also the module
 // that is itself tested against known signals, in `tests/analysis.rs`.
-use sim_core::analysis::{crest_db, firing_hz, rms as rms_of};
+use sim_core::analysis::{
+    crest_db, estimate_firing_hz, firing_hz, rms as rms_of, rpm_from_firing_hz,
+};
 use sim_core::catalog::OM471_9_M3D_JSON;
 use sim_core::{
     Catalog, Controls, Engine, EngineConfig, ResetOptions, Simulation, ValidatedConfig,
@@ -361,6 +363,48 @@ fn the_four_cylinder_fixture_sounds_at_its_own_firing_frequency() {
     assert!(
         (measured - six).abs() / six > 0.1,
         "a four and a six must not sound the same"
+    );
+}
+
+/// The estimator the reference probe reads recordings with, pointed at engine
+/// output whose speed is known.
+///
+/// `tests/analysis.rs` checks it against synthetic signals, which is where a
+/// metric's traps are found. This checks it against the signal class it is
+/// actually for, and it checks two things at once. That the estimator survives a
+/// real firing comb — cylinder-to-cylinder scatter, a blowdown with structure
+/// inside it, three paths of different character summed — and that the model's
+/// own pitch is right when measured by something that never saw the crank
+/// speed. The autocorrelation above answers the same question by a different
+/// route, so all three figures agreeing is worth more than any one of them.
+#[test]
+fn the_recording_estimator_recovers_the_speed_the_engine_was_run_at() {
+    let rpm = 1_400.0;
+    let samples = samples_at_speed(config(), rpm, 32_768);
+    let expected = firing_hz(rpm, 6);
+
+    let estimate = estimate_firing_hz(&samples, 40_000.0, 20.0, 120.0, 4)
+        .expect("engine output has a firing rate");
+    assert!(
+        (estimate.f0_hz - expected).abs() < 1.0,
+        "expected {expected:.1} Hz at {rpm} rpm, the estimator read {:.2} Hz",
+        estimate.f0_hz
+    );
+    assert!(
+        (rpm_from_firing_hz(estimate.f0_hz, 6) - rpm).abs() < 20.0,
+        "the estimated speed was {:.0} rpm against {rpm}",
+        rpm_from_firing_hz(estimate.f0_hz, 6)
+    );
+    assert!(
+        estimate.comb_share > 35.0,
+        "loaded engine output should read as a confident comb, got {:.1}%",
+        estimate.comb_share
+    );
+    assert!(
+        (estimate.f0_hz - fundamental_hz(&samples, 40_000.0, 20.0, 200.0)).abs() < 2.0,
+        "the two methods disagree: {:.2} Hz spectral against {:.2} Hz autocorrelation",
+        estimate.f0_hz,
+        fundamental_hz(&samples, 40_000.0, 20.0, 200.0)
     );
 }
 

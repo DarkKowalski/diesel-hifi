@@ -124,6 +124,7 @@ user action before Web Audio starts**.
 | 7 | Three paths to the listener: the radiating paths cross the boundary interleaved instead of summed, each gets its own cab transfer, and the UI can solo them. |
 | 8 | **Measuring before changing**: a tested metric library, a broken modulation detector replaced, named reproducible scenarios covering idle through engine braking, a WAV capture tool, a level-matched A/B against local recordings, and an audit of the playback chain at both device rates. No acoustic source or calibration was changed. |
 | 9 | **The limiter stops shaping the timbre**: the memoryless soft clipper is replaced by a level follower with an instantaneous attack and a calibrated release, the ceiling becomes transparent below the knee, and the capture tool reports the gain each frame carried. Every operating point gains crest factor; the engine brake gains 5 dB of it and passes the criterion it was failing. No acoustic *source* changed. |
+| 10 | **The reference gets measured**: a firing-rate estimator, so a recording that does not report its speed can still be measured; a probe that annotates any WAV into operating-point segments with a confidence attached; the benchmark's idle characterised from three independent stretches; and its test drive shown to be dominated by a sampled source's loop rather than by an engine. No acoustic source, calibration or criterion changed. |
 
 Milestone 8 deliberately delivered **no change to how the engine sounds**, and
 every figure it measured at an operating point milestone 7 also measured was
@@ -135,6 +136,16 @@ Milestone 9 is the first fix taken from that list, and it is a fix to the
 being squashed after they were produced. The figures below therefore move for the
 first time since milestone 7, and **Results → Sound** records what moved, by how
 much, and what the fix exposed underneath.
+
+Milestone 10 changes nothing about the sound either, and for a different reason:
+three of the open criteria were recorded as **waiting on the reference
+recording**, which had never been measured. It is measured now — see
+**Characterising the reference** — and what that settles, what it does not, and
+which of the three it cannot settle even in principle are recorded there and
+under **Known deficits**. No criterion was changed on the strength of it.
+Amending an acceptance criterion in the same breath as first measuring the
+evidence for it is how the previous set came to enforce the defect it was meant
+to catch.
 
 Still out: aftertreatment chemistry, clutch slip and gear-change behaviour, the
 manual's shift-assist and engine-stop-assist brake functions, ABS interaction,
@@ -355,9 +366,17 @@ point:
   genuinely there and the model is not obviously wrong. What is wrong is the
   criterion: a fixed ceiling asks "can ordinary hardware reproduce this" at a
   frequency that sweeps by a factor of four across the range, and at the bottom of
-  the range the honest answer is *not the fundamental, no*. The number is left as
-  it stands, failing, until there is reference characterisation to set a
-  speed-dependent tolerance from. It is not silently widened.
+  the range the honest answer is *not the fundamental, no*.
+
+  Milestone 10 measured the reference this was waiting on, and it reads **89 to
+  92% below 80 Hz at idle** across three independent stretches — so the model is
+  the *less* low-heavy of the two, by a wide margin. The number is still left as
+  it stands, failing, and the criterion is still not widened. That reference is a
+  **sampled source played back by a game**, so what it establishes is where one
+  convincing sound design puts the balance rather than where an engine does, and
+  the two figures are not taken at the same point in their chains either. See
+  **Characterising the reference**. What has changed is that the question now has
+  evidence attached rather than none, and the evidence says the gap is not small.
 - **`light-900` has the exhaust only 5.2 dB in front of the block**, and
   `rated-1800` 5.8 dB, both under the 6 dB floor. Light load is where ignition
   delay is longest and the premixed fraction largest, so the block is loudest
@@ -366,8 +385,15 @@ point:
   rather than a change in the engine: a gain that varies over the capture weights
   each path's RMS by how its own envelope lines up with the reduction, and the
   three paths have different envelopes. A criterion that a passing point can drift
-  across by 0.2 dB is a criterion with no margin in it, and both figures are
-  waiting on the same reference characterisation.
+  across by 0.2 dB is a criterion with no margin in it.
+
+  **This one is not waiting on the reference, because the reference cannot ever
+  answer it.** A ratio between two radiating paths needs the two paths measured
+  separately, and the benchmark is a stereo mix in which they arrived added
+  together. Milestone 8 recorded this as one of three things blocked on
+  characterisation; milestone 10 establishes that it is blocked on something else.
+  Settling it needs either a multi-microphone measurement of a real engine or an
+  argument from mechanism, not more analysis of this file.
 
 **Newly visible, because the clipper had been flattering it:**
 
@@ -385,6 +411,13 @@ point:
   operation where it is not one. This is the first measurement of what the brake
   path really contains, and it belongs with the reference characterisation rather
   than with a gain adjustment.
+
+  Milestone 10 went looking and came back empty. The benchmark's only loaded
+  material is a 14-minute test drive dominated by a component at half the firing
+  rate, over a firing comb holding 18% of the energy — the signature of a sampled
+  and looped source rather than of an engine — so no passage in it can be
+  identified as engine braking with any confidence. The question stands where it
+  stood, now with the search on record.
 
 None of the milestone 8 deficits was visible before it, for three separate
 reasons: two of the four operating points did not exist as scenarios, the
@@ -653,6 +686,17 @@ The same module now supplies crest factor, RMS and the firing frequency to
 `tests/acoustics.rs`, which had its own copies. Two definitions of one metric is
 how a test and the probe it is meant to agree with come to disagree.
 
+**Milestone 10 added the one metric that has to find its own reference
+frequency.** Every measurement above needs an `f0`, and for the model that comes
+free from the crank speed the solver is already integrating. A recording does not
+come with one, so `estimate_firing_hz` recovers it from the signal — and it
+arrived with the same defect as everything else in this file's history, caught
+the same way. Pointed at captures whose speed was known it read two of the six an
+octave high, because it was asking whether a candidate's fundamental was loud
+rather than whether the lines between its lines were empty. **Characterising the
+reference** has the case, the fix and the table of all six recovered to within
+0.5%.
+
 ### Playback audit
 
 The worklet is the last thing between the solver and the speaker, and until
@@ -851,6 +895,26 @@ Four things it is not, all of which bound what it can settle:
   identified before a window is chosen.
 - **Nothing in it is annotated.** RPM and load are inferred, and stationary
   revving does not establish what the engine sounds like under load.
+- **It is a sampled source heard from a game's point of view, not a rendering.**
+  This is the limit that bounds the others, and it is easy to lose sight of
+  because the samples themselves are genuine recordings of a real Arocs. What the
+  video contains is those samples *played back by ETS2* — pitch-shifted to the
+  current speed, looped, crossfaded between speed layers, and mixed into an
+  interior camera position along with a road-and-wind mod.
+
+  Four things follow, and every figure below inherits all of them. **Resampling
+  moves what should not move**: a block mode or a pipe resonance sits at a fixed
+  frequency in a real engine and does not scale with speed, but pitch-shift a
+  recording and it does, so a spectrum taken anywhere other than a sample's own
+  speed is not the spectrum of an engine at that speed. **A loop repeats at its
+  own rate**, which need not be the firing rate, and whatever was in the sample
+  once is then in the signal periodically. **A crossfade is two speeds at once.**
+  And **the balance is a mix decision** — where the low rumble sits against the
+  clatter is where the mod author and the game's interior attenuation put it.
+
+  So this benchmark is evidence about a sound *design* that a lot of people find
+  convincing. It is not a measurement of an engine, and no amount of care with
+  the analysis converts it into one.
 
 The files live in the gitignored `datasheet/audio-references/`, are loaded
 through the panel's file input at listening time, and are **not** part of the
@@ -860,7 +924,159 @@ runtime.
 **No listening comparison against it has been made yet.** Milestone 8 delivered
 the apparatus — reproducible scenarios, exported captures, corrected metrics,
 level-matched A/B — and no ear has been applied to the result. Nothing below or
-above is a listening result, and a passing signal check is not one either.
+above is a listening result, and a passing signal check is not one either. That
+includes everything in the next section, which is measurement.
+
+### Characterising the reference
+
+Milestone 8 built the instruments and pointed all of them at the model. This
+points the same ones at the other side. `cargo run --release -p sim-core --example
+reference_probe` reads a WAV, cuts it into 1.365 s windows, and measures each one
+with `sim_core::analysis` — the module the engine's own figures come from.
+
+**The one thing it has to do that the model's probe does not is find the speed.**
+`audio_probe` asks the solver what the crank is doing; a recording does not
+answer that question, so `analysis::estimate_firing_hz` recovers the firing rate
+from the signal and everything downstream hangs off it. Every rpm below is
+therefore **inferred**, and every one is printed beside the comb share that is
+its confidence.
+
+#### The estimator, measured against known answers
+
+`tests/analysis.rs` puts it at the traps a pitch estimator falls into, because
+both of them produce a wrong answer that looks right — an engine reported at half
+or double its speed is still a plausible rpm. A weighted harmonic sum handles the
+easy direction: a lone tone at 120 Hz is not a 60 Hz comb, because 60 Hz is empty.
+
+**It does not handle the hard direction, and the model's own captures are what
+proved it.** Pointed at `idle`, whose speed is known to be 551 rpm, the first
+version reported 1100. The firing fundamental at 27.5 Hz holds 5.4% of that
+signal's energy while its second order at 55 Hz holds 19.8%, so the sum preferred
+the second order. `light-900` was worse: 1.3% at 45 Hz against 13.6% at 90, and
+it read 1805.
+
+The fix is to stop asking whether the fundamental is loud and start asking what a
+comb *is*, which is its spacing. If the lines halfway between a candidate's lines
+are also there — at `f0/2`, `3f0/2`, `5f0/2` — then the spacing is the half. On
+`light-900` those interleaved lines hold half again as much energy as the
+candidate's own comb, because they are its real third and fifth orders; on a comb
+genuinely spaced `f0` they hold nothing. The two populations differ by a factor of
+ten, and the case that exposed it is now a synthetic test with those proportions
+rather than a note about a capture.
+
+With that in place, the estimator recovers every steady scenario's speed from its
+audio alone:
+
+| Scenario | Speed run at | Estimated from the audio | Error |
+|---|---:|---:|---:|
+| `idle` | 551 | 550 | −0.3% |
+| `light-900` | 900 | 903 | +0.3% |
+| `cruise-1200` | 1200 | 1206 | +0.5% |
+| `full-1400` | 1400 | 1408 | +0.5% |
+| `rated-1800` | 1800 | 1807 | +0.4% |
+| `brake-1300` | 1300 | 1297 | −0.2% |
+
+This is the cross-check that makes the reference figures worth reading, and it
+was worth running for its own sake: two of those six were being read an octave
+out by a tool that would have annotated the recording with the same error and no
+way to notice.
+
+#### What the interior chapter contains
+
+The 76-second interior-engine chapter, 1:33 to 2:49, stereo float at 48 kHz,
+channels correlated at +1.00 so the mono downmix cancels nothing. 110 windows, 90
+of them engine-dominated. Three of those are steady, and they are all the same
+thing:
+
+| From–to, s | rpm | comb | dBFS | crest | mod | `150 Hz–15 k` | `<80 Hz` | `80–300` | `300–2k` | `>2 kHz` | octave |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 6.1–9.6 | 507 ±10 | 83.7% | −24 | 8.2 dB | 0.23 | 6.3% | **92.1%** | 4.0% | 3.9% | 0.0% | 20–40 Hz |
+| 9.6–15.0 | 502 ±8 | 81.1% | −24 | 8.6 dB | 0.40 | 6.9% | **90.6%** | 5.4% | 4.0% | 0.0% | 20–40 Hz |
+| 64.2–73.0 | 499 ±7 | 83.2% | −26 | 9.4 dB | 0.36 | 8.3% | **89.1%** | 6.1% | 4.8% | 0.0% | 20–40 Hz |
+
+Three stretches, minutes apart, agreeing on 499 to 507 rpm. That sits about 10%
+under the 560 rpm this engine's manual publishes and under the 551 the model's
+governor delivers — near enough to be the same thing, far enough to be a reminder
+that it is a later engine in a game. Everything
+between them is a rev sweep and is reported as a run of one-window segments
+rather than averaged into an operating point, which is the honest answer: a
+spectrum of a sweep is a spectrum of everywhere it went.
+
+**The first 3.4 seconds are not the engine**, and how they were excluded is worth
+recording. They are the transition out of the previous chapter: a lone line near
+108 Hz with nothing above it, which scored 17 to 26% comb share — clear of any
+noise floor — and was duly reported as a confident 2170 rpm. A comb share cannot
+tell one line from four. So a window has to clear a second test to count, and the
+test is that its second order is there at all: those windows hold at most 0.5% of
+their energy at the second order and every window with an engine in it holds at
+least 1.4%.
+
+**These numbers were checked outside this codebase**, because a band share that
+surprising should not rest on one implementation. `ffmpeg` on the same 6.1–15.0 s
+stretch reads −23.8 dBFS overall, −24.6 through a six-pole low pass at 80 Hz and
+−36.8 through a six-pole high pass at 150 Hz. That is 84% of the energy below
+80 Hz and 5% above 150 Hz, against this probe's 91% and 6.5%; the gap is the
+filters' skirts, and the agreement is the point.
+
+#### What the test drive contains, and why it is not used
+
+The 14-minute test drive from 6:17 was extracted and scanned in full: 618
+windows, 528 of them clearing both confidence tests, median comb share 55%. And
+**96% of those read between 400 and 900 rpm**, which a truck under way cannot do
+for fourteen minutes — an OM 471 idles at 560.
+
+Running the scan again with the search floor lifted to 900 rpm says what is
+happening:
+
+| Search range | Windows accepted | Median comb share | Inferred speeds |
+|---|---:|---:|---|
+| from 400 rpm | 528 of 618 | 54.8% | piled up at 400–900, impossible |
+| from 900 rpm | 352 of 618 | 18.4% | 1000–1600, exactly a cruise distribution |
+
+**The loudest thing in the drive sits at half the firing rate, and the firing
+comb itself is weak.** Forced upward the estimator finds a perfectly plausible
+set of speeds, and finds them in a comb holding 18% of the energy where the low
+line alone holds 15 to 77%. That low line — 25 to 37 Hz, tracking speed, with
+harmonics down at 1 to 2% — is not the shape of a firing comb.
+
+For a *sampled* source there are several explanations and this measurement cannot
+choose between them: a loop repeating every two firing events, a sub-bass layer
+the mod lays under the engine, or a real half-order that resampling and looping
+have exaggerated. All three are properties of sample playback rather than of an
+engine, which is the point. The drive is a recording of a sound engine, and the
+model is a simulation of a diesel one.
+
+That it is a mixture is visible too: `ffmpeg` over 30 s of it reads 48% of the
+energy below 80 Hz and 20% above 150 Hz, against 90% and 6% for the stationary
+idle. The description names a road-and-wind noise mod and a sound fixes pack, and
+this is what they look like.
+
+So the reference characterises **one sound designer's idle, stationary, on a
+later engine, through a game's interior mix**. It does not characterise loaded
+operation, and it offers no engine-brake passage that could be identified as one.
+
+#### What it settles
+
+| Open question | What the reference says |
+|---|---|
+| Is `<80 Hz ≤ 35%` right at idle? | Something, but less than it first appears: a well-liked sound mod puts 89–92% there, against the model's 40.8% and a ceiling of 35% |
+| Is the exhaust-over-block floor right? | **Nothing, ever.** A stereo mix has no path separation in it; no measurement of this file can produce a per-path ratio |
+| Is the brake's 55.2% above 300 Hz a defect? | Nothing yet. No engine-brake passage could be identified, and the material that would contain one is the unusable drive |
+
+The first row is the one worth being careful about, and the criterion is left at
+35%, failing, exactly as it was. **The reference is a sampled source in a game
+mix**, so its band balance is a design decision — where a mod author and a game's
+interior attenuation put the rumble against the clatter — and not a measurement
+of an engine. On top of that the two figures are taken at different points in
+their chains: the model's is its raw pre-cab mix, the reference's has been through
+an interior mix and an Opus encoder.
+
+What survives both caveats is worth having anyway, because the question the
+criterion asks is itself a listening question. A sound design that a lot of
+people accept as a truck puts nine tenths of its idle energy below 80 Hz. A
+ceiling of 35% is not slightly tight there; nothing anyone finds convincing is
+anywhere near it. That is a reason to expect the criterion to change, and not yet
+a number to change it to.
 
 ## Reference engine and sources
 
@@ -1175,6 +1391,17 @@ un-widened, because a tolerance should come from characterising the reference
 recordings rather than from whatever the model happens to produce on the day the
 question is first asked. That is exactly the mistake recorded above.
 
+**Milestone 10 did that characterisation, and the criteria still did not move.**
+The reference reads 89 to 92% below 80 Hz at idle against the model's 40.8%,
+which is evidence that the ceiling is wrong at the bottom of the range and is not
+proof of what should replace it: a sampled source played back by a game, on a
+later engine, measured at a different point in the chain, sets no tolerance.
+Rewriting a criterion the day its first evidence arrives is the same move as
+writing one the day the model is first measured. What that milestone did settle
+is that the exhaust-over-block floor is not waiting on this reference at all — a
+stereo mix has no per-path ratio in it — and that the brake's band bounds are
+waiting on material the benchmark does not contain.
+
 The band criteria have a second problem milestone 9 exposed: **they were all
 written against fuelled operation and are applied to the engine brake as well.**
 Under brake the model now reads 55.2% in `300 Hz–2 kHz` and 42.8% in
@@ -1197,12 +1424,13 @@ pnpm install --frozen-lockfile
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 290 tests: geometry, provenance, catalog,
+cargo test --workspace          # 300 tests: geometry, provenance, catalog,
                                 # determinism, limits, combustion, heat transfer,
                                 # turbo, EGR, acoustics, the limiter, brake,
                                 # driveline, dyno calibration, ID-branch guard,
                                 # the metric library against known signals,
-                                # scenario reproducibility
+                                # the firing-rate estimator against its octave
+                                # traps, scenario reproducibility
 
 pnpm wasm:build                 # wasm-pack -> web/src/wasm (generated, gitignored)
 pnpm wasm:test                  # wasm-pack test --node: WASM API smoke test
@@ -1216,6 +1444,62 @@ pnpm build:subpath              # the same build under an absolute /diesel-hifi/
 
 The Playwright suite needs a browser once:
 `pnpm --filter web exec playwright install chromium`.
+
+### Measuring a recording
+
+`reference_probe` takes any WAV — 16-, 24- or 32-bit, PCM or float, mono or
+stereo — and prints the operating-point segments it can find in it:
+
+```bash
+# The benchmark's interior chapter, already extracted.
+cargo run --release -p sim-core --example reference_probe -- \
+  --file datasheet/audio-references/max2712-om471/interior-engine-01m33s-02m49s.wav
+
+# Add --windows for every window rather than the merged segments, and --peaks
+# for the strongest spectral lines under each: that is how a suspicious rpm is
+# argued with.
+
+# The loaded material has to come out of the video first. Mono and 16-bit
+# because this one is a scan, and it lands under target/ rather than beside the
+# reference because it is regenerable in one line.
+mkdir -p target/reference-scan
+ffmpeg -ss 377 -i datasheet/audio-references/max2712-om471/l3NGWdoA-_I.webm \
+  -ac 1 -ar 48000 -c:a pcm_s16le target/reference-scan/test-drive.wav
+cargo run --release -p sim-core --example reference_probe -- \
+  --file target/reference-scan/test-drive.wav --hop 65536
+
+# --rpm-min is how a suspected octave error is settled: lift the floor above the
+# suspect reading and see whether what is left is coherent or merely plausible.
+cargo run --release -p sim-core --example reference_probe -- \
+  --file target/reference-scan/test-drive.wav --hop 65536 --rpm-min 900
+
+# And pointed at the model's own captures it re-derives their speed from the
+# audio, which is what makes the reference figures worth reading. 32768 samples
+# is 0.82 s at the solver's 40 kHz.
+cargo run --release -p sim-core --example reference_probe -- --window 32768 \
+  --file target/audio-capture/idle/mix.wav --file target/audio-capture/full-1400/mix.wav
+```
+
+The annotation lands in `target/reference-annotation/annotation.json`, with every
+window's metrics, order shares and strongest lines. The reference recordings are
+gitignored and are not in this repository; without them the tool says so and
+names this section.
+
+### Verification, milestone 10
+
+Run on Windows 11. This change adds a measurement tool and touches neither the
+physics nor the browser audio, so the web checks were not run — `AGENTS.md`
+scopes the full suite to changes that span them.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --workspace` | 300 passed, 0 failed |
+| `cargo run --release -p sim-core --example audio_probe` | passed; **every engine figure identical to milestone 9**, which is the check that this milestone changed nothing |
+| `cargo run --release -p sim-core --example audio_capture` | passed; 10 scenarios, all figures unchanged |
+| `cargo run --release -p sim-core --example reference_probe` | passed on the interior chapter, the test-drive scan at two search ranges, and six model captures; figures under **Characterising the reference** |
+| `ffmpeg` band levels on the same windows | agrees with the probe within the filters' skirts; the cross-check is described in that section |
 
 ### Verification, milestone 9
 

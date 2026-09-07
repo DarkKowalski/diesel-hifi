@@ -13,8 +13,8 @@
 //! for the wrong signal.** Passing on engine audio proves nothing on its own.
 
 use sim_core::analysis::{
-    amplitude_modulated, crest_db, dbfs, firing_hz, modulation_depth, peak, pulse_train, rms, tone,
-    Spectrum,
+    amplitude_modulated, crest_db, dbfs, estimate_firing_hz, firing_hz, modulation_depth, peak,
+    pulse_train, rms, rpm_from_firing_hz, tone, Spectrum,
 };
 
 /// The solver's own rate, so these read against the same numbers the probe does.
@@ -252,4 +252,188 @@ fn the_firing_frequency_comes_from_the_cylinder_count() {
     assert!((firing_hz(1_200.0, 6) - 60.0).abs() < 1e-9);
     assert!((firing_hz(1_200.0, 4) - 40.0).abs() < 1e-9);
     assert!((firing_hz(560.0, 6) - 28.0).abs() < 1e-9);
+}
+
+// --- the firing rate, recovered from the signal -----------------------------
+//
+// The estimator is the one metric here that has to find its own reference
+// frequency, and it is the one with a failure mode that looks like an answer: an
+// engine reported at half or double its speed gives a plausible rpm, a plausible
+// comb share and a plausible modulation depth. Every test below puts a signal at
+// one of those two traps.
+
+/// The speed range the reference probe searches: 400 to 2400 rpm on a six.
+const SEARCH_LO: f64 = 20.0;
+const SEARCH_HI: f64 = 120.0;
+
+#[test]
+fn the_firing_rate_is_recovered_from_a_pulse_train() {
+    let estimate = estimate_firing_hz(
+        &pulse_train(LEN, RATE, F0, 0.1),
+        RATE,
+        SEARCH_LO,
+        SEARCH_HI,
+        4,
+    )
+    .expect("a pulse train has a firing rate");
+    assert!(
+        (estimate.f0_hz - F0).abs() < 0.5,
+        "a 60 Hz pulse train read as {:.2} Hz",
+        estimate.f0_hz
+    );
+    assert!(
+        estimate.comb_share > 30.0,
+        "a pulse train's own comb should account for a large share, got {:.1}%",
+        estimate.comb_share
+    );
+}
+
+#[test]
+fn the_estimate_does_not_fall_to_the_subharmonic() {
+    // The trap: a candidate at f0/2 lands on every real line as well, just with
+    // empty bins between them. Only the 1/n weighting separates them, and this
+    // asserts it does. 30 Hz is inside the search range, so nothing but the
+    // score is keeping the estimator out of it.
+    let estimate = estimate_firing_hz(
+        &pulse_train(LEN, RATE, F0, 0.1),
+        RATE,
+        SEARCH_LO,
+        SEARCH_HI,
+        4,
+    )
+    .expect("a pulse train has a firing rate");
+    assert!(
+        (estimate.f0_hz - F0 / 2.0).abs() > 5.0,
+        "the estimator halved the firing rate: {:.2} Hz",
+        estimate.f0_hz
+    );
+}
+
+#[test]
+fn the_estimate_does_not_fall_to_the_octave() {
+    // The other trap, and the one an unweighted harmonic sum cannot escape: for
+    // a lone tone at 120 Hz the candidates 60 and 120 each collect exactly one
+    // real line and score identically. The answer is then decided by rounding.
+    let estimate = estimate_firing_hz(&tone(LEN, RATE, 120.0), RATE, SEARCH_LO, SEARCH_HI, 4)
+        .expect("a tone in range has a best candidate");
+    assert!(
+        (estimate.f0_hz - 120.0).abs() < 1.0,
+        "a 120 Hz tone read as {:.2} Hz, which is its subharmonic",
+        estimate.f0_hz
+    );
+}
+
+#[test]
+fn a_comb_with_a_weak_fundamental_is_not_reported_an_octave_high() {
+    // The counterexample the 1/n weighting alone gets wrong, and it was found by
+    // pointing the estimator at the model's own governed idle, whose speed is
+    // known: at 551 rpm the firing fundamental at 27.5 Hz held 5.4% of the
+    // energy and its second order at 55 Hz held 19.8%. The weighted sum chose
+    // 55 Hz and reported 1100 rpm — a plausible-looking number, and twice the
+    // truth.
+    //
+    // Reproduced here as a comb with those proportions, so the fix is checked
+    // against a signal whose answer is known rather than against the capture
+    // that exposed it. The amplitudes are the square roots of the measured
+    // energy shares 5.4, 19.8, 4.0, 3.8 and 5.9%, normalised to the loudest.
+    let weights = [0.52, 1.0, 0.45, 0.44, 0.55];
+    let comb: Vec<f32> = (0..LEN)
+        .map(|i| {
+            let t = i as f64 / RATE;
+            weights
+                .iter()
+                .enumerate()
+                .map(|(index, w)| (std::f64::consts::TAU * 27.5 * (index + 1) as f64 * t).sin() * w)
+                .sum::<f64>() as f32
+        })
+        .collect();
+
+    let estimate =
+        estimate_firing_hz(&comb, RATE, SEARCH_LO, SEARCH_HI, 4).expect("a comb has a firing rate");
+    assert!(
+        (estimate.f0_hz - 27.5).abs() < 1.0,
+        "a comb spaced 27.5 Hz whose second order is the loudest read as {:.2} Hz",
+        estimate.f0_hz
+    );
+}
+
+#[test]
+fn the_subharmonic_check_does_not_halve_a_comb_that_has_nothing_below_it() {
+    // The other side of the previous test, and the one that keeps the fix from
+    // being a licence to report half of everything. A clean comb at 60 Hz has
+    // nothing at 30, so nothing may move it there.
+    let comb: Vec<f32> = (0..LEN)
+        .map(|i| {
+            let t = i as f64 / RATE;
+            (1..=4)
+                .map(|n| (std::f64::consts::TAU * F0 * f64::from(n) * t).sin() / f64::from(n))
+                .sum::<f64>() as f32
+        })
+        .collect();
+    let estimate =
+        estimate_firing_hz(&comb, RATE, SEARCH_LO, SEARCH_HI, 4).expect("a comb has a firing rate");
+    assert!(
+        (estimate.f0_hz - F0).abs() < 0.5,
+        "a clean 60 Hz comb read as {:.2} Hz",
+        estimate.f0_hz
+    );
+}
+
+#[test]
+fn the_refinement_beats_the_bin_it_started_in() {
+    // 90.37 Hz is deliberately not a bin centre: at this window a bin is 1.22 Hz
+    // and the coarse scan can only ever land within half of one. Anything closer
+    // than that is the time-domain refinement working, and without it an rpm
+    // figure would carry ±12 rpm of quantisation it did not admit to.
+    let f0 = 90.37;
+    let estimate = estimate_firing_hz(
+        &pulse_train(LEN, RATE, f0, 0.1),
+        RATE,
+        SEARCH_LO,
+        SEARCH_HI,
+        4,
+    )
+    .expect("a pulse train has a firing rate");
+    assert!(
+        (estimate.f0_hz - f0).abs() < 0.2,
+        "expected {f0} Hz to within a fifth of a hertz, got {:.3} Hz",
+        estimate.f0_hz
+    );
+}
+
+#[test]
+fn noise_produces_an_estimate_with_no_confidence_in_it() {
+    // Noise still has a best-scoring candidate — every signal does. What it must
+    // not have is a comb share, because that is the number the probe uses to
+    // decide whether a window is an engine at all. A window of road noise that
+    // reported 1500 rpm with authority would be annotated as an operating point.
+    let estimate = estimate_firing_hz(&noise(LEN, 0x51ed), RATE, SEARCH_LO, SEARCH_HI, 4)
+        .expect("noise has a best candidate");
+    assert!(
+        estimate.comb_share < 2.0,
+        "white noise claimed {:.1}% of its energy in the comb at {:.1} Hz",
+        estimate.comb_share,
+        estimate.f0_hz
+    );
+}
+
+#[test]
+fn silence_has_no_firing_rate_rather_than_a_default_one() {
+    assert!(estimate_firing_hz(&[0.0; 4_096], RATE, SEARCH_LO, SEARCH_HI, 4).is_none());
+    assert!(estimate_firing_hz(&[], RATE, SEARCH_LO, SEARCH_HI, 4).is_none());
+    // An inverted range is a caller error, not a range to scan backwards.
+    let signal = pulse_train(LEN, RATE, F0, 0.1);
+    assert!(estimate_firing_hz(&signal, RATE, SEARCH_HI, SEARCH_LO, 4).is_none());
+}
+
+#[test]
+fn the_speed_and_the_firing_rate_convert_both_ways() {
+    for (rpm, cylinders) in [(1_200.0, 6), (560.0, 6), (1_800.0, 4), (2_100.0, 8)] {
+        let round_trip = rpm_from_firing_hz(firing_hz(rpm, cylinders), cylinders);
+        assert!(
+            (round_trip - rpm).abs() < 1e-9,
+            "{rpm} rpm on {cylinders} cylinders round-tripped to {round_trip}"
+        );
+    }
+    assert!((rpm_from_firing_hz(60.0, 6) - 1_200.0).abs() < 1e-9);
 }
