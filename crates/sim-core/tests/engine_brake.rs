@@ -329,16 +329,25 @@ fn the_brake_changes_what_the_exhaust_sounds_like() {
         .expect("controls");
 
         let mut energy = 0.0;
-        let mut buffer = vec![0.0f32; 20_000];
+        // Interleaved by radiating path, so the frame is summed to what a
+        // listener hears before the energy is taken. Summing squares across the
+        // raw interleaved buffer instead would total the three paths' energies
+        // rather than the energy of their sum, which is a different quantity
+        // whenever they are correlated — and at a brake event they are.
+        let paths = sim.audio_path_count();
+        let mut buffer = vec![0.0f32; 20_000 * paths];
         for batch in 0..40 {
             sim.advance(16_000).expect("advance");
             sim.pin_speed_rpm(1600.0).expect("pin");
-            let written = sim.drain_audio(&mut buffer);
+            let frames = sim.drain_audio(&mut buffer);
             // Skip the start-up transient; measure the steady note.
             if batch >= 20 {
-                energy += buffer[..written]
-                    .iter()
-                    .map(|s| f64::from(*s) * f64::from(*s))
+                energy += buffer[..frames * paths]
+                    .chunks(paths)
+                    .map(|frame| {
+                        let sum: f32 = frame.iter().sum();
+                        f64::from(sum) * f64::from(sum)
+                    })
                     .sum::<f64>();
             }
         }

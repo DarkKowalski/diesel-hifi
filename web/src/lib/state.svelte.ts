@@ -6,7 +6,8 @@
  * is hard-coded here.
  */
 
-import { AudioEngine, type AudioStage, type AudioStatus } from './audioEngine';
+import { AudioEngine, type AudioPath, type AudioStage, type AudioStatus } from './audioEngine';
+import { AUDIO_PATHS } from './cabin';
 import { SimClient, SimClientError, type ReadyInfo } from './simClient';
 import {
   DEFAULT_CONTROLS,
@@ -57,6 +58,21 @@ class SimStore {
    * about the simulation, and the snapshot's own level reading is unaffected.
    */
   audioStage = $state<AudioStage>('cockpit');
+  /**
+   * Which radiating paths are audible.
+   *
+   * A listening control, like the stage: the solver produces all three whatever
+   * this says, and muting one changes no state. It is here because the balance
+   * between the paths is what decides whether the engine sounds like a truck,
+   * and before they crossed the boundary separately the only way to hear one was
+   * to edit the engine configuration and rebuild. The balance itself is still
+   * calibrated against `audio_probe` rather than by ear.
+   */
+  audioPaths = $state<Record<AudioPath, boolean>>({
+    exhaust: true,
+    block: true,
+    body: true,
+  });
 
   #client: SimClient | null = null;
   #audio: AudioEngine | null = null;
@@ -100,10 +116,10 @@ class SimStore {
           this.sweepDone = done;
           this.sweepTotal = total;
         },
-        onAudio: (samples, sampleRateHz) => {
+        onAudio: (samples, paths, sampleRateHz) => {
           this.audioSampleRateHz = sampleRateHz;
           // Hand the block straight on; the engine transfers it to the worklet.
-          this.#audio?.push(samples);
+          this.#audio?.push(samples, paths);
         },
       });
       this.ready = await this.#client.init();
@@ -217,6 +233,9 @@ class SimStore {
       // Choose the stage before the graph exists, so the chosen one is in place
       // the moment sound starts rather than crossfading in after it.
       engine.setStage(this.audioStage);
+      for (const path of AUDIO_PATHS) {
+        engine.setPathEnabled(path, this.audioPaths[path]);
+      }
       // The solver's own rate; the worklet resamples from it to the device.
       const sourceRateHz = this.audioSampleRateHz || 1 / (this.ready?.fixedStepS ?? 0.000025);
       await engine.start(sourceRateHz);
@@ -260,6 +279,12 @@ class SimStore {
   setAudioStage(stage: AudioStage): void {
     this.audioStage = stage;
     this.#audio?.setStage(stage);
+  }
+
+  /** Silence or restore one radiating path. Ramped, so it does not click. */
+  setAudioPath(path: AudioPath, enabled: boolean): void {
+    this.audioPaths = { ...this.audioPaths, [path]: enabled };
+    this.#audio?.setPathEnabled(path, enabled);
   }
 
   async resetSimulation(): Promise<void> {

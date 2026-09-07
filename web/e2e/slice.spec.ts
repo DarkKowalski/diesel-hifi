@@ -93,6 +93,20 @@ function bandMean(bars: number[], lowHz: number, highHz: number): number {
  * event. Comparing two stages on single readings compares the moment they were
  * taken in.
  */
+/** Bar heights averaged over a couple of seconds, bin by bin. */
+async function averagedBars(page: Page): Promise<number[]> {
+  const sums: number[] = [];
+  const reads = 10;
+  for (let i = 0; i < reads; i += 1) {
+    await page.waitForTimeout(200);
+    const bars = await spectrumBars(page);
+    bars.forEach((height, bin) => {
+      sums[bin] = (sums[bin] ?? 0) + height;
+    });
+  }
+  return sums.map((sum) => sum / reads);
+}
+
 async function measureOutput(page: Page): Promise<{ low: number; high: number; levelDb: number }> {
   const lows: number[] = [];
   const highs: number[] = [];
@@ -399,7 +413,14 @@ test('the exhaust output has energy where a speaker can reproduce it', async ({ 
   // silent in practice, because all of its energy sits below roughly 150 Hz
   // where ordinary speakers reproduce nothing. Here that shows up as bars only
   // at the far left, and this fails.
-  const heights = await spectrumBars(page);
+  //
+  // Averaged over a couple of seconds rather than read once. The exhaust is a
+  // pulse train, not a tone, so any single frame of the spectrum is a snapshot
+  // of something that moves with every firing event — and at `pullAway`'s full
+  // 1800 N·m the engine is also close to losing the fight, so one badly timed
+  // read can land on a trough. This was an intermittent failure, not a
+  // borderline one: the same reasoning `measureOutput` was written for.
+  const heights = await averagedBars(page);
 
   expect(heights.length).toBeGreaterThan(16);
   const tallest = Math.max(...heights);
@@ -508,6 +529,70 @@ test('the cockpit stage muffles the top end without simply being louder', async 
     .poll(() => numeric(page, 'audio-received'), { timeout: 10_000 })
     .toBeGreaterThan(received);
   expect(external, `unexpected external requests: ${external.join(', ')}`).toEqual([]);
+});
+
+test('each radiating path can be heard on its own', async ({ page }) => {
+  const external = await bootstrap(page);
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+
+  await page.getByTestId('enable-audio').click();
+  await expect(page.getByTestId('spectrum')).toBeVisible({ timeout: 20_000 });
+
+  // The raw stage, so this measures the three paths rather than the cab filters
+  // applied to them.
+  await page.getByTestId('audio-stage-raw').click();
+
+  // Deliberately not `pullAway`'s full 1800 N·m, for the reason the cockpit test
+  // gives: this sits at its working point for the best part of half a minute
+  // while it takes four measurements, and an engine held at maximum load that
+  // long with no gear to drop into loses the fight and stalls. Which is truthful
+  // of the model and useless to measure through.
+  await page.getByTestId('pedal').fill('90');
+  await page.getByTestId('load').fill('300');
+  await expect
+    .poll(() => rpm(page), { timeout: 30_000, message: 'the engine should pick up speed' })
+    .toBeGreaterThan(1_400);
+  await page.waitForTimeout(1_500);
+
+  const all = await measureOutput(page);
+  expect(all.low, 'the engine should be making a sound to begin with').toBeGreaterThan(0);
+  expect(all.high, 'and some of it above 2 kHz, to have something to remove').toBeGreaterThan(0.5);
+
+  // Body alone. It is the torque-driven path, so it lives below a few hundred
+  // hertz and has essentially nothing up top: silencing the other two should
+  // take the high band away and leave the low band standing. If the channels
+  // were crossed somewhere between the solver and the graph, this is where it
+  // would show — a path would be muted and the wrong content would vanish.
+  await page.getByTestId('audio-path-exhaust').click();
+  await page.getByTestId('audio-path-block').click();
+  await expect(page.getByTestId('audio-path-exhaust')).toHaveAttribute('aria-pressed', 'false');
+  await page.waitForTimeout(500);
+
+  const bodyOnly = await measureOutput(page);
+  expect(
+    bodyOnly.high,
+    `the body path should have almost nothing above 2 kHz (was ${all.high.toFixed(1)}, now ${bodyOnly.high.toFixed(1)})`,
+  ).toBeLessThan(all.high * 0.5);
+  expect(bodyOnly.low, 'and it should still be carrying the low end').toBeGreaterThan(0);
+
+  // Everything muted is silence, which is the check that these are really the
+  // whole signal between them and not three views of something else.
+  await page.getByTestId('audio-path-body').click();
+  await page.waitForTimeout(700);
+  const muted = await measureOutput(page);
+  expect(muted.levelDb, 'muting every path must leave silence').toBeLessThan(all.levelDb - 20);
+
+  // And it comes back.
+  for (const path of ['exhaust', 'block', 'body']) {
+    await page.getByTestId(`audio-path-${path}`).click();
+    await expect(page.getByTestId(`audio-path-${path}`)).toHaveAttribute('aria-pressed', 'true');
+  }
+  await page.waitForTimeout(1_000);
+  const restored = await measureOutput(page);
+  expect(restored.levelDb).toBeGreaterThan(muted.levelDb + 10);
+
+  expect(external, 'no network requests').toEqual([]);
 });
 
 test('a gear and a downhill grade drive the engine, and the brake arrests it', async ({ page }) => {

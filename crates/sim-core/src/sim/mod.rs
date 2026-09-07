@@ -675,9 +675,22 @@ impl Simulation {
         1.0 / self.config.config().solver.fixed_step_s
     }
 
-    /// Copy produced audio samples into `out`, returning how many were written.
+    /// Radiating paths carried separately in each frame.
     ///
-    /// Samples are produced one per step regardless of whether anyone drains
+    /// Exhaust, block, body, in that order. A consumer needs this to know how
+    /// to de-interleave rather than assuming a number, so it crosses the WASM
+    /// boundary beside the sample rate.
+    pub fn audio_path_count(&self) -> usize {
+        acoustics::PATHS
+    }
+
+    /// Copy produced audio frames into `out`, returning how many were written.
+    ///
+    /// `out` is **interleaved**, `audio_path_count()` floats to a frame, and the
+    /// return value counts frames rather than floats — so it stays one per
+    /// solver step. A partial frame is never written.
+    ///
+    /// Frames are produced one per step regardless of whether anyone drains
     /// them; a caller that never drains simply loses the oldest. Draining once
     /// per batch, which is how the worker uses this, never loses any because the
     /// buffer is sized for a whole batch.
@@ -685,12 +698,12 @@ impl Simulation {
         self.state.acoustics.drain(out)
     }
 
-    /// Samples waiting to be drained.
+    /// Frames waiting to be drained.
     pub fn audio_available(&self) -> usize {
         self.state.acoustics.available()
     }
 
-    /// Samples lost because the consumer fell behind since the last reset.
+    /// Frames lost because the consumer fell behind since the last reset.
     pub fn audio_dropped(&self) -> u64 {
         self.state.acoustics.dropped()
     }

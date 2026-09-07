@@ -160,22 +160,33 @@ impl SimHandle {
         self.engine.simulation().audio_sample_rate_hz()
     }
 
-    /// Take the audio produced since the last drain.
+    /// Radiating paths interleaved into each audio frame.
+    ///
+    /// Exhaust, block and body reach a listener by different routes, so they
+    /// cross separately and the browser gives each its own cab transfer. The
+    /// consumer de-interleaves on this count rather than assuming one.
+    #[wasm_bindgen(js_name = audioPathCount)]
+    pub fn audio_path_count(&self) -> u32 {
+        self.engine.simulation().audio_path_count() as u32
+    }
+
+    /// Take the audio produced since the last drain, interleaved by path.
     ///
     /// Deliberately separate from the snapshot: a batch carries thousands of
-    /// samples, and the snapshot has to stay compact. The returned array is a
+    /// frames, and the snapshot has to stay compact. The returned array is a
     /// fresh copy, so the caller may transfer it onward without touching WASM
-    /// memory.
+    /// memory. Its length is frames times `audioPathCount()`.
     #[wasm_bindgen(js_name = drainAudio)]
     pub fn drain_audio(&mut self) -> Vec<f32> {
+        let paths = self.engine.simulation().audio_path_count();
         let available = self.engine.simulation().audio_available();
-        let mut out = vec![0.0f32; available];
-        let written = self.engine.simulation_mut().drain_audio(&mut out);
-        out.truncate(written);
+        let mut out = vec![0.0f32; available * paths];
+        let frames = self.engine.simulation_mut().drain_audio(&mut out);
+        out.truncate(frames * paths);
         out
     }
 
-    /// Samples lost because the consumer fell behind, since the last reset.
+    /// Frames lost because the consumer fell behind, since the last reset.
     #[wasm_bindgen(js_name = audioDropped)]
     pub fn audio_dropped(&self) -> u32 {
         self.engine

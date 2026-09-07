@@ -51,6 +51,8 @@ let running = false;
  */
 let audioEnabled = false;
 let audioSampleRateHz = 0;
+/** Radiating paths interleaved into each frame the solver hands over. */
+let audioPaths = 1;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let lastTickMs = 0;
 let accumulatorS = 0;
@@ -137,6 +139,7 @@ function tick(): void {
               t: 'audio',
               rid: null,
               samples,
+              paths: audioPaths,
               sampleRateHz: audioSampleRateHz,
               dropped: handle.audioDropped(),
             } satisfies FromWorker,
@@ -306,6 +309,7 @@ function dispatch(message: ToWorker): void {
       const sim = requireHandle();
       audioEnabled = message.enabled;
       audioSampleRateHz = sim.audioSampleRate();
+      audioPaths = sim.audioPathCount();
       // Drop whatever accumulated while nobody was listening, so enabling
       // audio does not begin by playing a stale batch.
       sim.drainAudio();

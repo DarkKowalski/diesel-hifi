@@ -11,6 +11,20 @@
  * build must stay self-contained; a file with no imports works either way and is
  * emitted verbatim as a hashed local asset.
  *
+ * The samples arrive **interleaved by radiating path** — exhaust, block, body —
+ * and leave on one output with that many channels, which the graph splits into
+ * three chains so each can be given its own cab transfer. They are three mono
+ * signals rather than a spatial layout; the stereo image is made downstream by
+ * the panned reflection taps and the stereo convolver.
+ *
+ * One ring buffer and one fractional read position serve all of them, and that
+ * is the point rather than an economy. The three paths are the same instant of
+ * the same engine, so they have to stay sample-aligned: three buffers with three
+ * sets of cursors could be filled or drained unevenly and slide apart, and a
+ * fixed delay between the exhaust and the block is not something a listener
+ * would hear as anything but wrong. Interleaving makes misalignment
+ * unrepresentable.
+ *
  * Two jobs beyond buffering:
  *
  *   - **Resample.** The solver's rate is fixed by its physics; the device's rate
@@ -32,11 +46,21 @@
  *     simulation.
  */
 
-/** Ring capacity in samples: about 1.5 s at 40 kHz, well past scheduler jitter. */
+/** Ring capacity in frames: about 1.5 s at 40 kHz, well past scheduler jitter. */
 const CAPACITY = 65536;
 
 /**
- * Samples to accumulate before playback starts, and after any dry spell.
+ * Radiating paths per frame, and so output channels.
+ *
+ * Fixed here rather than taken from the message, because the ring is allocated
+ * once in the constructor and the node's channel count is fixed when the graph
+ * is built. The worker sends `paths` with every block and `push` checks it, so a
+ * mismatch is reported rather than silently de-interleaved wrongly.
+ */
+const PATHS = 3;
+
+/**
+ * Frames to accumulate before playback starts, and after any dry spell.
  *
  * About 60 ms at 40 kHz. The worker delivers in ~8 ms ticks whose arrival is at
  * the mercy of the scheduler, so playing the instant the first block lands
@@ -83,10 +107,13 @@ class ExhaustProcessor extends AudioWorkletProcessor {
     /** Rate the incoming samples were produced at. */
     this.sourceRateHz = parameters.sourceRateHz || 40000;
 
-    this.buffer = new Float32Array(CAPACITY);
+    this.buffer = new Float32Array(CAPACITY * PATHS);
+    /** Write and read cursors, in frames. */
     this.write = 0;
     this.read = 0;
     this.available = 0;
+    /** Blocks rejected for arriving with the wrong number of paths. */
+    this.malformed = 0;
 
     /**
      * Read position between `prevSample` and `nextSample`, in `[0, 1)`.
@@ -97,10 +124,18 @@ class ExhaustProcessor extends AudioWorkletProcessor {
      * broadband imaging noise well above anything the simulation produced.
      */
     this.fraction = 0;
-    this.prevSample = 0;
-    this.nextSample = 0;
-    /** Most recent interpolated value, held through fades. */
-    this.lastSample = 0;
+    /**
+     * The two straddling frames, and the most recent interpolated one.
+     *
+     * One `fraction` for all three paths, so they cannot drift: whatever the
+     * read position is, it is the same read position for every path.
+     */
+    this.prevFrame = new Float32Array(PATHS);
+    this.nextFrame = new Float32Array(PATHS);
+    /** Most recent interpolated frame, held through fades. */
+    this.lastFrame = new Float32Array(PATHS);
+    /** Landing place for a frame taken from the ring; avoids allocating here. */
+    this.scratchFrame = new Float32Array(PATHS);
 
     this.underruns = 0;
     this.received = 0;
@@ -119,7 +154,7 @@ class ExhaustProcessor extends AudioWorkletProcessor {
     if (!message) return;
 
     if (message.type === 'samples' && message.samples) {
-      this.push(message.samples);
+      this.push(message.samples, message.paths);
       return;
     }
     if (message.type === 'gain' && typeof message.value === 'number') {
@@ -135,21 +170,39 @@ class ExhaustProcessor extends AudioWorkletProcessor {
       this.read = 0;
       this.available = 0;
       this.fraction = 0;
-      this.prevSample = 0;
-      this.nextSample = 0;
-      this.lastSample = 0;
+      this.prevFrame.fill(0);
+      this.nextFrame.fill(0);
+      this.lastFrame.fill(0);
       this.priming = true;
     }
   }
 
-  push(samples) {
-    this.received += samples.length;
-    for (let i = 0; i < samples.length; i += 1) {
-      this.buffer[this.write] = samples[i];
+  /**
+   * Append interleaved frames.
+   *
+   * A block whose path count disagrees with this processor's is refused rather
+   * than de-interleaved on a guess: reading three-path frames as two, or the
+   * reverse, produces a signal that is neither silent nor recognisably wrong,
+   * and shuffles which cab transfer each path receives. Counted so it can be
+   * seen rather than swallowed.
+   */
+  push(samples, paths) {
+    if (paths !== undefined && paths !== PATHS) {
+      this.malformed += 1;
+      return;
+    }
+    const frames = Math.floor(samples.length / PATHS);
+    this.received += frames;
+    for (let f = 0; f < frames; f += 1) {
+      const base = this.write * PATHS;
+      for (let p = 0; p < PATHS; p += 1) {
+        this.buffer[base + p] = samples[f * PATHS + p];
+      }
       this.write = (this.write + 1) % CAPACITY;
       if (this.available === CAPACITY) {
-        // Full: the oldest sample goes. Dropping the stale end keeps latency
-        // bounded, which matters more than keeping every sample.
+        // Full: the oldest frame goes, all paths together. Dropping the stale
+        // end keeps latency bounded, which matters more than keeping every
+        // frame — and dropping a whole frame is what keeps the paths aligned.
         this.read = (this.read + 1) % CAPACITY;
         this.overflowed += 1;
       } else {
@@ -158,31 +211,39 @@ class ExhaustProcessor extends AudioWorkletProcessor {
     }
   }
 
-  /** Take one sample, or return null when the buffer has run dry. */
-  take() {
-    if (this.available === 0) return null;
-    const sample = this.buffer[this.read];
+  /** Copy the next frame into `into`, or return false when the ring is dry. */
+  take(into) {
+    if (this.available === 0) return false;
+    const base = this.read * PATHS;
+    for (let p = 0; p < PATHS; p += 1) {
+      into[p] = this.buffer[base + p];
+    }
     this.read = (this.read + 1) % CAPACITY;
     this.available -= 1;
-    return sample;
+    return true;
   }
 
   process(_inputs, outputs) {
     const output = outputs[0];
     if (!output || output.length === 0) return true;
 
-    const channel = output[0];
+    const frameLength = output[0].length;
+    // However many channels the graph actually gave us. Normally PATHS; guarded
+    // so a mismatch writes what it can rather than reading past an array.
+    const channels = Math.min(output.length, PATHS);
     const fadeStep = 1 / FADE_SAMPLES;
 
     // Hold output at silence until the cushion is filled, but fade rather than
     // cut: the envelope still has to run so a fade-out completes.
     if (this.priming) {
       if (this.available < PRIME_SAMPLES) {
-        for (let i = 0; i < channel.length; i += 1) {
+        for (let i = 0; i < frameLength; i += 1) {
           this.envelope = Math.max(0, this.envelope - fadeStep);
-          channel[i] = this.lastSample * this.gain * this.envelope;
+          const level = this.gain * this.envelope;
+          for (let c = 0; c < channels; c += 1) {
+            output[c][i] = this.lastFrame[c] * level;
+          }
         }
-        for (let c = 1; c < output.length; c += 1) output[c].set(channel);
         this.quanta += 1;
         this.report();
         return true;
@@ -197,34 +258,45 @@ class ExhaustProcessor extends AudioWorkletProcessor {
     const step = (this.sourceRateHz / sampleRate) * (1 + trim);
     let starved = false;
 
-    for (let i = 0; i < channel.length; i += 1) {
+    for (let i = 0; i < frameLength; i += 1) {
       if (!starved) {
-        // Interpolate between the samples either side of the read position.
-        this.lastSample =
-          this.prevSample + (this.nextSample - this.prevSample) * this.fraction;
+        // Interpolate between the frames either side of the read position. One
+        // position and one fraction for every path, which is what keeps them
+        // aligned through the resampling as well as through the buffering.
+        for (let p = 0; p < PATHS; p += 1) {
+          this.lastFrame[p] =
+            this.prevFrame[p] + (this.nextFrame[p] - this.prevFrame[p]) * this.fraction;
+        }
 
         this.fraction += step;
         while (this.fraction >= 1) {
-          const next = this.take();
-          if (next === null) {
+          // Take into scratch *before* advancing, so a dry ring leaves the two
+          // straddling frames exactly as they were. Advancing first and undoing
+          // it on failure would overwrite `nextFrame` with `prevFrame` and lose
+          // a real sample, which is a click at the moment of an underrun —
+          // precisely where the fade envelope is trying to avoid one.
+          if (!this.take(this.scratchFrame)) {
             starved = true;
             this.fraction = 0;
             break;
           }
-          this.prevSample = this.nextSample;
-          this.nextSample = next;
+          this.prevFrame.set(this.nextFrame);
+          this.nextFrame.set(this.scratchFrame);
           this.fraction -= 1;
         }
       }
       // Fade towards silence once dry, and back up once playing again. Holding
-      // the last sample under a falling envelope decays to zero instead of
+      // the last frame under a falling envelope decays to zero instead of
       // stepping to it.
       const target = starved ? 0 : 1;
       this.envelope =
         target > this.envelope
           ? Math.min(1, this.envelope + fadeStep)
           : Math.max(0, this.envelope - fadeStep);
-      channel[i] = this.lastSample * this.gain * this.envelope;
+      const level = this.gain * this.envelope;
+      for (let c = 0; c < channels; c += 1) {
+        output[c][i] = this.lastFrame[c] * level;
+      }
     }
 
     if (starved) {
@@ -232,11 +304,6 @@ class ExhaustProcessor extends AudioWorkletProcessor {
       // Rebuild the cushion rather than limping along one block at a time,
       // which would otherwise underrun again immediately and keep crackling.
       this.priming = true;
-    }
-
-    // Mono source, so mirror into any remaining channels.
-    for (let c = 1; c < output.length; c += 1) {
-      output[c].set(channel);
     }
 
     this.quanta += 1;
@@ -252,6 +319,7 @@ class ExhaustProcessor extends AudioWorkletProcessor {
       underruns: this.underruns,
       received: this.received,
       overflowed: this.overflowed,
+      malformed: this.malformed,
     });
   }
 }

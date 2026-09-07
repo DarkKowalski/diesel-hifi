@@ -90,7 +90,41 @@ export interface CabinDynamics {
   makeupGain: number;
 }
 
+/** Which radiating path a per-path stage describes. Order matches the solver. */
+export const AUDIO_PATHS = ['exhaust', 'block', 'body'] as const;
+export type AudioPath = (typeof AUDIO_PATHS)[number];
+
+/**
+ * How one radiating path reaches the driver.
+ *
+ * The three do not arrive by the same route, and until they crossed the WASM
+ * boundary separately there was no way to say so: one filter chain acted on a
+ * signal that had already been added up. The compromises that forced are still
+ * legible in the shared stage — its low pass sat at 2.6 kHz because bulkhead
+ * clatter had to survive it, which is far too high for a tailpipe several metres
+ * away.
+ *
+ * None of this is published, and none of it is physics. It is a statement about
+ * where the driver is sitting relative to three sources.
+ */
+export interface PathStage {
+  /** This path's own transfer, before anything shared. */
+  filters: FilterStage[];
+  /** Propagation delay from the source to the driver's ear. */
+  delayS: number;
+  /**
+   * How much of this path feeds the reflections and the diffuse tail.
+   *
+   * Zero is meaningful rather than an economy: structure-borne sound does not
+   * arrive as a room reflection.
+   */
+  roomSend: number;
+}
+
 export interface CabinSpec {
+  /** Per-path transfers, keyed by the solver's channel order. */
+  paths: Record<AudioPath, PathStage>;
+  /** Shared stages, downstream of the per-path mix. */
   filters: FilterStage[];
   /** Level of the unreflected signal within the wet path. */
   directGain: number;
@@ -106,9 +140,10 @@ export interface CabinSpec {
 /**
  * The cab.
  *
- * The five biquads are the transfer path in order: what the structure will not
- * pass, what it rings on, what a small speaker can actually carry, what makes a
- * box sound like a box, and what the insulation takes off the top.
+ * The four shared biquads come after the per-path stages and describe the cab
+ * as a box and the listener's speaker, not any one source: what the structure
+ * will not pass, what it rings on, what a small speaker can actually carry, and
+ * what makes a box sound like a box.
  *
  *   - **30 Hz high pass.** Below this the cab is felt rather than heard. It is
  *     real energy — a six fires at 28 Hz at idle — but no ordinary speaker
@@ -146,15 +181,15 @@ export interface CabinSpec {
  *     the bank starts at 210 Hz rather than 480, to give the engine the size a
  *     12.8 litre iron structure ought to have — so a cut at 380 Hz had stopped
  *     removing boxiness and started removing the engine.
- *   - **2.6 kHz low pass.** Glass, insulation, and several metres of air.
  *
- *     This was 1.7 kHz, and it was chosen when the solver produced nothing above
- *     it — which made it free. It is not free now. The structural radiation path
- *     puts real content at 2.4 and 3.6 kHz, and clatter is emphatically audible
- *     from a truck's driver seat, especially at idle. A cab takes the sharp edge
- *     off the exhaust; it does not silence the engine two feet away through the
- *     bulkhead, and a figure that did was describing the glass rather than what
- *     a driver hears.
+ * There is no shared low pass any more, and its absence is the change. It was
+ * 1.7 kHz when the solver produced nothing above that, then 2.6 kHz once the
+ * structural path put real content at 2.4 and 3.6 kHz — because a cab takes the
+ * sharp edge off an exhaust several metres away but does not silence an engine
+ * two feet away through the bulkhead. Both figures were one number trying to
+ * describe two different routes, and neither could. The per-path stages above
+ * describe them separately: 1.6 kHz for the exhaust, 3.2 kHz for the block. A
+ * shared low pass on top would only undo that.
  *
  * The two taps are the screen and the door: the first strong reflections in a
  * box this size arrive within about 15 ms, and they are what make the difference
@@ -163,12 +198,59 @@ export interface CabinSpec {
  * are what turn a mono source into something with width without any phase trick.
  */
 export const CABIN_SPEC: CabinSpec = {
+  /**
+   * Where each source is, relative to the driver.
+   *
+   *   - **The exhaust** leaves a stack several metres behind and below the cab
+   *     and reaches the driver through the rear wall and a length of outside
+   *     air. It is the most muffled of the three and the only one with a
+   *     propagation delay worth having: 12 ms is about four metres, and it is
+   *     what stops the tailpipe and the block sounding like one source in the
+   *     same place. Full room send — it is the path that arrives as a sound in a
+   *     space rather than as a sound in the structure.
+   *   - **The block** is two feet away through the bulkhead. It is the one thing
+   *     genuinely in the cab with the driver, so it keeps its top end: 3.2 kHz
+   *     rather than the 2.6 kHz the shared stage had to settle on, plus a little
+   *     presence at 1 kHz. A partial room send, because some of it does come
+   *     round through the air.
+   *   - **The body** arrives through the mounts, the frame and the seat, with no
+   *     air path at all. So: no delay, and **no room send whatever**. A
+   *     structure-borne path does not arrive as an early reflection or as a
+   *     diffuse tail, and reverberating it would be inventing an acoustic route
+   *     it does not take. Its low pass is well below anything it produces, and
+   *     is there to say that rather than to shape it.
+   */
+  paths: {
+    exhaust: {
+      filters: [
+        { type: 'lowpass', frequencyHz: 1600, q: 0.7, gainDb: 0 },
+        { type: 'peaking', frequencyHz: 400, q: 0.9, gainDb: -3 },
+      ],
+      delayS: 0.012,
+      roomSend: 1.0,
+    },
+    block: {
+      filters: [
+        { type: 'lowpass', frequencyHz: 3200, q: 0.7, gainDb: 0 },
+        { type: 'peaking', frequencyHz: 1000, q: 0.9, gainDb: 2 },
+      ],
+      delayS: 0.002,
+      roomSend: 0.4,
+    },
+    body: {
+      filters: [
+        { type: 'lowpass', frequencyHz: 250, q: 0.7, gainDb: 0 },
+        { type: 'peaking', frequencyHz: 120, q: 0.9, gainDb: 1 },
+      ],
+      delayS: 0,
+      roomSend: 0,
+    },
+  },
   filters: [
     { type: 'highpass', frequencyHz: 30, q: 0.7, gainDb: 0 },
     { type: 'lowshelf', frequencyHz: 150, q: 0.7, gainDb: 5 },
     { type: 'peaking', frequencyHz: 200, q: 0.9, gainDb: 2.5 },
     { type: 'peaking', frequencyHz: 600, q: 1.0, gainDb: -2 },
-    { type: 'lowpass', frequencyHz: 2600, q: 0.7, gainDb: 0 },
   ],
   directGain: 0.75,
   taps: [
@@ -199,11 +281,19 @@ export const CABIN_SPEC: CabinSpec = {
     ratio: 2,
     attackS: 0.025,
     releaseS: 0.18,
-    // Measured through the output analyser. It is a measurement rather than a
-    // derivation — it depends on the source spectrum, and both the source and
-    // the ratio above have changed — so the browser suite measures both ends
-    // rather than trusting the pair.
-    makeupGain: 1.55,
+    // Measured through the output analyser, landing +1.7 dB against raw at idle
+    // and −1.6 dB under load. A measurement rather than a derivation: it depends
+    // on the source spectrum, so the browser suite measures both ends rather
+    // than trusting the pair.
+    //
+    // That spread was ±0.8 dB before the paths were split, and it widened for a
+    // real reason rather than through sloppiness. Each path now has its own
+    // filters, and the two operating points put their energy in different places
+    // — 90% of full load sits in 80–300 Hz against 66% at idle — so the cab
+    // removes different amounts at the two ends. The pair is centred on the
+    // spread rather than zeroed at one end, because zeroing idle put load at
+    // −3.3 dB: chasing one end is what the input trim was introduced to stop.
+    makeupGain: 1.41,
   },
   crossfadeS: 0.04,
 };

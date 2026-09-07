@@ -261,11 +261,17 @@ fn reports_the_cycle_averaged_torque_and_power() {
 }
 
 #[wasm_bindgen_test]
-fn audio_crosses_the_boundary_one_sample_per_step() {
+fn audio_crosses_the_boundary_one_frame_per_step() {
     let mut handle = SimHandle::new().expect("handle constructs");
 
     // 25 us per step is a 40 kHz sample rate.
     assert!((handle.audio_sample_rate() - 40_000.0).abs() < 1.0e-6);
+
+    // Three radiating paths interleaved into every frame: exhaust, block, body.
+    // They cross separately because they do not reach a listener by the same
+    // route, and the browser gives each its own cab transfer.
+    let paths = handle.audio_path_count() as usize;
+    assert_eq!(paths, 3, "exhaust, block and body");
 
     handle
         .set_controls(controls(0.5, 0.0, true, true))
@@ -275,13 +281,23 @@ fn audio_crosses_the_boundary_one_sample_per_step() {
     let samples = handle.drain_audio();
     assert_eq!(
         samples.len(),
-        4_000,
-        "one audio sample must be produced per solver step"
+        4_000 * paths,
+        "one audio frame must be produced per solver step, {paths} floats to a frame"
     );
     for sample in &samples {
         assert!(
             sample.is_finite() && sample.abs() <= 1.0,
             "sample {sample} is outside the range an audio device accepts"
+        );
+    }
+
+    // And the sum of a frame is what a listener hears, so it is the sum that
+    // has to sit inside the soft-clip knee rather than each path separately.
+    for frame in samples.chunks(paths) {
+        let mixed: f32 = frame.iter().sum();
+        assert!(
+            mixed.is_finite() && mixed.abs() <= 1.0,
+            "a frame summed to {mixed}, which no audio device accepts"
         );
     }
 
@@ -297,6 +313,9 @@ fn a_running_engine_produces_audible_output() {
         .set_controls(controls(0.6, 0.0, true, true))
         .expect("controls accepted");
 
+    // Summed per frame, because what "audible" means is the sum: one loud path
+    // cancelled by another is not a sound anyone hears.
+    let paths = handle.audio_path_count() as usize;
     let mut loudest = 0.0f32;
     for tick in 0..60 {
         handle.advance(4_000).expect("advance");
@@ -305,8 +324,9 @@ fn a_running_engine_produces_audible_output() {
                 .set_controls(controls(0.6, 900.0, false, true))
                 .expect("controls accepted");
         }
-        for sample in handle.drain_audio() {
-            loudest = loudest.max(sample.abs());
+        for frame in handle.drain_audio().chunks(paths) {
+            let mixed: f32 = frame.iter().sum();
+            loudest = loudest.max(mixed.abs());
         }
     }
     assert!(

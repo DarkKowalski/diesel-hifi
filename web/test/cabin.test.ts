@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { CABIN_SPEC, generateImpulseResponse } from '../src/lib/cabin';
+import {
+  AUDIO_PATHS,
+  CABIN_SPEC,
+  generateImpulseResponse,
+  type PathStage,
+} from '../src/lib/cabin';
 
 /**
  * The cab impulse response and the values that describe the cab.
@@ -114,9 +119,52 @@ describe('the cab specification', () => {
   });
 
   it('rolls the top end off, which is the whole point of being inside a cab', () => {
-    const lowpass = CABIN_SPEC.filters.find((f) => f.type === 'lowpass');
-    expect(lowpass).toBeDefined();
-    expect(lowpass!.frequencyHz).toBeLessThan(4_000);
+    // Per path now, and not shared. One low pass was one number trying to
+    // describe two routes: it sat at 2.6 kHz so bulkhead clatter survived it,
+    // which is far too high for a tailpipe several metres away. Each path says
+    // it for itself, and every one of them has to say it.
+    expect(CABIN_SPEC.filters.some((f) => f.type === 'lowpass')).toBe(false);
+    for (const path of AUDIO_PATHS) {
+      const lowpass = CABIN_SPEC.paths[path].filters.find((f) => f.type === 'lowpass');
+      expect(lowpass, `${path} needs a low pass`).toBeDefined();
+      expect(lowpass!.frequencyHz).toBeLessThan(4_000);
+    }
+  });
+
+  it('puts the exhaust further away than the block', () => {
+    // The physical claim the split exists to make. The exhaust leaves a stack
+    // metres behind and below; the block is two feet away through the bulkhead.
+    // So the exhaust arrives later and duller, and if that ever inverts the two
+    // sources have swapped places.
+    const { exhaust, block, body } = CABIN_SPEC.paths;
+    expect(exhaust.delayS).toBeGreaterThan(block.delayS);
+    expect(exhaust.roomSend).toBeGreaterThan(block.roomSend);
+
+    const cutoff = (stage: PathStage) =>
+      stage.filters.find((f) => f.type === 'lowpass')!.frequencyHz;
+    expect(cutoff(exhaust)).toBeLessThan(cutoff(block));
+
+    // The body path reaches the seat through steel, not through air: no
+    // propagation delay and no room at all. Zero here is a statement, so it is
+    // asserted rather than left to be inferred from a small number.
+    expect(body.delayS).toBe(0);
+    expect(body.roomSend).toBe(0);
+  });
+
+  it('keeps every per-path filter inside the audible band with a real Q', () => {
+    for (const path of AUDIO_PATHS) {
+      for (const filter of CABIN_SPEC.paths[path].filters) {
+        expect(filter.frequencyHz).toBeGreaterThanOrEqual(20);
+        expect(filter.frequencyHz).toBeLessThanOrEqual(20_000);
+        expect(filter.q).toBeGreaterThan(0);
+        expect(Math.abs(filter.gainDb)).toBeLessThanOrEqual(12);
+      }
+      // A delay long enough to read as an echo rather than as distance would be
+      // describing a different vehicle.
+      expect(CABIN_SPEC.paths[path].delayS).toBeLessThan(0.05);
+      expect(CABIN_SPEC.paths[path].roomSend).toBeGreaterThanOrEqual(0);
+      expect(CABIN_SPEC.paths[path].roomSend).toBeLessThanOrEqual(1);
+    }
   });
 
   it('keeps the early reflections early', () => {

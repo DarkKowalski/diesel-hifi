@@ -14,8 +14,17 @@
 //! structural = sum over modes of  gain_k * resonator_k(p_forcing)  off the iron
 //! t_forcing  = (gas + pumping torque) / rated torque
 //! body       = sum over modes of  gain_k * resonator_k(t_forcing)  off the frame
-//! sample     = softclip(g_exh*exhaust + g_str*structural + g_body*body)
+//! mix        = g_exh*exhaust + g_str*structural + g_body*body
+//! frame      = [g_exh*exhaust, g_str*structural, g_body*body] * softclip(mix)/mix
 //! ```
+//!
+//! The three paths leave here **separately**, one interleaved frame per step,
+//! and are summed at the listener rather than here. They do not reach a driver
+//! by the same route — see the note on the frame ring below — so
+//! `web/src/lib/cabin.ts` gives each its own transfer, which it cannot do to a
+//! signal that has already been added up. The saturation is still decided on the
+//! mix and applied as a common gain, so the three still sum to exactly the one
+//! sample this used to emit.
 //!
 //! ## Why three and not two
 //!
@@ -137,6 +146,20 @@
 
 use crate::config::validate::CYCLE_RAD;
 use crate::config::{AudioCalibration, StructuralMode};
+
+/// Radiating paths carried separately to the listener: exhaust, block, body.
+///
+/// Fixed rather than configurable. Each path is a distinct physical mechanism
+/// with its own driving quantity and its own route to a listener, so this is a
+/// count of mechanisms the model implements and not a tuning parameter. The
+/// order is the order they are emitted in, and `web/src/lib/cabin.ts` depends on
+/// it.
+pub const PATHS: usize = 3;
+
+/// Index of each path within a frame.
+pub const PATH_EXHAUST: usize = 0;
+pub const PATH_BLOCK: usize = 1;
+pub const PATH_BODY: usize = 2;
 
 /// Smooth 0 to 1 ramp, continuous at both ends.
 #[inline]
@@ -339,10 +362,16 @@ impl Resonator {
     }
 }
 
-/// Filter state and the ring buffer of produced samples.
+/// Filter state and the ring buffer of produced frames.
 ///
 /// The buffer is allocated once when the simulation is constructed and never
 /// resized, so producing audio allocates nothing in the hot loop.
+///
+/// **Interleaved, `PATHS` floats to a frame, one frame per solver step.** One
+/// ring rather than three is the point: the three paths are filtered separately
+/// by the listening stage but they are the same instant of the same engine, and
+/// three buffers with three sets of cursors could be drained unevenly and slide
+/// out of alignment. Interleaving makes misalignment unrepresentable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Acoustics {
     /// How many pushes have been absorbed to seed the difference histories.
@@ -384,9 +413,9 @@ pub struct Acoustics {
 }
 
 impl Acoustics {
-    /// Allocate for a given capacity in samples and tune the modal bank.
+    /// Allocate for a given capacity in **frames** and tune the modal banks.
     ///
-    /// Both the sample ring and the resonator bank are allocated here and never
+    /// Both the frame ring and the resonator banks are allocated here and never
     /// resized, so producing audio allocates nothing in the hot loop.
     pub fn new(
         capacity: usize,
@@ -404,7 +433,7 @@ impl Acoustics {
             previous_pressure_sum: 0.0,
             resonators: modes.iter().map(|m| Resonator::new(m, dt)).collect(),
             body: body_modes.iter().map(|m| Resonator::new(m, dt)).collect(),
-            buffer: vec![0.0; capacity],
+            buffer: vec![0.0; capacity * PATHS],
             write: 0,
             read: 0,
             len: 0,
@@ -439,13 +468,18 @@ impl Acoustics {
         self.mean_square = 0.0;
     }
 
-    /// Samples waiting to be drained.
+    /// Frames waiting to be drained. One frame per solver step.
     #[inline]
     pub fn available(&self) -> usize {
         self.len
     }
 
-    /// Samples dropped since the last reset because the consumer fell behind.
+    /// Frames dropped since the last reset because the consumer fell behind.
+    ///
+    /// A frame rather than a sample, because the three paths are dropped
+    /// together or not at all: losing one path of a frame would slide the three
+    /// out of alignment for the rest of the run, and the whole reason they share
+    /// one ring is that they must stay aligned.
     #[inline]
     pub fn dropped(&self) -> u64 {
         self.dropped
@@ -583,41 +617,95 @@ impl Acoustics {
             body += resonator.tick(torque_fraction);
         }
 
-        let sample = soft_clip(
-            audio.exhaust_gain * highpassed
-                + audio.structural_gain * structural
-                + audio.body_gain * body,
-            audio.soft_clip_knee,
-        );
+        // --- the three paths, kept apart ---
+        //
+        // The paths leave here separately, because they do not reach a listener
+        // by the same route: the exhaust arrives from a stack metres behind and
+        // below the cab, the block from two feet away through the bulkhead, and
+        // the body through the mounts and the seat with no air path at all.
+        // `web/src/lib/cabin.ts` gives each its own transfer, which it cannot do
+        // to a signal that has already been summed.
+        let paths = [
+            audio.exhaust_gain * highpassed,
+            audio.structural_gain * structural,
+            audio.body_gain * body,
+        ];
+        let mix = paths[0] + paths[1] + paths[2];
 
-        // A non-finite sample would poison the audio device; drop it and keep
-        // the simulation's own fault latching responsible for reporting it.
-        let sample = if sample.is_finite() {
-            sample as f32
-        } else {
-            0.0
-        };
+        // Saturation as a *gain*, applied to all three alike.
+        //
+        // The clipper has to act on the mix — that is what it is for, and it is
+        // the mix that approaches the ceiling. At full load the summed signal
+        // peaks near the knee while the loudest single path is far below it, so
+        // clipping each path in isolation would be a different operation that
+        // essentially never engaged, and the start transient — the loudest thing
+        // the engine does — would stop being softened.
+        //
+        // So the mix is clipped, the ratio of clipped to unclipped is taken as a
+        // common gain, and that gain scales every path. Which is what a limiter
+        // is. `factor` is never above one, so the three channels still sum to
+        // exactly the single clipped sample this used to emit: splitting the
+        // paths changes the routing and not the sound, and a test asserts it.
+        let clipped = soft_clip(mix, audio.soft_clip_knee);
+        let factor = if mix.abs() > 0.0 { clipped / mix } else { 1.0 };
 
         // Slow decay toward the current level, roughly a 50 ms window at 40 kHz.
-        self.mean_square += (f64::from(sample) * f64::from(sample) - self.mean_square) * 0.0005;
+        // Measured on the mix, because the level meter reports what is being
+        // played rather than one component of it.
+        let level = if clipped.is_finite() { clipped } else { 0.0 };
+        self.mean_square += (level * level - self.mean_square) * 0.0005;
 
-        self.buffer[self.write] = sample;
-        self.write = (self.write + 1) % self.buffer.len();
-        if self.len == self.buffer.len() {
-            // Full: the oldest sample is overwritten and the read cursor follows.
-            self.read = (self.read + 1) % self.buffer.len();
+        for path in paths {
+            let scaled = path * factor;
+            // A non-finite sample would poison the audio device; drop it and
+            // keep the simulation's own fault latching responsible for
+            // reporting it.
+            //
+            // The clamp is a guarantee rather than an expectation. `factor`
+            // bounds the *sum*, and three signed terms summing inside the knee
+            // does not by itself bound each one — two paths in opposition could
+            // in principle each exceed it. Measurement says that never happens
+            // at any operating point, and a test says so too, but the boundary
+            // contract is that every sample is finite and inside [-1, 1], and a
+            // contract that holds in practice is not a contract.
+            let sample = if scaled.is_finite() {
+                scaled.clamp(-1.0, 1.0) as f32
+            } else {
+                0.0
+            };
+
+            self.buffer[self.write] = sample;
+            self.write = (self.write + 1) % self.buffer.len();
+        }
+
+        if self.len == self.frames() {
+            // Full: the oldest frame is overwritten and the read cursor follows.
+            self.read = (self.read + PATHS) % self.buffer.len();
             self.dropped += 1;
         } else {
             self.len += 1;
         }
     }
 
-    /// Copy buffered samples into `out`, returning how many were written.
+    /// Capacity in frames.
+    #[inline]
+    fn frames(&self) -> usize {
+        self.buffer.len() / PATHS
+    }
+
+    /// Copy buffered frames into `out`, returning how many *frames* were written.
+    ///
+    /// `out` is interleaved, so it must be at least `PATHS` long to receive
+    /// anything and a partial frame is never written. Counting in frames rather
+    /// than in floats is what keeps "one per solver step" true of the number
+    /// this returns.
     pub fn drain(&mut self, out: &mut [f32]) -> usize {
-        let count = self.len.min(out.len());
-        for slot in out.iter_mut().take(count) {
-            *slot = self.buffer[self.read];
-            self.read = (self.read + 1) % self.buffer.len();
+        let count = self.len.min(out.len() / PATHS);
+        for frame in 0..count {
+            for path in 0..PATHS {
+                out[frame * PATHS + path] = self.buffer[self.read];
+                self.read = (self.read + 1) % self.buffer.len();
+            }
         }
         self.len -= count;
         count
@@ -683,9 +771,23 @@ mod tests {
     /// The pipe mouth's radiation corner these tests assume.
     const RADIATION_HZ: f64 = 2_000.0;
 
-    /// An `Acoustics` with the banks these tests use.
+    /// An `Acoustics` with the banks these tests use. Capacity in frames.
     fn bank(capacity: usize) -> Acoustics {
         Acoustics::new(capacity, &modes(), &body_modes(), DT)
+    }
+
+    /// Drain `frames` frames and sum each one down to what a listener hears.
+    ///
+    /// The three paths are summed here because that is what the graph does at
+    /// the far end, so every assertion below stays a statement about the output
+    /// rather than about one component of it.
+    fn drain_summed(ac: &mut Acoustics, frames: usize) -> Vec<f32> {
+        let mut interleaved = vec![0.0f32; frames * PATHS];
+        let written = ac.drain(&mut interleaved);
+        interleaved[..written * PATHS]
+            .chunks(PATHS)
+            .map(|frame| frame.iter().sum())
+            .collect()
     }
 
     /// A quiet engine: no exhaust source, no cylinder pressure change.
@@ -704,9 +806,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(4_000);
         silent(&mut ac, &a, 4_000);
-        let mut out = vec![0.0f32; 4_000];
-        ac.drain(&mut out);
-        for sample in &out {
+        for sample in &drain_summed(&mut ac, 4_000) {
             assert_eq!(*sample, 0.0, "a standing pressure must not ring the bank");
         }
     }
@@ -726,8 +826,7 @@ mod tests {
             ac.push(&a, 0.0, sum, 0.0, RADIATION_HZ, DT);
             sum += 1.35e-5;
         }
-        let mut out = vec![0.0f32; 4_000];
-        ac.drain(&mut out);
+        let out = drain_summed(&mut ac, 4_000);
         let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(
             peak < 1.0e-9,
@@ -773,8 +872,7 @@ mod tests {
             let torque = 0.35 + 0.2 * (std::f64::consts::TAU * 60.0 * t).sin();
             ac.push(&a, 0.0, 6.0, torque, RADIATION_HZ, DT);
         }
-        let mut out = vec![0.0f32; 40_000];
-        ac.drain(&mut out);
+        let out = drain_summed(&mut ac, 40_000);
         // Skip the settling transient; measure where the bank has reached steady
         // state, so this is the response and not the onset.
         let peak = out[20_000..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -805,8 +903,7 @@ mod tests {
                 let source = (std::f64::consts::TAU * hz * t).sin();
                 ac.push(&a, source, 6.0, 0.0, RADIATION_HZ, DT);
             }
-            let mut out = vec![0.0f32; 80_000];
-            ac.drain(&mut out);
+            let out = drain_summed(&mut ac, 80_000);
             f64::from(out[40_000..].iter().fold(0.0f32, |m, s| m.max(s.abs())))
         };
 
@@ -865,9 +962,11 @@ mod tests {
             let source = if i % 2 == 0 { 1.0e6 } else { -1.0e6 };
             ac.push(&a, source, 6.0, 0.0, RADIATION_HZ, DT);
         }
-        let mut out = vec![0.0f32; 1024];
+        let mut out = vec![0.0f32; 1024 * PATHS];
         let n = ac.drain(&mut out);
-        assert_eq!(n, 1024);
+        assert_eq!(n, 1024, "one frame per push");
+        // Every path of every frame, because the boundary contract is per sample
+        // and the graph at the far end plays each channel in its own right.
         for s in &out {
             assert!(s.is_finite() && s.abs() <= 1.0, "sample out of range: {s}");
         }
@@ -881,8 +980,7 @@ mod tests {
         for _ in 0..200_000 {
             ac.push(&a, 5.0, 6.0, 0.0, RADIATION_HZ, DT);
         }
-        let mut out = vec![0.0f32; 200_000];
-        ac.drain(&mut out);
+        let out = drain_summed(&mut ac, 200_000);
         let last = out[199_999];
         assert!(
             last.abs() < 1.0e-3,
@@ -891,22 +989,36 @@ mod tests {
     }
 
     #[test]
-    fn draining_returns_samples_in_order_and_empties_the_buffer() {
+    fn draining_returns_frames_in_order_and_empties_the_buffer() {
         let a = audio();
         let mut ac = bank(64);
         for i in 0..10 {
             ac.push(&a, f64::from(i), 6.0, 0.0, RADIATION_HZ, DT);
         }
-        assert_eq!(ac.available(), 10);
+        assert_eq!(ac.available(), 10, "ten pushes are ten frames");
 
-        let mut first = vec![0.0f32; 4];
+        let mut first = vec![0.0f32; 4 * PATHS];
         assert_eq!(ac.drain(&mut first), 4);
         assert_eq!(ac.available(), 6);
 
-        let mut rest = vec![0.0f32; 32];
+        let mut rest = vec![0.0f32; 32 * PATHS];
         assert_eq!(ac.drain(&mut rest), 6);
         assert_eq!(ac.available(), 0);
         assert_eq!(ac.drain(&mut rest), 0, "an empty buffer yields nothing");
+    }
+
+    #[test]
+    fn a_buffer_too_small_for_one_frame_takes_nothing() {
+        // A partial frame would slide the three paths out of alignment for the
+        // rest of the run, so the drain refuses rather than writing what fits.
+        let a = audio();
+        let mut ac = bank(64);
+        for i in 0..10 {
+            ac.push(&a, f64::from(i), 6.0, 0.0, RADIATION_HZ, DT);
+        }
+        let mut stunted = vec![0.0f32; PATHS - 1];
+        assert_eq!(ac.drain(&mut stunted), 0);
+        assert_eq!(ac.available(), 10, "and nothing was consumed");
     }
 
     #[test]

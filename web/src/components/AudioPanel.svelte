@@ -1,6 +1,20 @@
 <script lang="ts">
+  import type { AudioPath } from '../lib/audioEngine';
   import { sim } from '../lib/state.svelte';
   import SpectrumView from './SpectrumView.svelte';
+
+  /**
+   * The radiating paths, in the order the solver emits them.
+   *
+   * Named for the mechanism rather than for the frequency range, because that is
+   * what they are: the exhaust is port flow out of a pipe, the block is cylinder
+   * pressure ringing iron, and the body is crank torque shaking the mounts.
+   */
+  const PATH_LABELS: Array<{ path: AudioPath; label: string }> = [
+    { path: 'exhaust', label: 'Exhaust' },
+    { path: 'block', label: 'Block' },
+    { path: 'body', label: 'Body' },
+  ];
 
   const snapshot = $derived(sim.snapshot);
 
@@ -89,14 +103,35 @@
 
     <p class="muted small">
       {#if sim.audioStage === 'raw'}
-        The tailpipe signal as the solver produces it, unfiltered. This is the path the spectrum
-        view was built to verify.
+        The tailpipe signal as the solver produces it, unfiltered — the three radiating paths simply
+        added back up. This is the path the spectrum view was built to verify.
       {:else}
-        The same samples heard from the driver's seat: through the structure, into a small hard box,
-        with the sharp edge of blowdown taken off by insulation and distance. <b>Nothing is added</b>
-        — no road noise, no synthesised rumble. It is a filter, and every value in it is a listening
-        choice, not a measurement. The manual publishes nothing about how this cab sounds.
+        The same samples heard from the driver's seat, each path by its own route: the exhaust from a
+        stack metres behind and below, the block two feet away through the bulkhead, the body through
+        the mounts and the seat. <b>Nothing is added</b> — no road noise, no synthesised rumble, no
+        harmonic generation. It is a filter, and every value in it is a listening choice, not a
+        measurement. The manual publishes nothing about how this cab sounds.
       {/if}
+    </p>
+
+    <div class="stage" role="group" aria-label="Radiating paths" data-testid="audio-paths">
+      {#each PATH_LABELS as { path, label } (path)}
+        <button
+          type="button"
+          data-testid={`audio-path-${path}`}
+          aria-pressed={sim.audioPaths[path]}
+          onclick={() => sim.setAudioPath(path, !sim.audioPaths[path])}
+        >
+          {label}
+        </button>
+      {/each}
+    </div>
+
+    <p class="muted small">
+      The three sources, separately. Muting one is a listening control: the engine goes on producing
+      all three and nothing about the simulation changes. The balance between them is what decides
+      whether this sounds like a truck, and it is calibrated by measurement — the
+      <code>audio_probe</code> example — rather than by ear.
     </p>
 
     <label class="field">

@@ -152,10 +152,10 @@ describe('SimClient', () => {
     const { worker } = makeClient(() => null, { onAudio });
 
     const samples = new Float32Array([0.1, -0.2, 0.3]);
-    worker.emit({ t: 'audio', rid: null, samples, sampleRateHz: 40000, dropped: 0 });
+    worker.emit({ t: 'audio', rid: null, samples, paths: 3, sampleRateHz: 40000, dropped: 0 });
 
     expect(onAudio).toHaveBeenCalledOnce();
-    expect(onAudio).toHaveBeenCalledWith(samples, 40000, 0);
+    expect(onAudio).toHaveBeenCalledWith(samples, 3, 40000, 0);
   });
 
   it('enables and disables audio production through the protocol', async () => {

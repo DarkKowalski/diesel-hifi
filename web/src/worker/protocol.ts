@@ -298,15 +298,24 @@ export type FromWorker =
   | { t: 'sweepProgress'; rid: number; done: number; total: number; rpm: number }
   | { t: 'sweepResult'; rid: number; points: OperatingPoint[]; peaks: SweepPeaks | null }
   /**
-   * A block of exhaust samples, unsolicited like snapshots.
+   * A block of engine audio frames, unsolicited like snapshots.
    *
    * `samples` is transferred rather than copied, so the worker must not touch it
    * afterwards. `sampleRateHz` is the solver's own rate; the consumer resamples.
+   *
+   * **Interleaved by radiating path**, `paths` floats to a frame: exhaust,
+   * block, body. They cross separately because they do not reach a driver by
+   * the same route — the exhaust from a stack metres behind and below, the block
+   * through the bulkhead, the body through the mounts and the seat — so the
+   * listening stage gives each its own transfer. `paths` travels with the block
+   * rather than being assumed, so a fourth path could not silently misalign
+   * every consumer that de-interleaves.
    */
   | {
       t: 'audio';
       rid: null;
       samples: Float32Array;
+      paths: number;
       sampleRateHz: number;
       dropped: number;
     }

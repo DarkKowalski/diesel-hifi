@@ -246,66 +246,20 @@ const OCTAVES: [(&str, f64, f64); 10] = [
     ("10k-20k", 10_000.0, f64::INFINITY),
 ];
 
-/// The shipped configuration with one `audio` gain zeroed, to hear one path.
-///
-/// The balance between the exhaust and the structure is the single thing that
-/// decides whether this reads as a truck or as a generic motor, and it cannot be
-/// judged from the mixed spectrum alone: a band share moves when *either* path
-/// changes level, so the mixed table cannot say which one moved. Silencing one
-/// gain and measuring the other is the same trick `tests/acoustics.rs` uses, and
-/// it turns the balance into a number rather than an impression.
-fn config_with_only(gain: &str) -> Result<ValidatedConfig, Box<dyn std::error::Error>> {
-    let mut document: serde_json::Value = serde_json::from_str(OM471_9_M3D_JSON)?;
-    for other in ["exhaust_gain", "structural_gain", "body_gain"] {
-        if other != gain {
-            document["audio"][other] = serde_json::json!(0.0);
-        }
-    }
-    Ok(EngineConfig::from_json(&document.to_string())?.validate()?)
+/// Radiating paths interleaved into each frame: exhaust, block, body.
+const PATHS: usize = 3;
+const EXHAUST: usize = 0;
+const BLOCK: usize = 1;
+const BODY: usize = 2;
+
+/// What a listener hears: the three paths of each frame added up.
+fn summed(frames: &[f32]) -> Vec<f32> {
+    frames.chunks(PATHS).map(|f| f.iter().sum()).collect()
 }
 
-/// Settle a simulation at an operating point and return its produced samples.
-fn trace_at(
-    config: &ValidatedConfig,
-    rpm: f64,
-    pedal: f64,
-    samples: usize,
-) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-    let mut sim = Simulation::new(
-        config.clone(),
-        ResetOptions {
-            seed: 0,
-            initial_rpm: rpm,
-            initial_crank_rad: 0.0,
-            coolant_temp_k: 293.15,
-        },
-    )?;
-    sim.set_controls(Controls {
-        pedal,
-        load_torque_nm: 0.0,
-        starter: false,
-        ignition: true,
-        egr_enabled: true,
-        ..Controls::default()
-    })?;
-
-    let mut sink = vec![0.0f32; PIN_CHUNK as usize];
-    // Settle, discarding the start-up transient.
-    for _ in 0..2_000 {
-        sim.advance(PIN_CHUNK)?;
-        sim.pin_speed_rpm(rpm)?;
-        sim.drain_audio(&mut sink);
-    }
-
-    let mut trace = vec![0.0f32; samples];
-    let mut written = 0;
-    while written < trace.len() {
-        let batch = PIN_CHUNK.min((trace.len() - written) as u32);
-        sim.advance(batch)?;
-        sim.pin_speed_rpm(rpm)?;
-        written += sim.drain_audio(&mut trace[written..]);
-    }
-    Ok(trace)
+/// One path on its own, taken from interleaved frames.
+fn path_of(frames: &[f32], path: usize) -> Vec<f32> {
+    frames.chunks(PATHS).map(|f| f[path]).collect()
 }
 
 /// RMS of a trace, in dBFS.
@@ -318,9 +272,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: ValidatedConfig = EngineConfig::from_json(OM471_9_M3D_JSON)?.validate()?;
     let knee = config.config().audio.soft_clip_knee;
     let cylinders = config.config().geometry.cylinders;
-    let exhaust_only = config_with_only("exhaust_gain")?;
-    let structural_only = config_with_only("structural_gain")?;
-    let body_only = config_with_only("body_gain")?;
 
     println!("exhaust audio levels (dBFS, not sound pressure)");
     println!(
@@ -351,7 +302,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Controls::default()
         })?;
 
-        let mut sink = vec![0.0f32; PIN_CHUNK as usize];
+        let mut sink = vec![0.0f32; PIN_CHUNK as usize * PATHS];
 
         // Settle, discarding the start-up transient.
         for _ in 0..2_000 {
@@ -366,10 +317,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for _ in 0..400 {
             sim.advance(PIN_CHUNK)?;
             sim.pin_speed_rpm(rpm)?;
-            let written = sim.drain_audio(&mut sink);
-            for sample in &sink[..written] {
+            let frames = sim.drain_audio(&mut sink);
+            // Summed to what a listener hears. Every level below is the level of
+            // the sum, not the sum of the levels.
+            for sample in summed(&sink[..frames * PATHS]) {
                 peak = peak.max(sample.abs());
-                sum_squares += f64::from(*sample) * f64::from(*sample);
+                sum_squares += f64::from(sample) * f64::from(sample);
                 count += 1;
             }
         }
@@ -383,14 +336,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Where the energy sits matters as much as how much there is: small
         // speakers reproduce almost nothing below about 150 Hz, and a
         // six-cylinder diesel at idle has a 28 Hz fundamental.
-        let mut trace = vec![0.0f32; WINDOW];
+        let mut frames = vec![0.0f32; WINDOW * PATHS];
         let mut written = 0;
-        while written < trace.len() {
-            let batch = PIN_CHUNK.min((trace.len() - written) as u32);
+        while written < WINDOW {
+            let batch = PIN_CHUNK.min((WINDOW - written) as u32);
             sim.advance(batch)?;
             sim.pin_speed_rpm(rpm)?;
-            written += sim.drain_audio(&mut trace[written..]);
+            written += sim.drain_audio(&mut frames[written * PATHS..]);
         }
+        let trace = summed(&frames);
 
         let power = power_spectrum(&trace);
         let total: f64 = power.iter().sum();
@@ -472,18 +426,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             share(15_000.0, f64::INFINITY)
         );
 
-        // The two paths on their own, at the same operating point. What this is
-        // for is the balance: the exhaust should carry the low orders and the
-        // modal bank should sit above them, and a mixed spectrum cannot say
-        // which of the two moved when a band share changes.
+        // Each path on its own, from the same frames the mix above came from.
+        //
+        // What this is for is the balance: the exhaust should carry the firing
+        // orders, the body should sit under them and the modal bank above, and a
+        // mixed spectrum cannot say which one moved when a band share changes.
+        //
+        // This used to be three more runs of the shipped configuration with
+        // different `audio` gains zeroed. The solver now emits the paths
+        // separately, so a path is a slice of the trace already taken — which is
+        // a quarter of the work and, more to the point, means the paths being
+        // compared are the *same* run and cannot have drifted apart.
         println!("           each path alone (dBFS, and its own band shares):");
         let mut levels_db: Vec<(&str, f64)> = Vec::new();
-        for (path, path_config) in [
-            ("exhaust", &exhaust_only),
-            ("block", &structural_only),
-            ("body", &body_only),
-        ] {
-            let trace = trace_at(path_config, rpm, pedal, WINDOW)?;
+        for (path, index) in [("exhaust", EXHAUST), ("block", BLOCK), ("body", BODY)] {
+            let trace = path_of(&frames, index);
             let level = rms_of(&trace);
             let power = power_spectrum(&trace);
             let total: f64 = power.iter().sum();

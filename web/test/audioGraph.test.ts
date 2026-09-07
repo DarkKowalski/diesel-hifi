@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { applyStageToGraph, buildStageGraph } from '../src/lib/audioEngine';
-import { CABIN_SPEC } from '../src/lib/cabin';
+import { AUDIO_PATHS, CABIN_SPEC } from '../src/lib/cabin';
 
 /**
  * Wiring of the post-processing stage.
@@ -33,17 +33,26 @@ class FakeParam implements Recorded {
 
 class FakeNode {
   readonly outgoing: FakeNode[] = [];
+  /** Which output index each connection was made from, for the splitter. */
+  readonly outputs: number[] = [];
   disconnected = 0;
 
   constructor(readonly kind: string) {}
 
-  connect<T extends FakeNode>(destination: T): T {
+  connect<T extends FakeNode>(destination: T, output = 0): T {
     this.outgoing.push(destination);
+    this.outputs.push(output);
     return destination;
   }
 
   disconnect(): void {
     this.disconnected += 1;
+  }
+}
+
+class FakeSplitter extends FakeNode {
+  constructor(readonly numberOfOutputs: number) {
+    super('splitter');
   }
 }
 
@@ -140,6 +149,9 @@ class FakeContext {
   createStereoPanner(): FakePanner {
     return this.track(new FakePanner());
   }
+  createChannelSplitter(numberOfOutputs: number): FakeSplitter {
+    return this.track(new FakeSplitter(numberOfOutputs));
+  }
   createConvolver(): FakeConvolver {
     return this.track(new FakeConvolver());
   }
@@ -172,29 +184,75 @@ function build() {
 }
 
 describe('the post-processing graph', () => {
-  it('sends the source down both paths and mixes them back together', () => {
+  it('sends every path down both stages and mixes them back together', () => {
     const { graph } = build();
     const input = graph.input as unknown as FakeNode;
     const output = graph.output as unknown as FakeNode;
     const dry = graph.dryGain as unknown as FakeNode;
     const wet = graph.wetGain as unknown as FakeNode;
 
-    expect(input.outgoing).toContain(dry);
-    expect(dry.outgoing).toContain(output);
+    for (const path of AUDIO_PATHS) {
+      const gain = graph.pathGains[path] as unknown as FakeNode;
+      // Every path reaches the dry sum directly and the wet stage eventually.
+      expect(gain.outgoing, `${path} should reach the dry sum`).toContain(dry);
+      expect(reaches(gain, wet), `${path} should reach the wet stage`).toBe(true);
+    }
 
-    // The wet path is long, so check it reaches rather than naming every hop.
+    expect(dry.outgoing).toContain(output);
     expect(reaches(input, wet)).toBe(true);
     expect(wet.outgoing).toContain(output);
 
-    // And the dry path really is dry: nothing between the split and the mix.
+    // And the dry stage really is dry: the three paths summed and nothing else
+    // between that sum and the mix. This is the signal the spectrum view was
+    // built to verify, and it is exactly the sample the solver used to emit.
     expect(dry.outgoing).toEqual([output]);
+  });
+
+  it('takes each path from its own splitter output', () => {
+    // The failure this catches is silent and nasty: crossing two outputs gives
+    // each path the other's cab transfer, which is neither an error nor
+    // recognisably wrong — it just moves the exhaust into the bulkhead.
+    const { context, graph } = build();
+    const splitter = context.created.find(
+      (node): node is FakeSplitter => node.kind === 'splitter',
+    )!;
+    expect(splitter.numberOfOutputs).toBe(AUDIO_PATHS.length);
+
+    AUDIO_PATHS.forEach((path, index) => {
+      const gain = graph.pathGains[path] as unknown as FakeNode;
+      const at = splitter.outgoing.indexOf(gain);
+      expect(at, `${path} should be connected to the splitter`).toBeGreaterThanOrEqual(0);
+      expect(splitter.outputs[at], `${path} should come from output ${index}`).toBe(index);
+    });
+  });
+
+  it('gives the body path no room send, because it does not arrive through air', () => {
+    // Structure-borne sound does not arrive as an early reflection or a diffuse
+    // tail. The specification says so with a zero, and this is the assertion
+    // that the graph honours it by building nothing rather than by building a
+    // silent send that would be a worse description.
+    const { graph } = build();
+    const panners = (graph.nodes as unknown as FakeNode[]).filter(
+      (node) => node.kind === 'panner',
+    );
+    const body = graph.pathGains.body as unknown as FakeNode;
+    for (const panner of panners) {
+      expect(reaches(body, panner)).toBe(false);
+    }
+    const convolver = (graph.nodes as unknown as FakeNode[]).find(
+      (node) => node.kind === 'convolver',
+    )!;
+    expect(reaches(body, convolver)).toBe(false);
+
+    // The other two do reach the room, or there would be no room.
+    expect(reaches(graph.pathGains.exhaust as unknown as FakeNode, convolver)).toBe(true);
   });
 
   it('creates nothing that can produce sound on its own', () => {
     const { context } = build();
     const kinds = new Set(context.created.map((node) => node.kind));
     expect([...kinds].sort()).toEqual(
-      ['biquad', 'compressor', 'convolver', 'delay', 'gain', 'panner'].filter((kind) =>
+      ['biquad', 'compressor', 'convolver', 'delay', 'gain', 'panner', 'splitter'].filter((kind) =>
         kinds.has(kind),
       ),
     );
@@ -203,23 +261,50 @@ describe('the post-processing graph', () => {
     expect(kinds.has('bufferSource')).toBe(false);
   });
 
-  it('builds the filter chain in the order the specification gives', () => {
+  it('builds every filter chain in the order the specification gives', () => {
     const { context } = build();
     const filters = context.created.filter((node): node is FakeBiquad => node.kind === 'biquad');
-    expect(filters).toHaveLength(CABIN_SPEC.filters.length);
+
+    // Three per-path chains and then the shared one, in that order.
+    const expected = [
+      ...AUDIO_PATHS.flatMap((path) => CABIN_SPEC.paths[path].filters),
+      ...CABIN_SPEC.filters,
+    ];
+    expect(filters).toHaveLength(expected.length);
 
     filters.forEach((filter, i) => {
-      const spec = CABIN_SPEC.filters[i]!;
+      const spec = expected[i]!;
       expect(filter.type).toBe(spec.type);
       expect(filter.frequency.value).toBe(spec.frequencyHz);
       expect(filter.Q.value).toBe(spec.q);
       expect(filter.gain.value).toBe(spec.gainDb);
     });
+  });
 
-    // In series, not in parallel: each filter feeds the next.
-    for (let i = 0; i + 1 < filters.length; i += 1) {
-      expect(filters[i]!.outgoing).toContain(filters[i + 1]!);
+  it('runs each path chain in series and keeps the chains apart', () => {
+    const { graph } = build();
+    for (const path of AUDIO_PATHS) {
+      const stages = CABIN_SPEC.paths[path].filters;
+      let tail = graph.pathGains[path] as unknown as FakeNode;
+      for (const stage of stages) {
+        const next = tail.outgoing.find(
+          (node): node is FakeBiquad =>
+            node.kind === 'biquad' && (node as FakeBiquad).frequency.value === stage.frequencyHz,
+        );
+        expect(next, `${path} should continue into its ${stage.frequencyHz} Hz stage`).toBeDefined();
+        tail = next!;
+      }
     }
+
+    // And no path's chain leaks into another's: the whole point is that the
+    // exhaust is not filtered as if it were bolted to the bulkhead.
+    const exhaustFirst = CABIN_SPEC.paths.exhaust.filters[0]!.frequencyHz;
+    const block = graph.pathGains.block as unknown as FakeNode;
+    expect(
+      block.outgoing.some(
+        (node) => node.kind === 'biquad' && (node as FakeBiquad).frequency.value === exhaustFirst,
+      ),
+    ).toBe(false);
   });
 
   it('gives the convolver a stereo response generated for the device rate', () => {
@@ -238,14 +323,21 @@ describe('the post-processing graph', () => {
     expect(convolver.normalize).toBe(false);
   });
 
-  it('allows each reflection tap enough delay line to hold its delay', () => {
+  it('allows every delay line enough room to hold its delay', () => {
     const { context } = build();
     const delays = context.created.filter((node): node is FakeDelay => node.kind === 'delay');
-    expect(delays).toHaveLength(CABIN_SPEC.taps.length);
+
+    // One per path that is not co-located with the driver, plus one per tap. A
+    // zero-delay path builds nothing rather than a delay of zero.
+    const propagation = AUDIO_PATHS.map((path) => CABIN_SPEC.paths[path].delayS).filter(
+      (delayS) => delayS > 0,
+    );
+    const expected = [...propagation, ...CABIN_SPEC.taps.map((tap) => tap.delayS)];
+    expect(delays).toHaveLength(expected.length);
+
     delays.forEach((delay, i) => {
-      const tap = CABIN_SPEC.taps[i]!;
-      expect(delay.delayTime.value).toBe(tap.delayS);
-      expect(delay.maxDelayTime).toBeGreaterThanOrEqual(tap.delayS);
+      expect(delay.delayTime.value).toBe(expected[i]!);
+      expect(delay.maxDelayTime).toBeGreaterThanOrEqual(expected[i]!);
     });
   });
 

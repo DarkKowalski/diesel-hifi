@@ -47,7 +47,12 @@ export interface SimClientHandlers {
   onError?: (error: SimClientError) => void;
   onSweepProgress?: (done: number, total: number, rpm: number) => void;
   /** A block of exhaust samples, streamed rather than requested. */
-  onAudio?: (samples: Float32Array, sampleRateHz: number, dropped: number) => void;
+  onAudio?: (
+    samples: Float32Array,
+    paths: number,
+    sampleRateHz: number,
+    dropped: number,
+  ) => void;
 }
 
 export interface SweepResult {
@@ -110,7 +115,7 @@ export class SimClient {
     }
 
     if (data.t === 'audio') {
-      this.#handlers.onAudio?.(data.samples, data.sampleRateHz, data.dropped);
+      this.#handlers.onAudio?.(data.samples, data.paths, data.sampleRateHz, data.dropped);
       return;
     }
 

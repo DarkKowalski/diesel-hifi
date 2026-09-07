@@ -61,6 +61,25 @@ fn samples_at(
     coolant_temp_k: f64,
     steps: usize,
 ) -> Vec<f32> {
+    summed(&frames_at(config, rpm, pedal, coolant_temp_k, steps))
+}
+
+/// Radiating paths interleaved into each frame: exhaust, block, body.
+const PATHS: usize = 3;
+
+/// Run at a held speed and return `steps` interleaved frames.
+///
+/// The solver emits the three paths separately so the listening stage can filter
+/// each by its own route. Tests that care about *the output* sum them with
+/// [`summed`]; tests that care about one path take it with [`path_of`], which is
+/// one run rather than the three it used to take.
+fn frames_at(
+    config: ValidatedConfig,
+    rpm: f64,
+    pedal: f64,
+    coolant_temp_k: f64,
+    steps: usize,
+) -> Vec<f32> {
     let mut sim = Simulation::new(
         config,
         ResetOptions {
@@ -75,23 +94,57 @@ fn samples_at(
         .expect("controls accepted");
 
     // Settle, discarding the start-up transient.
-    let mut sink = vec![0.0f32; PIN_CHUNK as usize];
+    let mut sink = vec![0.0f32; PIN_CHUNK as usize * PATHS];
     for _ in 0..1_200 {
         sim.advance(PIN_CHUNK).expect("advance");
         sim.pin_speed_rpm(rpm).expect("pin");
         sim.drain_audio(&mut sink);
     }
 
-    let mut out = vec![0.0f32; steps];
-    let mut written = 0;
-    while written < out.len() {
-        let batch = PIN_CHUNK.min((out.len() - written) as u32);
+    let mut out = vec![0.0f32; steps * PATHS];
+    let mut frames = 0;
+    while frames < steps {
+        let batch = PIN_CHUNK.min((steps - frames) as u32);
         sim.advance(batch).expect("advance");
         sim.pin_speed_rpm(rpm).expect("pin");
-        written += sim.drain_audio(&mut out[written..]);
+        frames += sim.drain_audio(&mut out[frames * PATHS..]);
     }
     out
 }
+
+/// What a listener hears: the three paths of each frame added up.
+fn summed(frames: &[f32]) -> Vec<f32> {
+    frames.chunks(PATHS).map(|f| f.iter().sum()).collect()
+}
+
+/// Drain at most `frames` frames and return them as interleaved floats.
+fn drain_frames(sim: &mut Simulation, frames: usize) -> Vec<f32> {
+    let mut interleaved = vec![0.0f32; frames * PATHS];
+    let written = sim.drain_audio(&mut interleaved);
+    interleaved.truncate(written * PATHS);
+    interleaved
+}
+
+/// Drain at most `frames` frames, summed down to what a listener hears.
+fn drain_summed(sim: &mut Simulation, frames: usize) -> Vec<f32> {
+    summed(&drain_frames(sim, frames))
+}
+
+/// Drain and discard, for settling loops that only need the buffer emptied.
+fn discard_audio(sim: &mut Simulation, frames: usize) {
+    let mut sink = vec![0.0f32; frames * PATHS];
+    sim.drain_audio(&mut sink);
+}
+
+/// One path on its own, taken from interleaved frames.
+fn path_of(frames: &[f32], path: usize) -> Vec<f32> {
+    frames.chunks(PATHS).map(|f| f[path]).collect()
+}
+
+/// Path indices, matching `sim::acoustics`.
+const EXHAUST: usize = 0;
+const BLOCK: usize = 1;
+const BODY: usize = 2;
 
 /// Fundamental frequency of a signal, by autocorrelation.
 ///
@@ -156,7 +209,11 @@ fn the_sample_rate_is_the_reciprocal_of_the_solver_step() {
 }
 
 #[test]
-fn exactly_one_sample_is_produced_per_step() {
+fn exactly_one_frame_is_produced_per_step() {
+    // A frame, not a sample: the three radiating paths cross the boundary
+    // interleaved, and `drain_audio` counts frames so that this stays one per
+    // step. Counting floats would make it three, and the invariant worth having
+    // is the one about steps.
     let mut sim = Simulation::new(config(), ResetOptions::default()).expect("simulation builds");
     sim.set_controls(controls(0.0, true, true))
         .expect("controls");
@@ -164,7 +221,7 @@ fn exactly_one_sample_is_produced_per_step() {
     sim.advance(1_000).expect("advance");
     assert_eq!(sim.audio_available(), 1_000);
 
-    let mut out = vec![0.0f32; 4_000];
+    let mut out = vec![0.0f32; 4_000 * PATHS];
     assert_eq!(sim.drain_audio(&mut out), 1_000);
     assert_eq!(sim.audio_available(), 0);
 
@@ -179,12 +236,11 @@ fn a_reset_engine_is_silent_and_a_reset_clears_buffered_audio() {
     // Nothing turns and nothing burns, so a reset engine makes no sound at all —
     // not merely a quiet one. It has no settling transient either: its manifolds
     // start at ambient, which is the only pressure a stopped engine can hold.
-    let mut out = vec![0.0f32; 20_000];
-    let mut collected = 0;
-    while collected < out.len() {
-        let batch = 20_000u32.min((out.len() - collected) as u32);
+    let mut out: Vec<f32> = Vec::new();
+    while out.len() < 20_000 {
+        let batch = 20_000u32.min((20_000 - out.len()) as u32);
         sim.advance(batch).expect("advance");
-        collected += sim.drain_audio(&mut out[collected..]);
+        out.extend(drain_summed(&mut sim, 20_000));
     }
 
     let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -216,16 +272,18 @@ fn audio_is_bit_identical_across_batch_boundaries() {
 
     let mut one_batch = make();
     one_batch.advance(6_000).expect("advance");
-    let mut bulk = vec![0.0f32; 6_000];
+    let mut bulk = vec![0.0f32; 6_000 * PATHS];
     assert_eq!(one_batch.drain_audio(&mut bulk), 6_000);
 
+    // Compared interleaved rather than summed, so this holds for every path
+    // rather than for a total that could hide two paths trading places.
     let mut stepwise = make();
-    let mut single = vec![0.0f32; 6_000];
-    for slot in single.iter_mut() {
+    let mut single = vec![0.0f32; 6_000 * PATHS];
+    for frame in single.chunks_mut(PATHS) {
         stepwise.advance(1).expect("advance");
-        let mut one = [0.0f32; 1];
+        let mut one = [0.0f32; PATHS];
         assert_eq!(stepwise.drain_audio(&mut one), 1);
-        *slot = one[0];
+        frame.copy_from_slice(&one);
     }
 
     assert_eq!(
@@ -349,10 +407,9 @@ fn resetting_a_running_engine_does_not_click() {
     sim.set_controls(controls(0.6, true, true))
         .expect("controls");
 
-    let mut sink = vec![0.0f32; 4_000];
     for _ in 0..120 {
         sim.advance(4_000).expect("advance");
-        sim.drain_audio(&mut sink);
+        discard_audio(&mut sim, 4_000);
     }
 
     sim.reset(ResetOptions::default()).expect("reset");
@@ -360,9 +417,8 @@ fn resetting_a_running_engine_does_not_click() {
     // A reset engine is stopped, so the samples that follow should be near
     // silence rather than a full-scale spike.
     sim.advance(4_000).expect("advance");
-    let mut out = vec![0.0f32; 4_000];
-    let written = sim.drain_audio(&mut out);
-    let peak = out[..written].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let out = drain_summed(&mut sim, 4_000);
+    let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
 
     assert!(
         peak < 0.05,
@@ -392,16 +448,17 @@ fn the_signal_never_sits_pinned_at_the_clipping_ceiling() {
     let config = config();
     let knee = config.config().audio.soft_clip_knee as f32;
     let mut sim = Simulation::new(config, ResetOptions::default()).expect("simulation builds");
-    let mut sink = vec![0.0f32; 4_000];
 
     let mut total = 0usize;
     let mut pinned = 0usize;
     let mut peak = 0.0f32;
-    let mut count = |sim: &mut Simulation, batches: usize, sink: &mut Vec<f32>| {
+    // Measured on the summed frame. The knee bounds the *mix* — that is what the
+    // saturation gain is derived from — so the sum is the quantity this
+    // assertion is about, and a single path is always well inside it.
+    let mut count = |sim: &mut Simulation, batches: usize| {
         for _ in 0..batches {
             sim.advance(4_000).expect("advance");
-            let n = sim.drain_audio(sink);
-            for sample in &sink[..n] {
+            for sample in drain_summed(sim, 4_000) {
                 total += 1;
                 peak = peak.max(sample.abs());
                 if sample.abs() >= knee * 0.995 {
@@ -413,13 +470,13 @@ fn the_signal_never_sits_pinned_at_the_clipping_ceiling() {
 
     sim.set_controls(controls(0.6, true, true))
         .expect("controls");
-    count(&mut sim, 160, &mut sink);
+    count(&mut sim, 160);
     sim.set_controls(controls(0.0, false, false))
         .expect("controls");
-    count(&mut sim, 400, &mut sink);
+    count(&mut sim, 400);
     sim.set_controls(controls(0.6, true, true))
         .expect("controls");
-    count(&mut sim, 60, &mut sink);
+    count(&mut sim, 60);
 
     assert!(
         peak > 0.05,
@@ -450,14 +507,13 @@ fn the_signal_never_sits_pinned_at_the_clipping_ceiling() {
 #[test]
 fn a_stopped_engine_emits_no_high_frequency_hiss() {
     let mut sim = Simulation::new(config(), ResetOptions::default()).expect("simulation builds");
-    let mut sink = vec![0.0f32; 4_000];
 
     // Run it hard, so the manifolds and cylinders are far from rest.
     sim.set_controls(controls(0.9, true, true))
         .expect("controls");
     for _ in 0..200 {
         sim.advance(4_000).expect("advance");
-        sim.drain_audio(&mut sink);
+        discard_audio(&mut sim, 4_000);
     }
 
     // Cut fuelling and let it come to a complete stop.
@@ -465,16 +521,15 @@ fn a_stopped_engine_emits_no_high_frequency_hiss() {
         .expect("controls");
     for _ in 0..600 {
         sim.advance(4_000).expect("advance");
-        sim.drain_audio(&mut sink);
+        discard_audio(&mut sim, 4_000);
     }
     assert_eq!(sim.rpm(), 0.0, "the engine should have come to rest");
 
-    let mut out = vec![0.0f32; 16_384];
-    let mut written = 0;
-    while written < out.len() {
-        let batch = 4_000u32.min((out.len() - written) as u32);
+    let mut out: Vec<f32> = Vec::new();
+    while out.len() < 16_384 {
+        let batch = 4_000u32.min((16_384 - out.len()) as u32);
         sim.advance(batch).expect("advance");
-        written += sim.drain_audio(&mut out[written..]);
+        out.extend(drain_summed(&mut sim, 4_000));
     }
 
     let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -518,18 +573,17 @@ fn the_output_keeps_headroom_across_the_operating_range() {
         .expect("simulation builds");
         sim.set_controls(controls(pedal, false, true))
             .expect("controls");
-        let mut sink = vec![0.0f32; 100];
         for _ in 0..1_200 {
             sim.advance(100).expect("advance");
             sim.pin_speed_rpm(rpm).expect("pin");
-            sim.drain_audio(&mut sink);
+            discard_audio(&mut sim, 100);
         }
         let mut peak = 0.0f32;
         for _ in 0..400 {
             sim.advance(100).expect("advance");
             sim.pin_speed_rpm(rpm).expect("pin");
-            let n = sim.drain_audio(&mut sink);
-            peak = peak.max(sink[..n].iter().fold(0.0f32, |m, s| m.max(s.abs())));
+            let block = drain_summed(&mut sim, 100);
+            peak = peak.max(block.iter().fold(0.0f32, |m, s| m.max(s.abs())));
         }
         peak
     };
@@ -583,8 +637,7 @@ fn the_level_meter_rises_once_the_engine_is_running() {
         .expect("controls");
     for _ in 0..200 {
         sim.advance(4_000).expect("advance");
-        let mut sink = vec![0.0f32; 4_000];
-        sim.drain_audio(&mut sink);
+        discard_audio(&mut sim, 4_000);
     }
     let running = sim.audio_level_db();
 
@@ -815,20 +868,18 @@ fn the_clatter_tracks_the_premixed_burn_and_not_the_fuel() {
         .expect("simulation builds");
         sim.set_controls(controls(pedal, false, true))
             .expect("controls accepted");
-        let mut sink = vec![0.0f32; PIN_CHUNK as usize];
         for _ in 0..1_200 {
             sim.advance(PIN_CHUNK).expect("advance");
             sim.pin_speed_rpm(speed).expect("pin");
-            sim.drain_audio(&mut sink);
+            discard_audio(&mut sim, PIN_CHUNK as usize);
         }
         let snapshot = sim.snapshot();
-        let mut out = vec![0.0f32; 40_000];
-        let mut written = 0;
-        while written < out.len() {
-            let batch = PIN_CHUNK.min((out.len() - written) as u32);
+        let mut out: Vec<f32> = Vec::new();
+        while out.len() < 40_000 {
+            let batch = PIN_CHUNK.min((40_000 - out.len()) as u32);
             sim.advance(batch).expect("advance");
             sim.pin_speed_rpm(speed).expect("pin");
-            written += sim.drain_audio(&mut out[written..]);
+            out.extend(drain_summed(&mut sim, PIN_CHUNK as usize));
         }
         (
             snapshot.premixed_fraction,
@@ -895,19 +946,17 @@ fn the_engine_brake_barks_harder_than_the_same_engine_coasting() {
         })
         .expect("controls accepted");
 
-        let mut sink = vec![0.0f32; PIN_CHUNK as usize];
         for _ in 0..1_200 {
             sim.advance(PIN_CHUNK).expect("advance");
             sim.pin_speed_rpm(speed).expect("pin");
-            sim.drain_audio(&mut sink);
+            discard_audio(&mut sim, PIN_CHUNK as usize);
         }
-        let mut out = vec![0.0f32; 40_000];
-        let mut written = 0;
-        while written < out.len() {
-            let batch = PIN_CHUNK.min((out.len() - written) as u32);
+        let mut out: Vec<f32> = Vec::new();
+        while out.len() < 40_000 {
+            let batch = PIN_CHUNK.min((40_000 - out.len()) as u32);
             sim.advance(batch).expect("advance");
             sim.pin_speed_rpm(speed).expect("pin");
-            written += sim.drain_audio(&mut out[written..]);
+            out.extend(drain_summed(&mut sim, PIN_CHUNK as usize));
         }
         out
     };
@@ -1040,19 +1089,17 @@ fn samples_with_seed(config: ValidatedConfig, seed: u64, rpm: f64, steps: usize)
     sim.set_controls(controls(0.4, false, true))
         .expect("controls accepted");
 
-    let mut sink = vec![0.0f32; PIN_CHUNK as usize];
     for _ in 0..1_200 {
         sim.advance(PIN_CHUNK).expect("advance");
         sim.pin_speed_rpm(rpm).expect("pin");
-        sim.drain_audio(&mut sink);
+        discard_audio(&mut sim, PIN_CHUNK as usize);
     }
-    let mut out = vec![0.0f32; steps];
-    let mut written = 0;
-    while written < out.len() {
-        let batch = PIN_CHUNK.min((out.len() - written) as u32);
+    let mut out: Vec<f32> = Vec::new();
+    while out.len() < steps {
+        let batch = PIN_CHUNK.min((steps - out.len()) as u32);
         sim.advance(batch).expect("advance");
         sim.pin_speed_rpm(rpm).expect("pin");
-        written += sim.drain_audio(&mut out[written..]);
+        out.extend(drain_summed(&mut sim, PIN_CHUNK as usize));
     }
     out
 }
@@ -1473,21 +1520,6 @@ fn rms_of(samples: &[f32]) -> f64 {
         .sqrt()
 }
 
-/// The shipped configuration with only one of the three audio gains left alive.
-fn config_with_only(gain: &str) -> ValidatedConfig {
-    let mut document: serde_json::Value =
-        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as JSON");
-    for other in ["exhaust_gain", "structural_gain", "body_gain"] {
-        if other != gain {
-            document["audio"][other] = serde_json::json!(0.0);
-        }
-    }
-    EngineConfig::from_json(&document.to_string())
-        .expect("mutated config parses")
-        .validate()
-        .expect("mutated config validates")
-}
-
 #[test]
 fn the_energy_sits_in_the_firing_orders_and_not_between_them() {
     // What a diesel is, spectrally: a comb at the firing frequency. What it is
@@ -1527,21 +1559,15 @@ fn the_exhaust_path_leads_the_clatter_path() {
     // Six decibels rather than "louder": a margin small enough to be an accident
     // is not a balance, and the clatter still has to be plainly audible, so this
     // is a floor and not a target.
+    //
+    // One run per operating point rather than two. The paths now cross the
+    // boundary separately, so a path is a slice of the output instead of a
+    // configuration with the other gains zeroed and the whole simulation run
+    // again — and it is the *same* run, so nothing can drift between them.
     for (rpm, pedal) in [(600.0, 0.15), (1_200.0, 0.60), (1_400.0, 1.0)] {
-        let exhaust = rms_of(&samples_at(
-            config_with_only("exhaust_gain"),
-            rpm,
-            pedal,
-            293.15,
-            32_768,
-        ));
-        let block = rms_of(&samples_at(
-            config_with_only("structural_gain"),
-            rpm,
-            pedal,
-            293.15,
-            32_768,
-        ));
+        let frames = frames_at(config(), rpm, pedal, 293.15, 32_768);
+        let exhaust = rms_of(&path_of(&frames, EXHAUST));
+        let block = rms_of(&path_of(&frames, BLOCK));
         let lead_db = 20.0 * (exhaust / block.max(1.0e-30)).log10();
         assert!(
             lead_db > 6.0,
@@ -1579,7 +1605,8 @@ fn the_body_path_is_what_supplies_the_low_orders() {
     // The third path's whole claim, stated as a property of the path rather than
     // as a level: torque-driven radiation belongs below a few hundred hertz.
     // Both other gains are silenced, so what is measured is this path alone.
-    let samples = samples_at(config_with_only("body_gain"), 1_400.0, 1.0, 293.15, 32_768);
+    let frames = frames_at(config(), 1_400.0, 1.0, 293.15, 32_768);
+    let samples = path_of(&frames, BODY);
     let f0 = firing_hz(1_400.0, config().config().geometry.cylinders);
 
     let low: f64 = (1..=3).map(|n| line_power(&samples, f0 * n as f64)).sum();
@@ -1726,5 +1753,107 @@ fn an_unstable_body_mode_is_rejected() {
         error.message.contains("body_modes"),
         "the rejection should name the bank, got: {}",
         error.message
+    );
+}
+
+// --- the three paths at the boundary ----------------------------------------
+
+#[test]
+fn the_summed_frame_stays_inside_the_soft_clip_knee() {
+    // The property the shared saturation gain exists to buy, and the reason the
+    // clipper stayed in the solver rather than moving to the browser with the
+    // mix. The knee bounds what a listener hears, so it has to bound the *sum*
+    // of the three paths — not each of them separately, which would be a
+    // different and much weaker statement, and not nothing at all, which is
+    // what emitting the paths raw would have left.
+    let config = config();
+    let knee = config.config().audio.soft_clip_knee as f32;
+
+    for (rpm, pedal) in [(600.0, 0.15), (1_200.0, 0.60), (1_400.0, 1.0)] {
+        let out = samples_at(config.clone(), rpm, pedal, 293.15, 32_768);
+        let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            peak <= knee * 1.000_01,
+            "at {rpm:.0} rpm and {pedal:.2} pedal the summed frame peaked at {peak}, \
+             past the {knee} knee; the saturation gain is meant to make that \
+             impossible"
+        );
+    }
+}
+
+#[test]
+fn the_per_channel_clamp_never_has_to_engage() {
+    // The clamp on each path is a guarantee, not a mechanism. `factor` bounds
+    // the sum, and three signed terms summing inside the knee does not by
+    // itself bound each one: two paths in opposition could in principle each
+    // exceed it. This says that never actually happens, so the clamp is not
+    // quietly shaping the sound while claiming to be a safety net.
+    //
+    // If this ever fails it is information rather than a nuisance — it means the
+    // paths have started cancelling hard enough that the mix is a poor proxy for
+    // any of them, and the saturation would need rethinking rather than the
+    // threshold relaxing.
+    let config = config();
+
+    for (rpm, pedal) in [(600.0, 0.15), (1_200.0, 0.60), (1_400.0, 1.0)] {
+        let frames = frames_at(config.clone(), rpm, pedal, 293.15, 32_768);
+        let peak = frames.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            peak < 1.0,
+            "at {rpm:.0} rpm and {pedal:.2} pedal a single path reached {peak}, so the \
+             clamp engaged and is no longer only a safety net"
+        );
+    }
+}
+
+#[test]
+fn every_path_is_finite_and_inside_the_output_range() {
+    // The boundary contract, restated per channel. Each path is played in its
+    // own right by the graph at the far end, so "finite and inside [-1, 1]" has
+    // to hold of each rather than of their sum.
+    let frames = frames_at(config(), 1_400.0, 1.0, 293.15, 40_000);
+    for sample in &frames {
+        assert!(
+            sample.is_finite() && sample.abs() <= 1.0,
+            "sample out of range: {sample}"
+        );
+    }
+}
+
+#[test]
+fn the_paths_are_emitted_in_the_documented_order() {
+    // The interleave order is a contract with `web/src/lib/cabin.ts`, which
+    // gives each path a different transfer and cannot tell them apart by
+    // content. Asserted by their signatures rather than by reading the
+    // constants back, which would only restate them: the body path is almost
+    // entirely below 80 Hz and the block path almost entirely above 300 Hz, so
+    // if the two were transposed the cab would filter each with the other's
+    // route and this would catch it.
+    let frames = frames_at(config(), 1_400.0, 1.0, 293.15, 32_768);
+    let f0 = firing_hz(1_400.0, config().config().geometry.cylinders);
+
+    let low_heavy = |path: usize| {
+        let samples = path_of(&frames, path);
+        let low: f64 = (1..=2).map(|n| line_power(&samples, f0 * n as f64)).sum();
+        let high: f64 = [1_500.0, 3_000.0]
+            .iter()
+            .map(|hz| line_power(&samples, *hz))
+            .sum();
+        low / high.max(1.0e-30)
+    };
+
+    assert!(
+        low_heavy(BODY) > low_heavy(BLOCK) * 100.0,
+        "the body path must be the low one and the block path the high one; \
+         body/block low-to-high ratios were {:.3e} and {:.3e}",
+        low_heavy(BODY),
+        low_heavy(BLOCK)
+    );
+    assert!(
+        low_heavy(EXHAUST) > low_heavy(BLOCK),
+        "the exhaust path carries the firing orders, so it must be lower-weighted \
+         than the clatter: {:.3e} against {:.3e}",
+        low_heavy(EXHAUST),
+        low_heavy(BLOCK)
     );
 }

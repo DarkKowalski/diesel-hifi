@@ -39,8 +39,8 @@ kinetics, aftertreatment chemistry.
 | `crates/sim-wasm` | `wasm-bindgen` adapter. Serialization and boundary only; no physics. |
 | `web/src/worker` | WASM lifecycle, fixed-step scheduling, batching, message protocol. |
 | `web/src` | Svelte UI, input, telemetry rendering, Web Audio orchestration. |
-| `web/src/audio` | `AudioWorklet` processor: ring buffer, resampler, underrun accounting. Dependency-free plain JavaScript. |
-| `web/src/lib/cabin.ts` | Cockpit listening stage as data: filter table, reflection taps, seeded impulse response. Pure and Web-Audio-free, unit-tested under Node. |
+| `web/src/audio` | `AudioWorklet` processor: ring of interleaved frames, resampler, underrun accounting. Dependency-free plain JavaScript. |
+| `web/src/lib/cabin.ts` | Cockpit listening stage as data: per-path transfers, shared filter table, reflection taps, seeded impulse response. Pure and Web-Audio-free, unit-tested under Node. |
 | `scripts/verify-dist.mjs` | Static-build verification. |
 
 The production artifact is `web/dist` and must run from a domain root or a
@@ -92,15 +92,18 @@ generator standing between it and the model.
 
 Versioned and deliberately coarse: list configuration summaries, return the
 active ID, select by ID, reset with an explicit seed and initial conditions,
-submit controls, advance many fixed steps, return one compact snapshot. Errors
+submit controls, advance many fixed steps, return one compact snapshot. Audio
+crosses separately from the snapshot, as **interleaved frames** — one frame per
+solver step, `audioPathCount()` floats to a frame — because a batch carries
+thousands of them and a snapshot has to stay compact. Errors
 are structured for invalid IDs, inputs and numerical state. Memory ownership is
 explicit and there are no per-step JS/WASM calls. The module runs in a dedicated
 Web Worker and needs neither `SharedArrayBuffer` nor cross-origin isolation.
 
 The UI provides an engine selector populated through the real catalog API,
 start/stop and reset, pedal and load controls, RPM with pressure/torque/state
-telemetry, visible error and worker lifecycle states, and **an explicit user
-action before Web Audio starts**.
+telemetry, visible error and worker lifecycle states, a solo toggle per
+radiating path, and **an explicit user action before Web Audio starts**.
 
 ## Milestones
 
@@ -112,6 +115,7 @@ action before Web Audio starts**.
 | 4 | Truck load and engine brake: rigid driveline and the staged decompression brake, against the published M5U anchors. |
 | 5 | Engine acoustics: structural combustion noise, per-cylinder build scatter, radiated port flow, an exhaust duct with runners and turbine loss, and a retuned cockpit stage. |
 | 6 | Making it sound like a truck: a torque-driven body path, a bounded pipe-mouth radiation transfer, a lower and broader modal bank, cycle-to-cycle combustion variation, and acceptance criteria that measure firing orders and pulse dynamics rather than band shares alone. |
+| 7 | Three paths to the listener: the radiating paths cross the boundary interleaved instead of summed, each gets its own cab transfer, and the UI can solo them. |
 
 Still out: aftertreatment chemistry, clutch slip and gear-change behaviour, the
 manual's shift-assist and engine-stop-assist brake functions, ABS interaction,
@@ -173,9 +177,11 @@ as an interpretation, not as published fact.
 ### Sound
 
 The engine note is not synthesised. The 25 µs step is a 40 kHz sample rate, so
-the solver emits **one audio sample per step** from quantities it already
+the solver emits **one audio frame per step** from quantities it already
 integrates. Three paths radiate, each driven by a different quantity, because
-they are three different mechanisms:
+they are three different mechanisms — and they cross the boundary **separately**,
+interleaved into that frame, because they do not reach a listener by the same
+route either:
 
 - **The exhaust**, driven by port mass flow. The net flow the ports actually
   passed — the same clamped, settled flow `flow::exchange` applies to the gas,
@@ -250,6 +256,24 @@ figure is the single one that decides whether this reads as a truck: the exhaust
 carries the firing orders and the block sits on top of them, and a block in front
 of the exhaust is a small engine however the bands come out.
 
+**The paths are summed at the listener, not in the solver.** Each is a channel
+of its own from the ring buffer through to the Web Audio graph, where `cabin.ts`
+gives it its own transfer. What the solver still does is decide the *saturation*,
+because that is a property of the mix: it clips the sum, takes the ratio of
+clipped to unclipped as a common gain, and scales all three paths by it. Which is
+what a limiter is. The gain is never above one, so the three channels sum to
+exactly the single sample this used to emit — the **raw** listening stage is
+bit-comparable to the previous milestone, and every probe figure above is
+unchanged to the last digit.
+
+Two honest limits on that. The clip decision is made on the *pre-filter* mix, so
+once the cab filters each path differently the filtered sum can exceed the knee;
+the volume control and the cockpit compressor sit downstream of it. And each
+channel carries a final clamp to `[−1, 1]`, because bounding the sum does not by
+itself bound three signed terms — two paths in opposition could in principle each
+exceed it. Measurement says that never happens, and a test says so too, but a
+contract that holds only in practice is not a contract.
+
 **Two measurements exist because band shares are blind to them.** A pulse train
 and a tone can hold identical energy in every band. *Crest factor* — peak over
 RMS — is 3 dB for a sine and double figures for a series of distinct combustion
@@ -267,7 +291,7 @@ rather than sound, and the probe reports it separately so it cannot satisfy a
 high-frequency target it is not signal for. The probe's four full-range bands sum
 to 100% as a self-check.
 
-Eight mistakes this chain invites, all of which were made:
+Nine mistakes this chain invites, all of which were made:
 
 - **A boundary condition cannot make a sound.** Clamping cylinder pressure to the
   manifold during the exhaust stroke makes the pressure difference across the
@@ -309,6 +333,14 @@ Eight mistakes this chain invites, all of which were made:
   36% at idle and from 21% to 53% at cruise, on its own. It is also the corner
   the duct already used on the *reflected* wave for exactly the same reason; the
   two sides of one physical corner had been given different treatment.
+- **A boundary that has already added things up cannot be un-added.** The three
+  paths were summed in the solver for two milestones, so one cab transfer acted
+  on a mixture of a tailpipe several metres away, an engine two feet away through
+  the bulkhead, and a frame arriving through the seat. The compromise is legible
+  in what the shared low pass had to be: 1.7 kHz, then 2.6 kHz, neither right,
+  because one number cannot describe two routes. Splitting the paths was not a
+  refactor in search of a benefit — it was the only way to stop the filter
+  contradicting itself.
 - **A path driven by the wrong quantity cannot be fixed with gain.** Cylinder
   pressure drives the block's bending and breathing modes and produces clatter.
   No setting of its gain produces low-order weight, because the drive has none:
@@ -324,16 +356,42 @@ the stage is switchable: **raw tailpipe** (unfiltered, what the spectrum view wa
 built to verify) or **truck cockpit** (default).
 
 The cab is a Web Audio chain in `cabin.ts` and `audioEngine.ts`, not a change to
-the physics: 30 Hz high pass, a +5 dB low shelf at 150 Hz, +2.5 dB at 200 Hz,
-−2 dB at 600 Hz, a 2.6 kHz low pass, two early reflections at 7.3 and 11.9 ms
-panned apart, a seeded impulse response, and a compressor. Both paths always run;
-switching crossfades over 40 ms. The low pass sits at 2.6 kHz rather than lower
-because a cab takes the sharp edge off an exhaust; it does not silence an engine
-two feet away through the bulkhead, and clatter is emphatically audible from a
-driver's seat.
+the physics. **Each radiating path takes its own route to the driver**, and then
+everything shared happens once:
 
-Three of those stages moved when the source did, because each had been tuned
-against a signal that no longer exists:
+| | own EQ | delay | room send |
+|---|---|---:|---:|
+| Exhaust | low pass 1.6 kHz, −3 dB at 400 Hz | 12 ms | 1.0 |
+| Block | low pass 3.2 kHz, +2 dB at 1 kHz | 2 ms | 0.4 |
+| Body | low pass 250 Hz, +1 dB at 120 Hz | 0 ms | 0.0 |
+
+The exhaust leaves a stack several metres behind and below and arrives through
+the rear wall and a length of outside air: the most muffled of the three, and the
+only one with a propagation delay worth having — 12 ms is about four metres, and
+it is what stops the tailpipe and the block sounding like one source in one
+place. The block is two feet away through the bulkhead, the one thing genuinely
+in the cab with the driver, so it keeps its top end. The body arrives through the
+mounts, the frame and the seat with no air path at all, so it gets **no delay and
+no room whatever**: a structure-borne path does not arrive as an early reflection
+or a diffuse tail, and reverberating it would be inventing an acoustic route it
+does not take.
+
+**There is no shared low pass any more, and its absence is the point.** It was
+1.7 kHz while the solver produced nothing above that, then 2.6 kHz once the
+structural path put real content at 2.4 and 3.6 kHz — because a cab takes the
+sharp edge off an exhaust several metres away but does not silence an engine two
+feet away through the bulkhead. Both figures were one number trying to describe
+two different routes, and neither could.
+
+Then, shared: 30 Hz high pass, a +5 dB low shelf at 150 Hz, +2.5 dB at 200 Hz,
+−2 dB at 600 Hz, two early reflections at 7.3 and 11.9 ms panned apart, a seeded
+impulse response, and a compressor. Those describe the cab as a box and the
+listener's speaker rather than any one source, so they act once on everything
+that reaches the driver rather than once per path and again through the
+reflections. Both stages always run; switching crossfades over 40 ms.
+
+Three of the shared stages moved when the *source* changed in milestone 6,
+because each had been tuned against a signal that no longer exists:
 
 - **The 85 Hz peak became a 150 Hz shelf.** A bump that narrow is a resonance,
   and picking one frequency out of a firing comb that sweeps from 28 Hz at idle
@@ -369,17 +427,25 @@ stage builds nothing that can produce sound on its own.
 alone the cab sat level under load and 6.3 dB louder at idle, because the
 compressor works at the loud end and does nothing at the quiet end. Trimming
 ahead of the compressor moves the quiet end nearly decibel for decibel and the
-compressed loud end far less, so trim-then-make-up (0.42 in, 1.55 out) brings
+compressed loud end far less, so trim-then-make-up (0.42 in, 1.41 out) brings
 both together:
 
 | Measured at the output | Idle | 90% pedal, 300 N·m |
 |---|---:|---:|
-| Cockpit level relative to raw | +0.89 dB | −0.74 dB |
-| 2–8 kHz band | — | −34% |
-| 60–400 Hz band | — | +5% |
+| Cockpit level relative to raw | +1.70 dB | −1.64 dB |
+| 2–8 kHz band | — | −40% |
+| 60–400 Hz band | — | 0% |
 
 Both ends are asserted within 3 dB by the browser suite through the same analyser
-the spectrum view uses. The remaining spread is the compressor doing its job.
+the spectrum view uses.
+
+That spread was ±0.8 dB before the paths were split, and it widened for a real
+reason rather than through carelessness. Each path now has its own filters, and
+the two operating points put their energy in different places — 90% of full load
+sits in 80–300 Hz against 66% at idle — so the cab removes different amounts at
+the two ends, and no pair of gains can zero both. The pair is centred on the
+spread instead: zeroing idle put load at −3.3 dB, and chasing one end is the
+exact mistake the input trim was introduced to stop.
 
 None of this is published. The manual says nothing about how the engine sounds
 and less about how its cab sounds; these are listening choices and the UI says so
@@ -492,7 +558,7 @@ none of it supplies these numbers.
 | **Combustion noise** | The weights still *ascend* with frequency, which is the opposite of the radiating physics. This was re-examined and kept: descending weights were tried, on the argument that a big engine should ring low, and they starved the top end to under 1% above 2 kHz because the drive genuinely falls that steeply — the premixed Wiebe rise starts with zero slope, so the model's burn onset drives the upper modes far more weakly than a real one would. The weights compensate for a shortfall in the drive rather than claiming an engine radiates more at 3.6 kHz than at 750 Hz. What changed instead is where the bank *starts* and how sharp it is |
 | **Cylinder build scatter** | ±2% exhaust port area, ±1.5% injector delivery, drawn once per cylinder at reset from the reset seed and never per step. Six bit-identical cylinders sum to a pure harmonic comb the ear hears as synthesised. Far too small to move any calibration result, and a test asserts peak power and torque are unchanged by it |
 | **Cycle-to-cycle scatter** | ±2% delivered fuel, drawn once per cylinder *per cycle* at intake valve closing from the same seeded stream. Build scatter makes the cylinders differ from each other; this makes a cylinder differ from its own last cycle, without which the engine is a six-event loop on repeat. Its effect is honestly modest — see **Modelling simplifications** — and it is held to the same no-calibration-change standard as the build spreads |
-| **Cockpit listening stage** | 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; 2.6 kHz low pass; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.55 out. Presentation only — downstream of everything, changes no state, bypassable |
+| **Cockpit listening stage** | Per path: exhaust low-passed at 1.6 kHz with −3 dB at 400 Hz, delayed 12 ms, full room send; block low-passed at 3.2 kHz with +2 dB at 1 kHz, delayed 2 ms, 0.4 room send; body low-passed at 250 Hz with +1 dB at 120 Hz, no delay and **no room send at all**. Then shared: 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.41 out. No shared low pass: one figure could not describe a tailpipe metres away and an engine through the bulkhead at once. Presentation only — downstream of everything, changes no state, bypassable |
 | **Body and mount response** | Four modes at 60, 95, 150 and 220 Hz at Q 4.0, 4.0, 4.5 and 5.0, weighted 1.0, 1.0, 0.8 and 0.5, driven by gas plus pumping torque normalised by rated torque. Q in the single figures because a trimmed cab panel is heavily damped and a sharp bank here jumps in level as the firing frequency sweeps past each mode. This is a *vehicle* response excited by the engine, not an engine property; the source is an engine manual and publishes nothing about either |
 
 ## Modelling simplifications
@@ -534,14 +600,18 @@ none of it supplies these numbers.
   variation is 1.00 times, exactly none. That load dependence matches published
   behaviour — a few percent at light load, under one at high — and it emerges
   from a limiter that is there for another reason rather than from a schedule.
-- **The three paths are summed in the solver, not at the listener.** The whole
-  chain from the ring buffer to the worklet is mono, and the soft clipper acts on
-  the mix. Filtering each path with its own cab transfer would be more correct —
-  the exhaust reaches a driver from a stack behind and below, the block through
-  the bulkhead, the body through the seat — and is the obvious next milestone. It
-  is not done here because it moves the clipper downstream of the mix, which is
-  what the "one sample per solver step, finite and inside `[−1, 1]`" criteria are
-  written against.
+- **The three paths are aligned by construction, not by agreement.** They share
+  one ring buffer and one fractional read position from the solver through to the
+  worklet's resampler, interleaved a frame at a time. Three buffers with three
+  sets of cursors could be filled or drained unevenly and slide apart, and a
+  fixed delay between the exhaust and the block is not something a listener would
+  hear as anything but wrong. Interleaving makes misalignment unrepresentable
+  rather than merely unlikely, which is why an overrun drops a whole frame and a
+  drain refuses to write a partial one.
+- **Three channels are three mono paths, not a spatial layout.** The worklet's
+  output carries them as discrete channels because that is how aligned signals
+  travel through one Web Audio node; the stereo image is still made downstream by
+  the panned reflection taps and the stereo convolver.
 - **The exhaust duct is one-dimensional.** A waveguide with a lumped turbine loss
   and the aftertreatment box as an equivalent added length. The added-length
   approximation is a low-frequency one and stops describing the box once a
@@ -602,11 +672,12 @@ repeating its last block, so a stall is audible rather than disguised.
   loading at both a domain root and a configurable subpath.
 - Any calibration target not directly published is visible in source metadata and
   in this document.
-- Audio: exactly one sample per solver step; bit-identical across batch
-  boundaries; every sample finite and inside `[−1, 1]`; a reset engine silent and
-  a reset click-free; the note at the firing frequency for any cylinder count; a
-  standing torque and a standing cylinder pressure both radiating nothing; the
-  figures in **Results → Sound** met.
+- Audio: exactly one **frame** per solver step, three paths interleaved;
+  bit-identical across batch boundaries in every path; every sample of every path
+  finite and inside `[−1, 1]`, and their **sum** inside the soft-clip knee; a
+  reset engine silent and a reset click-free; the note at the firing frequency for
+  any cylinder count; a standing torque and a standing cylinder pressure both
+  radiating nothing; the figures in **Results → Sound** met.
 
 **The audio criteria were rewritten, and the old ones are recorded here because
 they are the reason this shipped sounding wrong.** They were:
@@ -643,7 +714,7 @@ pnpm install --frozen-lockfile
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 257 tests: geometry, provenance, catalog,
+cargo test --workspace          # 262 tests: geometry, provenance, catalog,
                                 # determinism, limits, combustion, heat transfer,
                                 # turbo, EGR, acoustics, brake, driveline,
                                 # dyno calibration, ID-branch guard
@@ -669,7 +740,9 @@ Three calibration probes sit behind the figures above:
 `--example brake_sweep` for the brake against its published anchors, and
 `--example audio_probe` for levels, where their energy sits, how much of it is in
 the firing orders, whether it is a pulse train or a tone, and which of the three
-paths is in front.
+paths is in front. The probe reads the paths as channels of one run rather than
+re-running the engine with gains zeroed, so the figures it compares cannot have
+drifted apart.
 
 ## Legal and fidelity boundaries
 

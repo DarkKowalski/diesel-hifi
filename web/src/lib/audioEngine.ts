@@ -13,10 +13,18 @@
  * isolation the deployment target cannot rely on).
  *
  * ```text
- *              ┌─ dry ───────────────────────────────────┐
- *   worklet ─ split                                      mix ─ volume ─ analyser ─ out
- *              └─ cab EQ ─ reflections ─ compressor ─ wet ┘
+ *                        ┌──────────── dry ────────────────────────────┐
+ *   worklet ─ splitter ─ path gains                                    mix ─ volume ─ analyser ─ out
+ *              (3 ch)    └─ per-path EQ + delay ─┬─ arrivals ─ direct ─┐
+ *                                                └─ room send ─ taps ──┤
+ *                                                      └─ convolver ───┤
+ *                                                   room ─ shared EQ ─ compressor ─ wet
  * ```
+ *
+ * The worklet hands over three channels, not one: the exhaust, the block and
+ * the body reach a driver by different routes, so each gets its own transfer
+ * before anything is summed. `dry` is the three added straight back up, which is
+ * exactly the single sample the solver used to emit.
  *
  * Both paths are built once and always run; switching stages crossfades between
  * them. Building the cab chain lazily would mean allocating and connecting nodes
@@ -28,9 +36,17 @@
 // path Vite rewrites for whatever base the site is served from. That keeps it
 // working at a domain root and under a subpath, with nothing fetched remotely.
 import processorUrl from '../audio/exhaust-processor.js?url';
-import { CABIN_SPEC, generateImpulseResponse, type AudioStage, type CabinSpec } from './cabin';
+import {
+  AUDIO_PATHS,
+  CABIN_SPEC,
+  generateImpulseResponse,
+  type AudioPath,
+  type AudioStage,
+  type CabinSpec,
+  type FilterStage,
+} from './cabin';
 
-export type { AudioStage } from './cabin';
+export type { AudioPath, AudioStage } from './cabin';
 
 export interface AudioStatus {
   /** Whether the graph is built and the context is running. */
@@ -66,12 +82,21 @@ const FFT_SIZE = 8192;
 
 /** Everything the post-processing stage owns, plus the two ends it exposes. */
 export interface StageGraph {
-  /** Where the source connects. Feeds both paths. */
+  /** Where the source connects. Feeds both stages. */
   input: AudioNode;
-  /** Where both paths land. Connects onward to volume and the analyser. */
+  /** Where both stages land. Connects onward to volume and the analyser. */
   output: AudioNode;
   dryGain: GainNode;
   wetGain: GainNode;
+  /**
+   * One gain per radiating path, for soloing and muting.
+   *
+   * Downstream of the split and upstream of everything else, so it removes a
+   * path from both stages at once — which is what makes it a listening control
+   * rather than a second balance. The engine keeps producing all three; nothing
+   * about the simulation changes.
+   */
+  pathGains: Record<AudioPath, GainNode>;
   /** Every node, for teardown. */
   nodes: AudioNode[];
 }
@@ -97,31 +122,93 @@ export function buildStageGraph(
   const input = keep(context.createGain());
   const mix = keep(context.createGain());
 
-  // Dry: the tailpipe signal, untouched. This is the path the spectrum view was
-  // built to verify, and it stays exactly as it was.
+  /** Build a biquad chain onto `from`, returning its far end. */
+  const chain = (from: AudioNode, stages: readonly FilterStage[]): AudioNode => {
+    let tail = from;
+    for (const stage of stages) {
+      const filter = keep(context.createBiquadFilter());
+      filter.type = stage.type;
+      filter.frequency.value = stage.frequencyHz;
+      filter.Q.value = stage.q;
+      filter.gain.value = stage.gainDb;
+      tail.connect(filter);
+      tail = filter;
+    }
+    return tail;
+  };
+
+  // Split the worklet's three channels apart. The split happens immediately at
+  // the node output because `ChannelSplitterNode` is specified as explicit and
+  // discrete: anything else in between could apply Web Audio's up- and
+  // down-mixing rules and treat three mono paths as some surround layout.
+  const splitter = keep(context.createChannelSplitter(AUDIO_PATHS.length));
+  input.connect(splitter);
+
+  // Per-path gains, for soloing. Ahead of both stages so a muted path is muted
+  // in the cab and in the raw sum alike.
+  const pathGains = {} as Record<AudioPath, GainNode>;
+  AUDIO_PATHS.forEach((path, index) => {
+    const gain = keep(context.createGain());
+    splitter.connect(gain, index);
+    pathGains[path] = gain;
+  });
+
+  // Dry: the three paths added back up, untouched. That sum is exactly the
+  // single sample the solver used to emit — the saturation is decided on the mix
+  // and applied to the paths as a common gain — so this is the same signal the
+  // spectrum view was built to verify.
   const dryGain = keep(context.createGain());
-  input.connect(dryGain);
+  for (const path of AUDIO_PATHS) {
+    pathGains[path].connect(dryGain);
+  }
   dryGain.connect(mix);
 
-  // Wet: the same samples, through the cab.
-  let tail: AudioNode = input;
-  for (const stage of spec.filters) {
-    const filter = keep(context.createBiquadFilter());
-    filter.type = stage.type;
-    filter.frequency.value = stage.frequencyHz;
-    filter.Q.value = stage.q;
-    filter.gain.value = stage.gainDb;
-    tail.connect(filter);
-    tail = filter;
+  // Wet: each path by its own route, then everything shared.
+  //
+  // This is what the split is for. The exhaust leaves a stack metres behind and
+  // below and arrives muffled and late; the block is two feet away through the
+  // bulkhead and keeps its top end; the body comes through the mounts and the
+  // seat with no air path, so it gets no delay and no room at all. One chain
+  // could not say any of that, and the values it settled on instead are
+  // recorded in `cabin.ts`.
+  // `arrivals` is every path after its own route: the sound as it gets to the
+  // driver. `roomSource` is the part of it that arrives *through the air* and so
+  // has reflections and a tail. They are different sums because the body path
+  // belongs in the first and not the second.
+  const arrivals = keep(context.createGain());
+  const roomSource = keep(context.createGain());
+
+  for (const path of AUDIO_PATHS) {
+    const stage = spec.paths[path];
+    let tail: AudioNode = chain(pathGains[path], stage.filters);
+
+    if (stage.delayS > 0) {
+      const delay = keep(context.createDelay(Math.max(stage.delayS, 0.001) * 2));
+      delay.delayTime.value = stage.delayS;
+      tail.connect(delay);
+      tail = delay;
+    }
+
+    tail.connect(arrivals);
+
+    // A zero send is left unbuilt rather than built at zero gain. The body path
+    // does not reach the driver through the air, so it has no reflections and no
+    // tail; a silent node claiming otherwise would be a worse description.
+    if (stage.roomSend > 0) {
+      const send = keep(context.createGain());
+      send.gain.value = stage.roomSend;
+      tail.connect(send);
+      send.connect(roomSource);
+    }
   }
 
-  // Fan the filtered signal out to the direct sound, the discrete early
-  // reflections, and the diffuse tail, then sum them again.
+  // Fan out to the direct sound, the discrete early reflections, and the
+  // diffuse tail, then sum them again.
   const room = keep(context.createGain());
 
   const direct = keep(context.createGain());
   direct.gain.value = spec.directGain;
-  tail.connect(direct);
+  arrivals.connect(direct);
   direct.connect(room);
 
   for (const tap of spec.taps) {
@@ -131,7 +218,7 @@ export function buildStageGraph(
     level.gain.value = tap.gain;
     const panner = keep(context.createStereoPanner());
     panner.pan.value = tap.pan;
-    tail.connect(delay);
+    roomSource.connect(delay);
     delay.connect(level);
     level.connect(panner);
     panner.connect(room);
@@ -149,16 +236,22 @@ export function buildStageGraph(
   convolver.buffer = buffer;
   const reverb = keep(context.createGain());
   reverb.gain.value = spec.reverbGain;
-  tail.connect(convolver);
+  roomSource.connect(convolver);
   convolver.connect(reverb);
   reverb.connect(room);
+
+  // The shared stages last, so they act once on everything that reaches the
+  // driver rather than once per path and again through the reflections. They are
+  // the cab as a box and the listener's speaker; the routing above was the three
+  // sources and where they are.
+  const shared = chain(room, spec.filters);
 
   // Trim before the compressor, make it up after. Splitting the level match
   // across the compressor is what lets idle and full load both come out level
   // with the dry path; a single output gain can only match one of them.
   const trim = keep(context.createGain());
   trim.gain.value = spec.dynamics.inputGain;
-  room.connect(trim);
+  shared.connect(trim);
 
   // A hard box compresses what happens inside it, and this also keeps idle
   // audible without the start transient — the loudest thing the engine does —
@@ -179,7 +272,7 @@ export function buildStageGraph(
   makeup.connect(wetGain);
   wetGain.connect(mix);
 
-  return { input, output: mix, dryGain, wetGain, nodes };
+  return { input, output: mix, dryGain, wetGain, pathGains, nodes };
 }
 
 /**
@@ -224,6 +317,11 @@ export class AudioEngine {
   private listener: AudioStatusListener | null = null;
   private volume = 0.6;
   private stage: AudioStage = 'cockpit';
+  private pathEnabled: Record<AudioPath, boolean> = {
+    exhaust: true,
+    block: true,
+    body: true,
+  };
 
   constructor(listener?: AudioStatusListener) {
     this.listener = listener ?? null;
@@ -254,10 +352,14 @@ export class AudioEngine {
     const context = new AudioContext();
     await context.audioWorklet.addModule(processorUrl);
 
+    // One output carrying the three radiating paths as discrete channels. The
+    // splitter downstream separates them; they are three mono signals rather
+    // than a spatial layout, and the stereo image is made after the split by
+    // the panned reflection taps and the stereo convolver.
     const node = new AudioWorkletNode(context, 'exhaust-processor', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
-      outputChannelCount: [1],
+      outputChannelCount: [AUDIO_PATHS.length],
       processorOptions: { sourceRateHz },
     });
 
@@ -302,6 +404,9 @@ export class AudioEngine {
     // No ramp here: the graph has produced nothing yet, so there is no step
     // discontinuity to smooth and starting mid-crossfade would be audible.
     this.applyStage(0);
+    for (const path of AUDIO_PATHS) {
+      graph.pathGains[path].gain.value = this.pathEnabled[path] ? 1 : 0;
+    }
 
     // Some browsers hand back a suspended context even from a gesture.
     await context.resume();
@@ -312,10 +417,38 @@ export class AudioEngine {
     });
   }
 
-  /** Hand a block of samples to the worklet, transferring ownership. */
-  push(samples: Float32Array): void {
+  /**
+   * Hand a block of interleaved frames to the worklet, transferring ownership.
+   *
+   * `paths` travels with the block. The worklet refuses a block whose count
+   * disagrees with its own rather than de-interleaving on a guess: reading
+   * three-path frames as two produces a signal that is neither silent nor
+   * recognisably wrong, and shuffles which cab transfer each path receives.
+   */
+  push(samples: Float32Array, paths: number): void {
     if (!this.node || samples.length === 0) return;
-    this.node.port.postMessage({ type: 'samples', samples }, [samples.buffer]);
+    this.node.port.postMessage({ type: 'samples', samples, paths }, [samples.buffer]);
+  }
+
+  /**
+   * Silence or restore one radiating path.
+   *
+   * A listening control, downstream of everything and upstream of both stages,
+   * so it changes no state and the solver keeps producing all three. The
+   * balance itself is calibrated against `audio_probe`, not by ear; this is for
+   * hearing what each path contributes.
+   */
+  setPathEnabled(path: AudioPath, enabled: boolean): void {
+    this.pathEnabled[path] = enabled;
+    const gain = this.graph?.pathGains[path];
+    if (gain && this.context) {
+      // Ramp rather than jump: a step in gain is a step in the output.
+      gain.gain.setTargetAtTime(enabled ? 1 : 0, this.context.currentTime, 0.01);
+    }
+  }
+
+  isPathEnabled(path: AudioPath): boolean {
+    return this.pathEnabled[path];
   }
 
   /**
