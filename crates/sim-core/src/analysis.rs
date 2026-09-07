@@ -30,15 +30,23 @@
 //! | [`crest_db`] | peaks over average: distinct events, or a steady buzz | where the energy sits |
 //! | [`modulation_depth`] | does the *envelope* swing at the firing rate | absolute level |
 //! | [`estimate_firing_hz`] | what speed is this thing turning at | whether it is an engine at all |
+//! | [`jumps`] | did the trace get here by integrating, or by being assigned | anything continuous |
 //!
 //! They are deliberately a set that cannot all be satisfied by pushing energy in
 //! one direction. A tone can hold any band share you like and fails the last
 //! two; noise passes the crest test at the wrong value and fails the comb.
 //!
-//! The last of them is the odd one out, and it is here because a *recording*
-//! does not come with an rpm reading. Everything above it needs an `f0` before
-//! it can say anything, and for the model that comes from the solver's own crank
-//! speed. For a reference recording it has to be recovered from the signal.
+//! [`estimate_firing_hz`] is here because a *recording* does not come with an
+//! rpm reading. Everything above it needs an `f0` before it can say anything,
+//! and for the model that comes from the solver's own crank speed. For a
+//! reference recording it has to be recovered from the signal.
+//!
+//! [`jumps`] is the only one pointed at a signal *before* it is filtered rather
+//! than after. Every metric above it measures what left the boundary, by which
+//! point a resonator bank has spread any one-step defect over tens of
+//! milliseconds and it no longer looks like a defect. The question of whether a
+//! path is being driven by something the solver integrated or by something it
+//! assigned can only be asked of the drive.
 
 use std::f64::consts::{PI, TAU};
 
@@ -678,6 +686,154 @@ pub fn estimate_firing_hz(
         comb_share: spectrum.comb_share(refined_hz, orders),
         score: best_score,
     })
+}
+
+/// A step in a trace that no integration could have produced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Jump {
+    /// Index of the later of the two samples the step lies between, so the step
+    /// is `samples[index] - samples[index - 1]`.
+    pub index: usize,
+    /// Height of the step, signed.
+    pub size: f64,
+    /// How far the step stands above the steps either side of it. One means it
+    /// is no larger than its neighbours; large means it is a lone spike.
+    pub isolation: f64,
+}
+
+/// Differences below this fraction of the largest one are numerical dust and are
+/// never reported, however isolated they look.
+///
+/// A flat stretch of a trace still wobbles in the last bits, and a wobble
+/// surrounded by smaller wobbles has an enormous isolation ratio and no meaning.
+const JUMP_DUST_FRACTION: f64 = 1.0e-3;
+
+/// Samples a trace reached by assignment rather than by integrating to them.
+///
+/// **Why this is a measurement and not a repair.** Everything the solver
+/// integrates is continuous at the step: pressure, flow and torque all move by a
+/// bounded amount in 25 µs because a derivative bounds them. Everything the
+/// solver *assigns* — a phase boundary that clamps a cylinder to a manifold, a
+/// charge recomputed from a fresh gas-law evaluation — is not. Both look alike
+/// in a plot of the trace and are entirely different downstream: the structural
+/// path differentiates its forcing, and the derivative of a step is an impulse,
+/// and an impulse is white. So a boundary assignment enters a resonator bank as
+/// broadband excitation indistinguishable from combustion noise.
+///
+/// The test is *isolation*, not size. A combustion pressure rise is fast and
+/// large and spans tens of steps, so each of its differences is roughly the size
+/// of its neighbours; a one-step assignment is a lone difference between two
+/// small ones. Measured on the shipped configuration the two populations do not
+/// overlap — the burn ridge sits near 1.1 and the gas-exchange transitions
+/// between 7 and 11 — which is what makes a fixed threshold usable rather than
+/// fitted. See **Results → Sound → What the traces contain** in `README.md`.
+///
+/// `min_isolation` is the ratio a difference must exceed against the larger of
+/// its two neighbours. The first and last differences have only one neighbour
+/// each and are never reported.
+///
+/// ## What it is not for
+///
+/// **A trace whose samples are independent defeats it, and that is not a bug to
+/// be tuned out.** Isolation asks whether a sample is unreachable from its
+/// neighbours, and in white noise no sample is reachable from its neighbours: at
+/// a threshold of 3 it reports about 5% of a noise trace, with individual ratios
+/// reaching the hundreds by chance. `tests/analysis.rs` measures exactly that
+/// and asserts the tail rather than pretending it away.
+///
+/// The signals this is pointed at are not noise. A pressure, a flow and a torque
+/// that a fixed-step solver integrated move by a bounded amount per step by
+/// construction, so their differences are strongly correlated and the tail is
+/// nothing like this. Raising the threshold until noise stopped registering
+/// would only mean the number had been fitted to a signal nobody is measuring.
+#[must_use]
+pub fn jumps(samples: &[f64], min_isolation: f64) -> Vec<Jump> {
+    if samples.len() < 4 {
+        return Vec::new();
+    }
+    let differences: Vec<f64> = samples.windows(2).map(|w| w[1] - w[0]).collect();
+    let largest = differences.iter().fold(0.0f64, |m, d| m.max(d.abs()));
+    let dust = largest * JUMP_DUST_FRACTION;
+
+    (1..differences.len() - 1)
+        .filter_map(|k| {
+            let size = differences[k];
+            if size.abs() <= dust {
+                return None;
+            }
+            let neighbours = differences[k - 1].abs().max(differences[k + 1].abs());
+            let isolation = if neighbours > 0.0 {
+                size.abs() / neighbours
+            } else {
+                f64::INFINITY
+            };
+            (isolation >= min_isolation).then_some(Jump {
+                // `differences[k]` spans `samples[k]` to `samples[k + 1]`.
+                index: k + 1,
+                size,
+                isolation,
+            })
+        })
+        .collect()
+}
+
+/// A copy of `samples` with each [`jumps`] step replaced by what its neighbours
+/// imply, and the trace re-integrated from there.
+///
+/// This is the counterfactual half of the measurement: run a path with the real
+/// trace and again with this one, and the difference is what the assignment
+/// contributes. **It is not a fix and must not become one.** Interpolating a
+/// solver's output is a schedule bolted over a modelling boundary — the boundary
+/// is where the fix belongs.
+#[must_use]
+pub fn without_jumps(samples: &[f64], min_isolation: f64) -> Vec<f64> {
+    let found: Vec<usize> = jumps(samples, min_isolation)
+        .iter()
+        .map(|jump| jump.index)
+        .collect();
+    without_steps_at(samples, &found)
+}
+
+/// [`without_jumps`] against a list of indices instead of a detector.
+///
+/// The step *into* each index is replaced by what its neighbours imply, and the
+/// trace is re-integrated. Indices with no neighbour either side are ignored.
+///
+/// This is the half of the measurement that does not need the defect to be
+/// large enough to detect. The solver knows exactly which steps are valve
+/// events; a blind detector only finds the ones that stand out, and at some
+/// operating points a gas-exchange step is the same size as the combustion slope
+/// it lands on and is invisible to isolation while still being a step. Running
+/// both is what separates "the instrument found something" from "there is
+/// nothing there".
+#[must_use]
+pub fn without_steps_at(samples: &[f64], indices: &[usize]) -> Vec<f64> {
+    if indices.is_empty() || samples.len() < 4 {
+        return samples.to_vec();
+    }
+    let mut differences: Vec<f64> = samples.windows(2).map(|w| w[1] - w[0]).collect();
+    let replacements: Vec<(usize, f64)> = indices
+        .iter()
+        // `index` is the later sample, so `index - 1` is the difference into it.
+        .filter_map(|index| index.checked_sub(1))
+        .filter(|k| *k >= 1 && *k + 1 < differences.len())
+        // Read every replacement off the original differences before writing any
+        // of them, so two adjacent indices cannot have the second interpolate
+        // through the first's repair.
+        .map(|k| (k, 0.5 * (differences[k - 1] + differences[k + 1])))
+        .collect();
+    for (k, value) in replacements {
+        differences[k] = value;
+    }
+
+    let mut out = Vec::with_capacity(samples.len());
+    let mut running = samples[0];
+    out.push(running);
+    for difference in differences {
+        running += difference;
+        out.push(running);
+    }
+    out
 }
 
 /// A synthetic train of raised-cosine pulses at `f0_hz`, for exercising the

@@ -177,6 +177,28 @@ fn rest_exhaust(cfg: &crate::config::EngineConfig) -> manifold::State {
     }
 }
 
+/// The three quantities the radiating paths were driven by on the last step.
+///
+/// Cached the way [`brake::Command`] and [`driveline::Output`] are: resolved
+/// fresh every step and kept only so something outside the loop can read it.
+/// Three stores per step, no allocation, nothing branched on.
+///
+/// It exists because **a source cannot be inspected through its own filters.**
+/// Each path is a resonator bank or a duct away from the sample that leaves the
+/// boundary, and both smear a one-step defect across tens of milliseconds — so
+/// asking whether the drive is continuous has to be asked of the drive.
+/// `examples/trace_probe.rs` is what asks it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AcousticForcing {
+    /// Volume velocity at the tailpipe mouth: what the exhaust path radiates.
+    pub mouth_volume_velocity: f64,
+    /// Summed cylinder pressure over ambient: what shakes the block.
+    pub pressure_sum: f64,
+    /// Gas plus pumping torque over rated torque: what the engine does to its
+    /// mounts.
+    pub torque_fraction: f64,
+}
+
 /// Instantaneous torque terms, refreshed every step.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct StepReport {
@@ -360,6 +382,7 @@ pub struct SimState {
     pub(crate) peak_temperature_k_prev_cycle: f64,
 
     pub(crate) report: StepReport,
+    pub(crate) forcing: AcousticForcing,
     pub(crate) cycle: CycleAverages,
     pub(crate) fault: Option<SimError>,
 }
@@ -425,6 +448,7 @@ impl Simulation {
             peak_temperature_k_cycle: 0.0,
             peak_temperature_k_prev_cycle: 0.0,
             report: StepReport::default(),
+            forcing: AcousticForcing::default(),
             cycle: CycleAverages::default(),
             fault: None,
         };
@@ -499,6 +523,7 @@ impl Simulation {
         state.peak_temperature_k_cycle = 0.0;
         state.peak_temperature_k_prev_cycle = 0.0;
         state.report = StepReport::default();
+        state.forcing = AcousticForcing::default();
         state.cycle.reset();
         state.fault = None;
         state.cylinder_count = cfg.geometry.cylinders;
@@ -603,6 +628,18 @@ impl Simulation {
     /// The driveline contribution resolved on the most recent step.
     pub fn driveline_output(&self) -> driveline::Output {
         self.state.driveline
+    }
+
+    /// What the three radiating paths were driven by on the most recent step.
+    ///
+    /// The arguments [`acoustics::Acoustics::push`] was given, before any of its
+    /// filtering. Reading these is how `examples/trace_probe.rs` asks whether the
+    /// drive is continuous, which cannot be asked of the emitted sample: a
+    /// resonator bank spreads a one-step defect over tens of milliseconds and a
+    /// duct spreads it further, so by the time it reaches the boundary it no
+    /// longer looks like the thing it is.
+    pub fn acoustic_forcing(&self) -> AcousticForcing {
+        self.state.forcing
     }
 
     /// Current controls.

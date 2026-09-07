@@ -27,8 +27,10 @@
   "valvetrain": {
     "intake_valves_per_cylinder": 2,
     "exhaust_valves_per_cylinder": 2,
-    "intake_valve_close_rad": -2.7925268,
+    "intake_valve_close_rad": -2.4434610,
     "exhaust_valve_open_rad": 2.443461,
+    "intake_ramp_rad": 0.6108652,
+    "intake_effective_area_m2": 0.0025,
     "exhaust_ramp_rad": 0.6108652,
     "exhaust_effective_area_m2": 0.0025,
     "exhaust_area_spread": 0.02
@@ -188,7 +190,7 @@
     "anchor_low_power_w": 100000.0,
     "anchor_high_rpm": 2300.0,
     "anchor_high_power_w": 300000.0,
-    "charge_center_rad": -2.268928,
+    "charge_center_rad": -2.234,
     "release_center_rad": -0.2094395,
     "charge_width_rad": 0.1745329,
     "release_width_rad": 0.1745329,
@@ -435,6 +437,26 @@
       "safe_range": [
         2.0,
         3.05
+      ]
+    },
+    {
+      "path": "valvetrain.intake_ramp_rad",
+      "status": "calibrated",
+      "value_note": "35 degrees of crank between shut and full lift, the same as the exhaust side. The manual publishes no valve lift profile for either.",
+      "purpose": "Sets how quickly the intake port opens and shuts. Its acoustic job is the opposite of the exhaust ramp's: the exhaust ramp has to be short so blowdown stays a sharp pulse, while this one has to be long enough that trapping the charge does not put a fast edge into the cylinder pressure trace, which the structural path would differentiate into an impulse. A finite ramp is the whole reason the intake side stopped stepping in milestone 12.",
+      "safe_range": [
+        0.05,
+        1.5
+      ]
+    },
+    {
+      "path": "valvetrain.intake_effective_area_m2",
+      "status": "calibrated",
+      "value_note": "2.5e-3 m^2 for both intake valves at full lift, matching the exhaust port area. The manual publishes the valve count but no lift profile or flow area for either side.",
+      "purpose": "Sets how much air the cylinder actually traps, which is what the smoke limit reads and so what the fuelled peaks are calibrated against. It replaces air_path.volumetric_efficiency as the knob on trapping: with a real port the trapping efficiency is an outcome of area, speed and manifold pressure rather than a fixed multiplier, so it falls with engine speed on its own.",
+      "safe_range": [
+        0.0001,
+        0.02
       ]
     },
     {

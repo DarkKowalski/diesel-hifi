@@ -187,59 +187,85 @@ pub fn ramp(t: f64) -> f64 {
     0.5 * (1.0 - (std::f64::consts::PI * t).cos())
 }
 
-/// Normalised exhaust port open area at a signed cycle angle.
+/// Normalised valve open area at a signed cycle angle.
 ///
-/// A trapezoid: the valve ramps open over `ramp_rad` of crank, holds near full
-/// lift for the exhaust stroke, then ramps shut into TDC overlap.
+/// A trapezoid over the window `[open_rad, close_rad)`: the valve ramps open
+/// over `ramp_rad` of crank, holds near full lift for the stroke, then ramps
+/// shut into the closing angle.
 ///
 /// The ramp width matters far more than it looks. Spreading the opening across
-/// the whole exhaust window — as a single raised cosine over the full span does
-/// — leaves the port almost shut at the exact moment the cylinder-to-manifold
-/// pressure difference is largest. The product is then a slow, smooth hump with
-/// no harmonic content above a few tens of hertz, which is both wrong and
-/// literally inaudible on any ordinary speaker. A real valve cracks open
-/// quickly, and that sharp blowdown edge is what an exhaust actually sounds
-/// like.
+/// the whole window — as a single raised cosine over the full span does — leaves
+/// the port almost shut at the exact moment the cylinder-to-manifold pressure
+/// difference is largest. The product is then a slow, smooth hump with no
+/// harmonic content above a few tens of hertz, which is both wrong and literally
+/// inaudible on any ordinary speaker. A real valve cracks open quickly, and that
+/// sharp blowdown edge is what an exhaust actually sounds like.
+///
+/// **Both gas-exchange windows use this, and the symmetry is the point.** Until
+/// milestone 12 only the exhaust had an area at all: the intake side *assigned*
+/// the cylinder its manifold's pressure, so the trace stepped where the two
+/// descriptions disagreed and the structural path rang the step. Same valve gear,
+/// same function, one calibrated area each.
 #[inline]
-pub fn port_area_fraction(
-    psi: f64,
-    exhaust_valve_open_rad: f64,
-    ramp_rad: f64,
-    cycle_rad: f64,
-) -> f64 {
-    let end = cycle_rad * 0.5;
-    if psi < exhaust_valve_open_rad || psi >= end {
+pub fn valve_area_fraction(psi: f64, open_rad: f64, close_rad: f64, ramp_rad: f64) -> f64 {
+    if psi < open_rad || psi >= close_rad {
         return 0.0;
     }
-    let span = end - exhaust_valve_open_rad;
+    let span = close_rad - open_rad;
     if span <= 0.0 {
         return 0.0;
     }
     // A ramp cannot take more than half the window, or the valve would never
     // reach full lift.
     let width = ramp_rad.clamp(1.0e-6, span * 0.5);
-    let opening = ramp((psi - exhaust_valve_open_rad) / width);
-    let closing = ramp((end - psi) / width);
+    let opening = ramp((psi - open_rad) / width);
+    let closing = ramp((close_rad - psi) / width);
     opening.min(closing)
 }
 
-/// Exhaust port geometry, grouped because these three always travel together.
+/// Port geometry, grouped because these always travel together.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Port {
     /// Flow area at full lift.
     pub effective_area_m2: f64,
     /// Signed cycle angle at which the valve starts to open.
-    pub valve_open_rad: f64,
+    pub open_rad: f64,
+    /// Signed cycle angle by which it is shut again.
+    pub close_rad: f64,
     /// Crank angle taken to ramp between shut and full lift.
     pub ramp_rad: f64,
 }
 
 impl Port {
+    /// The exhaust port: opens at `valve_open_rad`, shut by the end of the cycle
+    /// angle range, which is TDC overlap.
+    #[inline]
+    pub fn exhaust(effective_area_m2: f64, valve_open_rad: f64, ramp_rad: f64) -> Self {
+        Self {
+            effective_area_m2,
+            open_rad: valve_open_rad,
+            close_rad: CYCLE_RAD * 0.5,
+            ramp_rad,
+        }
+    }
+
+    /// The intake port: open from TDC overlap — the bottom of the signed cycle
+    /// angle range — and shut by `intake_valve_close_rad`.
+    #[inline]
+    pub fn intake(effective_area_m2: f64, intake_valve_close_rad: f64, ramp_rad: f64) -> Self {
+        Self {
+            effective_area_m2,
+            open_rad: -CYCLE_RAD * 0.5,
+            close_rad: intake_valve_close_rad,
+            ramp_rad,
+        }
+    }
+
     /// Open area at a signed cycle angle, in square metres.
     #[inline]
     pub fn area_m2(&self, psi: f64) -> f64 {
         self.effective_area_m2
-            * port_area_fraction(psi, self.valve_open_rad, self.ramp_rad, CYCLE_RAD)
+            * valve_area_fraction(psi, self.open_rad, self.close_rad, self.ramp_rad)
     }
 }
 
@@ -1277,12 +1303,10 @@ mod tests {
     #[test]
     fn the_port_is_shut_outside_the_exhaust_window() {
         let evo = 2.4;
-        assert_eq!(port_area_fraction(0.0, evo, RAMP, CYCLE_RAD), 0.0);
-        assert_eq!(port_area_fraction(evo - 0.01, evo, RAMP, CYCLE_RAD), 0.0);
-        assert_eq!(
-            port_area_fraction(CYCLE_RAD * 0.5, evo, RAMP, CYCLE_RAD),
-            0.0
-        );
+        let end = CYCLE_RAD * 0.5;
+        assert_eq!(valve_area_fraction(0.0, evo, end, RAMP), 0.0);
+        assert_eq!(valve_area_fraction(evo - 0.01, evo, end, RAMP), 0.0);
+        assert_eq!(valve_area_fraction(end, evo, end, RAMP), 0.0);
     }
 
     #[test]
@@ -1290,7 +1314,7 @@ mod tests {
         let evo = 2.4;
         let end = CYCLE_RAD * 0.5;
         let mid = (evo + end) * 0.5;
-        let peak = port_area_fraction(mid, evo, RAMP, CYCLE_RAD);
+        let peak = valve_area_fraction(mid, evo, end, RAMP);
         assert!(
             (peak - 1.0).abs() < 1.0e-9,
             "should be fully open at mid-window"
@@ -1299,8 +1323,34 @@ mod tests {
         // Shut at both ends, never negative, never above one.
         for i in 0..=200 {
             let psi = evo + (end - evo) * f64::from(i) / 200.0;
-            let a = port_area_fraction(psi, evo, RAMP, CYCLE_RAD);
+            let a = valve_area_fraction(psi, evo, end, RAMP);
             assert!((0.0..=1.0).contains(&a), "area {a} at psi {psi}");
+        }
+    }
+
+    /// The intake window is the same trapezoid over a different span, and the
+    /// thing that must hold is that it is *shut at both ends*: an intake port
+    /// still open at valve closing would trap the charge through a discontinuity
+    /// in area rather than in pressure, which is the same defect wearing a
+    /// different hat.
+    #[test]
+    fn the_intake_port_is_shut_at_overlap_and_at_valve_closing() {
+        let ivc = -2.7925268;
+        let start = -CYCLE_RAD * 0.5;
+        let port = Port::intake(2.5e-3, ivc, RAMP);
+
+        assert_eq!(port.area_m2(start), 0.0, "shut at TDC overlap");
+        assert_eq!(port.area_m2(ivc), 0.0, "shut at intake valve closing");
+        assert_eq!(port.area_m2(0.0), 0.0, "shut through firing TDC");
+        assert_eq!(port.area_m2(2.0), 0.0, "shut through expansion");
+
+        // Fully open somewhere in the middle, and bounded everywhere in it.
+        let mid = (start + ivc) * 0.5;
+        assert!((port.area_m2(mid) - 2.5e-3).abs() < 1.0e-12);
+        for i in 0..=200 {
+            let psi = start + (ivc - start) * f64::from(i) / 200.0;
+            let a = port.area_m2(psi);
+            assert!((0.0..=2.5e-3).contains(&a), "area {a} at psi {psi}");
         }
     }
 

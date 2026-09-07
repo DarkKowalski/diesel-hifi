@@ -15,7 +15,7 @@ use crate::sim::cylinder::{self, Phase};
 use crate::sim::governor::{self, rpm_to_rad_per_s};
 use crate::sim::{
     acoustics, brake, driveline, egr, flow, gas, heat_release, heat_transfer, ignition_delay,
-    injection, manifold, torque, turbo, wrap_cycle, SimState, StepReport,
+    injection, manifold, torque, turbo, wrap_cycle, AcousticForcing, SimState, StepReport,
 };
 
 pub(super) fn step(
@@ -249,14 +249,24 @@ pub(super) fn step(
     let mut step_peak_temperature_k: f64 = 0.0;
     let mut fuel_latched_kg = 0.0;
 
-    // Port geometry common to every cylinder. The effective area is then
+    // Port geometry common to every cylinder. The exhaust effective area is then
     // trimmed per cylinder below, because no two ports in a real head flow
     // identically and six identical ports are audible as such.
-    let nominal_exhaust_port = acoustics::Port {
-        effective_area_m2: valvetrain.exhaust_effective_area_m2,
-        valve_open_rad: valvetrain.exhaust_valve_open_rad,
-        ramp_rad: valvetrain.exhaust_ramp_rad,
-    };
+    let nominal_exhaust_port = acoustics::Port::exhaust(
+        valvetrain.exhaust_effective_area_m2,
+        valvetrain.exhaust_valve_open_rad,
+        valvetrain.exhaust_ramp_rad,
+    );
+    // The intake port carries no scatter, deliberately. The exhaust trim varies
+    // an *acoustic* source; an intake trim would vary how much air each cylinder
+    // traps, which moves its smoke limit and so its fuelling — a combustion
+    // change wearing an acoustic change's clothes. It is a separate decision from
+    // this one and is not taken here.
+    let intake_port = acoustics::Port::intake(
+        valvetrain.intake_effective_area_m2,
+        valvetrain.intake_valve_close_rad,
+        valvetrain.intake_ramp_rad,
+    );
 
     // Acoustic source, summed across whichever cylinders are blowing down, and
     // the port-area-weighted temperature of the gas they are handing to the
@@ -317,32 +327,39 @@ pub(super) fn step(
         if phase_new == Phase::Closed && c.phase != Phase::Closed {
             // --- intake valve closing ---
             //
-            // Trap the charge drawn from the intake manifold on top of whatever
-            // burned gas survived the exhaust stroke, then schedule this cycle's
-            // injection.
+            // **The charge is already in the cylinder, because it flowed there.**
+            // Until milestone 12 this branch computed the trapped mass from a
+            // fresh gas-law evaluation at manifold conditions scaled by a
+            // calibrated `air_path.volumetric_efficiency`, and assigned it. That
+            // assignment disagreed with the trace it replaced by 6 to 8% of
+            // cylinder pressure — which is the multiplier itself, applied as an
+            // instantaneous multiplication rather than as a throttling loss
+            // spread across the intake stroke — and the structural path
+            // differentiates a step into an impulse. The trapped mass now comes
+            // from `flow::exchange` over the whole induction window, so all this
+            // branch does is start the cycle the closed valve begins.
             //
-            // Two things now dilute the oxygen the smoke limit sees: residual
-            // gas left in the clearance volume, and recirculated exhaust already
+            // Two things dilute the oxygen the smoke limit sees: residual gas
+            // left in the clearance volume, and recirculated exhaust already
             // mixed into the intake manifold. Only the genuinely fresh part of
             // the charge counts as air.
-            let ideal_charge_kg = gas::mass_kg(gas_props, manifold_pa, manifold_k, volume_new_m3)
-                * air.volumetric_efficiency;
+            //
+            // Fresh mass is the **net** gain over the residual, not the gross
+            // inflow, and the difference is not pedantic. At TDC the clearance
+            // volume still holds exhaust-manifold gas at a higher pressure than
+            // the intake manifold, so a cylinder's first act on opening its
+            // intake valve is to blow some residual *back up the intake port* and
+            // then draw it in again. Accumulating gross inflow times
+            // `1 - manifold_burned` counts that returning burned gas as oxygen —
+            // it manufactures air out of residual, and it did: it put peak torque
+            // 5% over published in a way no port area could pull back, because it
+            // scales with residual rather than with throttling.
             let residual_kg = c.residual_kg.max(0.0);
-            let fresh_kg = (ideal_charge_kg - residual_kg).max(0.0);
+            let fresh_kg = (c.mass_kg - residual_kg).max(0.0);
             let air_kg = fresh_kg * (1.0 - manifold_burned).clamp(0.0, 1.0);
-            let total_kg = residual_kg + fresh_kg;
-            let mixed_k = if total_kg > 0.0 {
-                (residual_kg * c.residual_temperature_k + fresh_kg * manifold_k) / total_kg
-            } else {
-                manifold_k
-            };
-
-            c.mass_kg = total_kg;
             c.trapped_air_kg = air_kg;
-            c.temperature_k = mixed_k;
-            c.pressure_pa = gas::pressure_pa(gas_props, total_kg, mixed_k, volume_new_m3);
             c.motored_pressure_pa = c.pressure_pa;
-            c.motored_temperature_k = mixed_k;
+            c.motored_temperature_k = c.temperature_k;
             c.burned_fraction = 0.0;
             c.wall_heat_loss_j = 0.0;
             c.profile_ready = false;
@@ -386,172 +403,131 @@ pub(super) fn step(
             state.last_injection_pressure_pa = c.injection.injection_pressure_pa;
         } else if phase_new == Phase::Intake && c.phase == Phase::Exhaust {
             // --- TDC overlap: whatever is left is the residual for next cycle ---
+            //
+            // **Nothing here touches the gas.** Until milestone 12 this branch
+            // assigned the cylinder the manifold's pressure and temperature and
+            // recomputed its mass from the gas law, which moved the summed
+            // pressure trace by 0.93 atm in one 25 µs step at rated — the largest
+            // single assignment in the model. The gas is now continuous across
+            // the overlap and reaches manifold conditions by flowing through the
+            // intake port, which is what the branch below does.
             c.residual_kg = c.mass_kg.max(0.0);
             c.residual_temperature_k = c.temperature_k;
-            c.temperature_k = manifold_k;
-            c.pressure_pa = manifold_pa;
-            c.mass_kg = gas::mass_kg(gas_props, manifold_pa, manifold_k, volume_new_m3);
+            // `trapped_air_kg` is deliberately *not* cleared here. It is written
+            // once per cycle at intake valve closing, and between overlap and
+            // closing it holds the previous cycle's value — which is what
+            // `mean_trapped_air_kg` needs, because that mean is taken across six
+            // cylinders at one instant and two of them are always mid-induction.
+            // Clearing it here made the reported air-fuel ratio a function of how
+            // many cylinders happened to be inducting, which reads as a
+            // suspiciously round 13.0 in a dyno sweep.
             c.injection = injection::Event::NONE;
             c.profile = heat_release::Profile::NONE;
             c.profile_ready = false;
             c.burned_fraction = 0.0;
-        } else {
-            match phase_new {
-                Phase::Closed => {
-                    // Build the burn profile the moment injection begins, using
-                    // the cylinder conditions actually present at that angle.
-                    let soi = c.injection.start_of_injection_rad;
-                    if !c.profile_ready
-                        && c.injection.fuel_kg > 0.0
-                        && psi_old < soi
-                        && psi_new >= soi
-                    {
-                        let delay_rad = ignition_delay::ignition_delay_rad(
-                            combustion.cetane_number,
-                            c.pressure_pa,
-                            c.temperature_k,
-                            piston_speed_m_per_s,
-                        );
-                        c.profile = heat_release::profile(
-                            combustion,
-                            &c.injection,
-                            delay_rad,
-                            inj.fuel_lower_heating_value_j_per_kg,
-                        );
-                        c.profile_ready = true;
-                        state.last_ignition_delay_rad = delay_rad;
-                        state.last_premixed_fraction = c.profile.premixed_fraction;
-                    }
+        }
 
-                    let dv = volume_new_m3 - volume_old_m3;
-
-                    // Motored trace: isentropic, no combustion, no wall loss.
-                    let gamma = gas::gamma(gas_props, c.motored_temperature_k);
-                    let volume_ratio = if volume_new_m3 > 0.0 {
-                        volume_old_m3 / volume_new_m3
-                    } else {
-                        1.0
-                    };
-                    c.motored_pressure_pa *= volume_ratio.powf(gamma);
-                    c.motored_temperature_k *= volume_ratio.powf(gamma - 1.0);
-
-                    // Injected fuel joins the trapped mass as it is delivered.
-                    let fuel_added_kg = (c.injection.delivered_kg(psi_new)
-                        - c.injection.delivered_kg(psi_old))
-                    .max(0.0);
-                    c.mass_kg += fuel_added_kg;
-
-                    let (heat_j, burned_fraction) = if c.profile_ready {
-                        heat_release::heat_release_j(
-                            combustion,
-                            &c.profile,
-                            c.burned_fraction,
-                            psi_new,
-                        )
-                    } else {
-                        (0.0, c.burned_fraction)
-                    };
-                    c.burned_fraction = burned_fraction;
-
-                    let velocity = heat_transfer::gas_velocity_m_per_s(
-                        &cfg.heat_transfer,
-                        true,
-                        piston_speed_m_per_s,
-                        c.pressure_pa,
-                        c.motored_pressure_pa,
-                        derived.displacement_per_cylinder_m3,
-                        manifold_pa,
-                        manifold_k,
-                        derived.max_volume_m3,
-                    );
-                    let heat_loss_j = heat_transfer::heat_loss_j(
-                        &cfg.heat_transfer,
-                        slider,
-                        bore_m,
-                        psi_new,
+        // The phase branch always runs, including on the step a transition was
+        // detected. It used to be the `else` of the two above, which meant the
+        // step that closed the intake valve advanced no thermodynamics at all —
+        // harmless while the charge was being assigned at that instant anyway,
+        // and a one-step hole in the compression now that it is not.
+        match phase_new {
+            Phase::Closed => {
+                // Build the burn profile the moment injection begins, using
+                // the cylinder conditions actually present at that angle.
+                let soi = c.injection.start_of_injection_rad;
+                if !c.profile_ready && c.injection.fuel_kg > 0.0 && psi_old < soi && psi_new >= soi
+                {
+                    let delay_rad = ignition_delay::ignition_delay_rad(
+                        combustion.cetane_number,
                         c.pressure_pa,
                         c.temperature_k,
-                        velocity,
-                        state.omega_rad_per_s,
-                        d_theta,
+                        piston_speed_m_per_s,
                     );
-                    c.wall_heat_loss_j += heat_loss_j;
-
-                    // dT = [ dQ_comb - dQ_wall - p dV ] / (m cv(T))
-                    let cv = gas::cv_j_per_kg_k(gas_props, c.temperature_k);
-                    if c.mass_kg > 0.0 && cv > 0.0 {
-                        c.temperature_k +=
-                            (heat_j - heat_loss_j - c.pressure_pa * dv) / (c.mass_kg * cv);
-                    }
-                    c.temperature_k = c.temperature_k.max(1.0);
-                    c.pressure_pa =
-                        gas::pressure_pa(gas_props, c.mass_kg, c.temperature_k, volume_new_m3);
-
-                    // --- decompression brake ---
-                    //
-                    // The brake cam cracks an exhaust valve twice while the
-                    // cylinder is otherwise shut: once early in compression, to
-                    // let boosted manifold gas *in* and make the coming
-                    // compression more expensive, and once just before firing
-                    // TDC, to throw that compression away instead of returning
-                    // it to the piston on expansion.
-                    //
-                    // `dv` is passed as zero because the piston work for this
-                    // step has already been taken in the temperature update
-                    // above. This transfer is mass and enthalpy only.
-                    if brake_area_m2 > 0.0 {
-                        let after = flow::exchange(
-                            gas_props,
-                            flow::Charge {
-                                mass_kg: c.mass_kg,
-                                temperature_k: c.temperature_k,
-                                pressure_pa: c.pressure_pa,
-                            },
-                            &flow::PortState {
-                                area_m2: brake_area_m2,
-                                pressure_pa: exhaust_pa,
-                                temperature_k: exhaust_k,
-                            },
-                            volume_new_m3,
-                            0.0,
-                            dt,
-                        );
-                        c.mass_kg = after.charge.mass_kg;
-                        c.temperature_k = after.charge.temperature_k;
-                        c.pressure_pa = after.charge.pressure_pa;
-                        c.motored_pressure_pa = c.pressure_pa;
-
-                        // The brake radiates through the same expression as the
-                        // exhaust event, because it is the same valve passing
-                        // real gas. That is why the hard staccato bark is an
-                        // output of the model rather than an effect layered on
-                        // top of it — and why it cannot end up on a different
-                        // scale from the blowdown, as it would if the two were
-                        // computed by separate means.
-                        cylinder_flow_kg_per_s[index] += after.net_out_kg / dt;
-                    }
+                    c.profile = heat_release::profile(
+                        combustion,
+                        &c.injection,
+                        delay_rad,
+                        inj.fuel_lower_heating_value_j_per_kg,
+                    );
+                    c.profile_ready = true;
+                    state.last_ignition_delay_rad = delay_rad;
+                    state.last_premixed_fraction = c.profile.premixed_fraction;
                 }
-                Phase::Intake => {
-                    c.temperature_k = manifold_k;
-                    c.pressure_pa = manifold_pa;
-                    c.mass_kg = gas::mass_kg(gas_props, manifold_pa, manifold_k, volume_new_m3);
-                    c.motored_pressure_pa = manifold_pa;
-                    c.motored_temperature_k = manifold_k;
-                    c.burned_fraction = 0.0;
+
+                let dv = volume_new_m3 - volume_old_m3;
+
+                // Motored trace: isentropic, no combustion, no wall loss.
+                let gamma = gas::gamma(gas_props, c.motored_temperature_k);
+                let volume_ratio = if volume_new_m3 > 0.0 {
+                    volume_old_m3 / volume_new_m3
+                } else {
+                    1.0
+                };
+                c.motored_pressure_pa *= volume_ratio.powf(gamma);
+                c.motored_temperature_k *= volume_ratio.powf(gamma - 1.0);
+
+                // Injected fuel joins the trapped mass as it is delivered.
+                let fuel_added_kg = (c.injection.delivered_kg(psi_new)
+                    - c.injection.delivered_kg(psi_old))
+                .max(0.0);
+                c.mass_kg += fuel_added_kg;
+
+                let (heat_j, burned_fraction) = if c.profile_ready {
+                    heat_release::heat_release_j(combustion, &c.profile, c.burned_fraction, psi_new)
+                } else {
+                    (0.0, c.burned_fraction)
+                };
+                c.burned_fraction = burned_fraction;
+
+                let velocity = heat_transfer::gas_velocity_m_per_s(
+                    &cfg.heat_transfer,
+                    true,
+                    piston_speed_m_per_s,
+                    c.pressure_pa,
+                    c.motored_pressure_pa,
+                    derived.displacement_per_cylinder_m3,
+                    manifold_pa,
+                    manifold_k,
+                    derived.max_volume_m3,
+                );
+                let heat_loss_j = heat_transfer::heat_loss_j(
+                    &cfg.heat_transfer,
+                    slider,
+                    bore_m,
+                    psi_new,
+                    c.pressure_pa,
+                    c.temperature_k,
+                    velocity,
+                    state.omega_rad_per_s,
+                    d_theta,
+                );
+                c.wall_heat_loss_j += heat_loss_j;
+
+                // dT = [ dQ_comb - dQ_wall - p dV ] / (m cv(T))
+                let cv = gas::cv_j_per_kg_k(gas_props, c.temperature_k);
+                if c.mass_kg > 0.0 && cv > 0.0 {
+                    c.temperature_k +=
+                        (heat_j - heat_loss_j - c.pressure_pa * dv) / (c.mass_kg * cv);
                 }
-                Phase::Exhaust => {
-                    // Blowdown through the exhaust port, as real orifice flow.
-                    //
-                    // Milestone 2 clamped the cylinder to the manifold here.
-                    // That is adequate for pumping work, but it makes the
-                    // pressure difference across the port identically zero — and
-                    // that difference *is* the exhaust pulse this milestone has
-                    // to produce. A boundary condition cannot make a sound.
-                    //
-                    // Only the exhaust side gets orifice flow. The intake stays
-                    // a manifold boundary because it sits near equilibrium,
-                    // whereas the exhaust valve opens onto a pressure ratio
-                    // large enough to choke.
+                c.temperature_k = c.temperature_k.max(1.0);
+                c.pressure_pa =
+                    gas::pressure_pa(gas_props, c.mass_kg, c.temperature_k, volume_new_m3);
+
+                // --- decompression brake ---
+                //
+                // The brake cam cracks an exhaust valve twice while the
+                // cylinder is otherwise shut: once early in compression, to
+                // let boosted manifold gas *in* and make the coming
+                // compression more expensive, and once just before firing
+                // TDC, to throw that compression away instead of returning
+                // it to the piston on expansion.
+                //
+                // `dv` is passed as zero because the piston work for this
+                // step has already been taken in the temperature update
+                // above. This transfer is mass and enthalpy only.
+                if brake_area_m2 > 0.0 {
                     let after = flow::exchange(
                         gas_props,
                         flow::Charge {
@@ -560,22 +536,111 @@ pub(super) fn step(
                             pressure_pa: c.pressure_pa,
                         },
                         &flow::PortState {
-                            area_m2: exhaust_port.area_m2(psi_new),
+                            area_m2: brake_area_m2,
                             pressure_pa: exhaust_pa,
                             temperature_k: exhaust_k,
                         },
                         volume_new_m3,
-                        volume_new_m3 - volume_old_m3,
+                        0.0,
                         dt,
                     );
-
                     c.mass_kg = after.charge.mass_kg;
                     c.temperature_k = after.charge.temperature_k;
                     c.pressure_pa = after.charge.pressure_pa;
                     c.motored_pressure_pa = c.pressure_pa;
 
+                    // The brake radiates through the same expression as the
+                    // exhaust event, because it is the same valve passing
+                    // real gas. That is why the hard staccato bark is an
+                    // output of the model rather than an effect layered on
+                    // top of it — and why it cannot end up on a different
+                    // scale from the blowdown, as it would if the two were
+                    // computed by separate means.
                     cylinder_flow_kg_per_s[index] += after.net_out_kg / dt;
                 }
+            }
+            Phase::Intake => {
+                // Induction through the intake port, as real orifice flow.
+                //
+                // The mirror of the exhaust branch below, through the same
+                // function, for the same reason. This branch used to assign
+                // the cylinder its manifold's pressure every step, which
+                // makes the pressure difference across the port identically
+                // zero — so the charge could not arrive by flowing and had to
+                // be conjured at valve closing instead. Two assignments, both
+                // of which stepped, in a trace that is radiated.
+                //
+                // Trapping efficiency is now an *outcome*: the port has an
+                // area, the piston pulls a pressure difference across it, and
+                // what flows is what gets trapped. It therefore falls with
+                // speed on its own, because a fixed area throttles more the
+                // faster the piston asks for gas, where the multiplier it
+                // replaced was the same number at 560 rpm as at 1800.
+                //
+                let after = flow::exchange(
+                    gas_props,
+                    flow::Charge {
+                        mass_kg: c.mass_kg,
+                        temperature_k: c.temperature_k,
+                        pressure_pa: c.pressure_pa,
+                    },
+                    &flow::PortState {
+                        area_m2: intake_port.area_m2(psi_new),
+                        pressure_pa: manifold_pa,
+                        temperature_k: manifold_k,
+                    },
+                    volume_new_m3,
+                    volume_new_m3 - volume_old_m3,
+                    dt,
+                );
+
+                c.mass_kg = after.charge.mass_kg;
+                c.temperature_k = after.charge.temperature_k;
+                c.pressure_pa = after.charge.pressure_pa;
+                c.motored_pressure_pa = c.pressure_pa;
+                c.motored_temperature_k = c.temperature_k;
+                c.burned_fraction = 0.0;
+            }
+            Phase::Exhaust => {
+                // Blowdown through the exhaust port, as real orifice flow.
+                //
+                // Milestone 2 clamped the cylinder to the manifold here.
+                // That is adequate for pumping work, but it makes the
+                // pressure difference across the port identically zero — and
+                // that difference *is* the exhaust pulse this milestone has
+                // to produce. A boundary condition cannot make a sound.
+                //
+                // Both sides get orifice flow as of milestone 12. The
+                // stated reason the intake had none was that it sits near
+                // equilibrium, which is exactly where an explicit orifice
+                // solver overshoots into a two-sample limit cycle — but the
+                // settle clamp in `flow::exchange` was built for that, and
+                // the trace probe bounds what it leaves on the exhaust
+                // source at under 0.02 dB. The reason was real and the
+                // remedy was already in the function.
+                let after = flow::exchange(
+                    gas_props,
+                    flow::Charge {
+                        mass_kg: c.mass_kg,
+                        temperature_k: c.temperature_k,
+                        pressure_pa: c.pressure_pa,
+                    },
+                    &flow::PortState {
+                        area_m2: exhaust_port.area_m2(psi_new),
+                        pressure_pa: exhaust_pa,
+                        temperature_k: exhaust_k,
+                    },
+                    volume_new_m3,
+                    volume_new_m3 - volume_old_m3,
+                    dt,
+                );
+
+                c.mass_kg = after.charge.mass_kg;
+                c.temperature_k = after.charge.temperature_k;
+                c.pressure_pa = after.charge.pressure_pa;
+                c.motored_pressure_pa = c.pressure_pa;
+
+                cylinder_flow_kg_per_s[index] += after.net_out_kg / dt;
             }
         }
         c.phase = phase_new;
@@ -708,6 +773,15 @@ pub(super) fn step(
         cfg.exhaust_system.radiation_cutoff_hz,
         dt,
     );
+    // The same three arguments, kept where something outside the loop can read
+    // them. Three stores, no branch, no allocation. What they are for is asking
+    // whether the *drive* is continuous — a question the emitted sample cannot
+    // answer, because every path filters before it gets there.
+    state.forcing = AcousticForcing {
+        mouth_volume_velocity: radiated,
+        pressure_sum: structural_forcing,
+        torque_fraction,
+    };
 
     state.peak_pressure_pa_cycle = state.peak_pressure_pa_cycle.max(step_peak_pressure_pa);
     state.peak_pressure_pa_session = state.peak_pressure_pa_session.max(step_peak_pressure_pa);

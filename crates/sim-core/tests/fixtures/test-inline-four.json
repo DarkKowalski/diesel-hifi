@@ -28,6 +28,8 @@
     "intake_valve_close_rad": -2.7925268,
     "exhaust_valve_open_rad": 2.443461,
     "exhaust_effective_area_m2": 0.0018,
+    "intake_ramp_rad": 0.6108652,
+    "intake_effective_area_m2": 0.0018,
     "exhaust_ramp_rad": 0.6108652,
     "exhaust_area_spread": 0.02
   },
@@ -1078,6 +1080,26 @@
       "safe_range": [
         -14401.0,
         17601.0
+      ]
+    },
+    {
+      "path": "valvetrain.intake_ramp_rad",
+      "status": "calibrated",
+      "value_note": "invented test value for `valvetrain.intake_ramp_rad`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        0.05,
+        1.5
+      ]
+    },
+    {
+      "path": "valvetrain.intake_effective_area_m2",
+      "status": "calibrated",
+      "value_note": "invented test value for `valvetrain.intake_effective_area_m2`",
+      "purpose": "Test fixture only; exists to exercise the same solver with different data.",
+      "safe_range": [
+        0.0001,
+        0.02
       ]
     },
     {

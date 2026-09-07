@@ -5,7 +5,21 @@ Status: phases 1-3 delivered 2026-09-07 as milestone 8. The first item of phase 
 phase 4, because the measurements said the listening stage was flattening the
 pulses the source already produced. Phase 2's carried-forward reference
 annotation delivered 2026-09-07 as milestone 10, by measurement rather than by
-ear. Phases 4, 6 and 7 remain proposed.
+ear. Phase 4's **prerequisite** — inspect the pressure and port-flow traces for
+discontinuities before amplifying their high-frequency content — delivered
+2026-09-07 as milestone 11. It found one, and it blocked the rest of phase 4 on a
+fix.
+
+**That fix is delivered 2026-09-07 as milestone 12: intake-valve orifice flow,
+phase 6's fourth entry, taken out of order because the evidence moved it.** Phase
+4 is unblocked. The remainder of phases 4 and 5, and phases 6 and 7, remain
+proposed.
+
+**The first listening report also arrived**, alongside milestone 12 and on the
+build before it: too much high frequency, not enough low. It is one unrecorded
+listen and it is not phase 7. It is recorded in `README.md` under **Results →
+Where you are listening from → What listening has said so far**, because the
+alternative to writing down weak evidence is having none.
 
 Delivered behaviour, the measurements it produced and the deficits it exposed are
 recorded in `README.md`, which stays the specification. See
@@ -180,10 +194,35 @@ defects are either corrected or separately identified before source tuning.
 
 ### 4. Improve Source Excitation
 
+**The prerequisite is met.** The trace inspection found a defect and milestone 12
+fixed it: both gas-exchange assignments became orifice flow, the largest fell from
+0.929 to 0.002, and the block path's content above 2 kHz went from 20.9% to 8.6%
+at governed idle. The blind detector now finds no steps in the pressure forcing at
+any operating point, and removing every valve event from it changes nothing. The
+instruction to look before amplifying did its job: every experiment below would
+have amplified an artefact worth a fifth of the idle block path.
+
+Two of this phase's guidance notes are now settled rather than open:
+
+- **The counterfactual predicted the fix.** It was recorded as an upper bound on
+  the grounds that a real valve still makes a fast edge, and it landed within half
+  a percentage point everywhere. The fast edge exists and is worth under half a
+  point at a 35° ramp.
+- **Cylinder-specific structural coupling loses its stated reason.** It was listed
+  as the experiment most affected, because it would give each cylinder's
+  *assignment* its own path to the bank. There are no assignments now. It remains
+  a legitimate experiment on its own merits — six cylinders do not couple to a
+  block identically — but the argument for taking it first is gone.
+
+One new constraint on this phase, from `README.md` **Known deficits**: crest
+factor fell 0.1 to 1.2 dB across the operating points, because part of what was
+being counted as pulse dynamics was the artefact. Any experiment that reports
+recovering crest should say whether it is recovering combustion or re-adding an
+impulse train.
+
 Run independently switchable experiments with cylinder-specific structural
 coupling, bounded variation in combustion timing/burn shape, and crank-synchronized
-mechanical excitation. Inspect pressure and port-flow traces for discontinuities
-and numerical artifacts before amplifying their high-frequency content.
+mechanical excitation.
 
 Evaluate injection rate shaping and pilot/main events where evidence supports
 their use. Retain mass/energy accounting and recalibrate against existing engine
@@ -231,7 +270,8 @@ conditions, with source contributions identifiable and no new routing artifacts.
 | Intake and turbo airflow sound | Missing load-dependent texture identified in comparisons |
 | Fan and accessory sound | A source is identifiable and its driving state can be represented |
 | Better exhaust/aftertreatment impedance | Persistent incorrect resonance or pulse shaping survives source and transfer work |
-| Intake-valve flow and manifold coupling | Gas-exchange traces demonstrate a source limitation |
+| ~~Intake-valve flow~~ | **Delivered as milestone 12.** Triggered by milestone 11's traces, taken ahead of this phase because it was blocking phase 4 |
+| Pulsating manifold coupling | The half of that row still open, and deliberately so. Both ports flow for real; both manifolds are still mean-value speed-density, which is what the exhaust side had always done, so the two sides are symmetric rather than one being special. Closing it makes manifold pressure ripple at the firing rate — real induction and exhaust pulsation, and a plausible source of the load-dependent texture the first row of this table is about. Trigger: that texture identified as missing, or the boost limit cycle under **Known deficits** traced to the mean-value mismatch |
 | Clutch and driveline compliance | Pull-away, shifting and overrun require independent engine/vehicle dynamics |
 
 Use bounded reduced models and documented calibration. New channels are a reason
@@ -341,17 +381,139 @@ this source. A reference that could settle physical band balance would have to b
 an unprocessed multi-microphone recording of a real truck, which this project does
 not have and this plan does not assume.
 
+## Fourth Implementation Package
+
+The trace inspection, delivered as milestone 11. The three forcings readable
+where they enter the acoustic stage; a jump detector in `sim_core::analysis` that
+asks whether a trace was integrated to or assigned to, tested against a ramp, a
+tone, a fast pulse train and noise; and `examples/trace_probe.rs`, which
+attributes every step in every forcing to the crank event that caused it and
+measures what removing it would do. No acoustic source, calibration or acceptance
+criterion changed.
+
+It is phase 4's stated prerequisite and it came back with a finding rather than a
+clean bill:
+
+| Question | Outcome |
+|---|---|
+| Is the exhaust source clean? | **Yes.** No valve event moves it by more than 0.003. Its documented near-Nyquist residue is real, detectable at 0.8-1.7% of samples, and worth under 0.02 dB — asserted for three milestones, now measured |
+| Is the torque forcing clean? | **Yes.** No steps at all; the largest valve-event excess anywhere is 0.0011, because the geometric factor goes to zero at the dead centres where the transitions happen |
+| Is the pressure forcing clean? | **No.** Two of three gas-exchange transitions are assignments, and the block path is ringing them |
+
+Three findings beyond the plan.
+
+The **control** is the third transition. The exhaust valve opening is the one
+modelled as orifice flow, and its excess is two to three orders of magnitude
+smaller than the other two — same valve gear, same cylinder, same cycle. Without
+it the measurement would be an interesting number with no way to tell whether it
+was an artefact of how the excess is taken.
+
+The **instrument caught itself**, for the third milestone running. A blind
+detector finds the steps at two operating points and finds nothing at
+`rated-1800`, where the largest assignment in the model sits: at 1800 rpm the
+crank covers more angle per step, so the neighbouring differences grow and the
+isolation ratio falls under the threshold while the step itself grows. Isolation
+cannot see a discontinuity that lands on a steep enough slope. The probe reports
+both the blind result and what the solver knows is a valve event, and prints the
+disagreement rather than the flattering half.
+
+And **idle is the worst case for a reason that is not the step size** — the steps
+there are the smallest measured. It is that idle has the least combustion noise
+to hide them behind: no boost, the gentlest premixed rise, a block path nearly
+29 dB below rated. The artefact is roughly constant across the range and the signal it
+competes with is not, which is the general shape of why an idle defect is heard
+first.
+
+The package deliberately stops at measuring. Interpolating the step away in the
+solver would be a schedule bolted over a modelling boundary, and the boundary is
+where the fix belongs.
+
+## Fifth Implementation Package
+
+The intake boundary, delivered as milestone 12. It is the first change to the
+acoustic *source* since milestone 6 and the first since milestone 9 to move a
+figure in **Results → Calibration**.
+
+The intake side stopped being a boundary condition: the cylinder draws gas through
+a port area under a pressure ratio, through the same `flow::exchange` the exhaust
+valve and the brake lobe already used, so the trapped charge is what flowed rather
+than a gas-law evaluation scaled by a calibrated volumetric efficiency. Trapping
+efficiency became an outcome, which forced the recalibration — and the
+recalibration is the part worth reading:
+
+| Question | Outcome |
+|---|---|
+| How much does a finite-rate transition recover, against the counterfactual's perfect removal? | **Essentially all of it.** Within half a percentage point at every operating point. This was the question the plan said this package should open by settling, and the bound it was measured against held |
+| Can the new port area carry the calibration? | **No, and that is physics rather than inconvenience.** A fixed area throttles more the faster the piston asks for gas, so area moves peak power and barely touches peak torque at 1000 rpm. Intake valve closing carried the fit, moving 20° later |
+| Did the intake manifold's mass balance have to change with it? | **No — that estimate was wrong.** Both manifolds stay mean-value, which is what the exhaust side had always done. The scope note in milestone 11 overstated it |
+
+Three findings beyond the plan.
+
+**Two open deficits closed without being touched.** `80–300 Hz` at governed idle
+went from 41.7% to 45.4% and now clears its floor; `rated-1800` went from 5.8 to
+6.3 dB of exhaust over block and now clears the balance criterion. Both had been
+listed as failing for two milestones and neither was ever a band or balance
+problem — they were one defect in the source seen through two criteria. Which is
+an argument for fixing mechanisms rather than adjusting the criteria that report
+them.
+
+**Cycle-to-cycle variation partly stopped needing to be faked.** With
+`cycle_delivery_spread` at zero the model used to be a six-event loop on repeat.
+It now varies 0.58% at idle on its own, because trapping through a real port
+carries the residual forward into the next cycle's charge — roughly twice what the
+shipped 0.02 contributes. The parameter is kept and is still a working lever, and
+the test that asserted it was *the* mechanism now asserts both halves separately.
+
+**A pre-existing air-path limit cycle surfaced, and nearly got absorbed.** A turbo
+test asserting boost at one instant failed; the instinct is to settle longer.
+Measuring the previous solver at the same operating point found the same
+oscillation at the same amplitude — boost swinging 25 to 155 kPa near 1900 rpm
+under load, which the full-load sweep had been reporting as `conv false` for
+several milestones. Milestone 12 moved its phase, not its size. The test now
+averages and the deficit is on the record instead of behind a lucky assertion.
+
+The package stops short of one thing on purpose. The idle `<80 Hz` criterion now
+has the measured reference and a listening report both saying the model wants more
+low end, against a convention saying less. Changing an acceptance criterion in the
+same breath as delivering a source change is how the previous set came to enforce
+the defect it was meant to catch. It is the next decision, not this one's.
+
 Primary ownership:
 
 | Area | Files/modules |
 |---|---|
 | Specification and results | `README.md` |
-| Capture and measurement | `crates/sim-core/examples/audio_probe.rs`, `audio_capture.rs`, `reference_probe.rs`, `src/analysis.rs` and the acoustic tests |
+| Capture and measurement | `crates/sim-core/examples/audio_probe.rs`, `audio_capture.rs`, `reference_probe.rs`, `trace_probe.rs`, `src/analysis.rs` and the acoustic tests |
 | Physics and acoustic sources | `crates/sim-core/src/sim/`, validated engine configuration and provenance |
 | Boundary and transport | `crates/sim-wasm`, `web/src/worker/`, `web/src/audio/exhaust-processor.js` |
 | Listening and comparison | `web/src/lib/cabin.ts`, `web/src/lib/audioEngine.ts`, existing audio controls and browser tests |
 
-Nothing delivered so far changes simulator behaviour or calibration. Milestone 10
-adds measurement code, so it carries formatting, Clippy and the workspace tests;
-it touches neither physics nor browser audio, so the web suite does not apply.
-`README.md` records the commands run and their results.
+Milestones 10 and 11 added measurement code only, so they carried formatting,
+Clippy and the workspace tests and no more. **Milestone 12 is the first package
+here to change simulator behaviour and calibration**, so it carries the sweeps and
+both probes as well; `README.md` records every command and its result under
+**Verification, milestone 12**, including why the web suite is stale rather than
+passing — the physics moved, no TypeScript did, and that distinction should be
+stated rather than assumed.
+
+The next package is a choice between three, and the plan no longer dictates it:
+
+- **The idle low-band criterion.** Two pieces of evidence against it, none for it,
+  and it is the only thing standing between the measurements and the one listening
+  report received so far. Cheapest, and a criterion decision rather than a model
+  change.
+- **A real listening comparison**, which is phase 7 and has never been done. The
+  comparison tooling has existed since milestone 8 and nothing has been heard
+  through it at matched loudness. Every figure in this document is a signal
+  measurement.
+- **The rest of phase 4**, now unblocked: cylinder-specific structural coupling,
+  bounded combustion timing variation, crank-synchronised mechanical excitation.
+  This is what the plan says comes next, and it is the one with the least evidence
+  behind it — the deficits it would address are inferred rather than measured.
+
+The middle one is the recommendation. The instruments have now caught three of
+their own errors and closed two deficits without anyone hearing anything, and the
+one report that did arrive agreed with them about the treble and pointed at a
+criterion about the bass. What that suggests is not that more measurement is
+wrong, but that a project with eleven milestones of measurement and one sentence
+of listening has the cheaper information on the listening side.

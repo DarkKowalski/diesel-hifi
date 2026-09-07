@@ -13,8 +13,8 @@
 //! for the wrong signal.** Passing on engine audio proves nothing on its own.
 
 use sim_core::analysis::{
-    amplitude_modulated, crest_db, dbfs, estimate_firing_hz, firing_hz, modulation_depth, peak,
-    pulse_train, rms, rpm_from_firing_hz, tone, Spectrum,
+    amplitude_modulated, crest_db, dbfs, estimate_firing_hz, firing_hz, jumps, modulation_depth,
+    peak, pulse_train, rms, rpm_from_firing_hz, tone, without_jumps, Spectrum,
 };
 
 /// The solver's own rate, so these read against the same numbers the probe does.
@@ -436,4 +436,190 @@ fn the_speed_and_the_firing_rate_convert_both_ways() {
         );
     }
     assert!((rpm_from_firing_hz(60.0, 6) - 1_200.0).abs() < 1e-9);
+}
+
+// --- jumps ------------------------------------------------------------------
+//
+// The detector that says whether a trace was integrated to or assigned to. Its
+// counterexamples are the continuous signals: a ramp, a tone, and a pulse train
+// whose rises are fast but span many samples. If any of those reads as a jump
+// the detector is finding its own threshold rather than a discontinuity, which
+// is the failure mode that made the previous modulation detector useless.
+
+/// The isolation threshold the trace probe uses.
+const ISOLATION: f64 = 3.0;
+
+/// A trace as `f64`, which is what the forcing signals are.
+fn as_f64(samples: &[f32]) -> Vec<f64> {
+    samples.iter().map(|s| f64::from(*s)).collect()
+}
+
+#[test]
+fn a_continuous_trace_has_no_jumps_in_it() {
+    // Three signals that a solver could plausibly have integrated to. None of
+    // them contains a step, so none may be reported as containing one — however
+    // steep it gets.
+    let ramp: Vec<f64> = (0..4_096).map(|i| i as f64 * 0.01).collect();
+    assert!(jumps(&ramp, ISOLATION).is_empty(), "a ramp is continuous");
+
+    let sine = as_f64(&tone(LEN, RATE, 800.0));
+    assert!(jumps(&sine, ISOLATION).is_empty(), "a tone is continuous");
+
+    // The hard case: a pulse train's rise is the fastest thing in the acoustic
+    // signals and is exactly what must *not* be mistaken for an assignment. It
+    // spans tens of samples, so each of its differences resembles its
+    // neighbours.
+    let pulses = as_f64(&pulse_train(LEN, RATE, F0, 0.05));
+    assert!(
+        jumps(&pulses, ISOLATION).is_empty(),
+        "a fast pulse train is still continuous"
+    );
+}
+
+#[test]
+fn a_step_added_to_a_tone_is_found_where_it_was_added() {
+    // The positive case, with the answer known in advance: one step, at one
+    // index, of one size.
+    const AT: usize = 5_000;
+    const SIZE: f64 = 0.4;
+    let mut signal = as_f64(&tone(LEN, RATE, 200.0));
+    for sample in signal.iter_mut().skip(AT) {
+        *sample += SIZE;
+    }
+
+    let found = jumps(&signal, ISOLATION);
+    assert_eq!(
+        found.len(),
+        1,
+        "one step was added, {} were found",
+        found.len()
+    );
+    assert_eq!(found[0].index, AT, "the step was added at {AT}");
+    // The reported size is the whole difference across the step, which is the
+    // added height plus the tone's own slope over one sample. At 200 Hz and
+    // 40 kHz that slope is under 0.032.
+    assert!(
+        (found[0].size - SIZE).abs() < 0.04,
+        "reported a step of {} where {SIZE} was added",
+        found[0].size
+    );
+    assert!(
+        found[0].isolation > 10.0,
+        "a lone step in a slow tone should stand far above its neighbours, \
+         stood {:.1}x",
+        found[0].isolation
+    );
+}
+
+#[test]
+fn removing_a_step_recovers_the_signal_it_was_added_to() {
+    // The counterfactual the trace probe runs on. Repairing the trace must give
+    // back what it was before the step, to within the interpolation across one
+    // sample — otherwise the difference the probe attributes to an assignment is
+    // partly the repair's own doing.
+    const AT: usize = 5_000;
+    let original = as_f64(&tone(LEN, RATE, 200.0));
+    let mut stepped = original.clone();
+    for sample in stepped.iter_mut().skip(AT) {
+        *sample += 0.4;
+    }
+
+    let repaired = without_jumps(&stepped, ISOLATION);
+    assert_eq!(repaired.len(), original.len());
+    let worst = repaired
+        .iter()
+        .zip(original.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        worst < 0.05,
+        "repairing left {worst:.4} of the 0.4 step behind"
+    );
+}
+
+#[test]
+fn a_signal_with_nothing_to_repair_comes_back_unchanged() {
+    let sine = as_f64(&tone(4_096, RATE, 500.0));
+    assert_eq!(without_jumps(&sine, ISOLATION), sine);
+    // And a trace too short to have a difference with two neighbours.
+    assert!(jumps(&[1.0, 5.0, 2.0], ISOLATION).is_empty());
+    assert!(jumps(&[], ISOLATION).is_empty());
+}
+
+#[test]
+fn white_noise_defeats_the_detector_by_the_stated_amount() {
+    // The limitation, measured rather than assumed away. Isolation asks whether
+    // a sample is reachable from its neighbours, and in white noise no sample is
+    // reachable from its neighbours — so a fair fraction of one registers, and
+    // the largest ratios run into the hundreds purely by chance.
+    //
+    // This is asserted as a *fact about the instrument* rather than tuned out.
+    // Raising the threshold until noise went quiet would fit the number to a
+    // signal nobody measures: the traces this is pointed at come out of a
+    // fixed-step integrator, so their differences are strongly correlated and
+    // their tail is nothing like this one. A reader who sees 5% here and 0.3% on
+    // an engine trace knows which of the two is structure.
+    let signal = as_f64(&noise(LEN, 0x9e37));
+    let found = jumps(&signal, ISOLATION);
+    let share = 100.0 * found.len() as f64 / signal.len() as f64;
+    assert!(
+        (3.0..8.0).contains(&share),
+        "white noise should register a chance tail of a few percent, got {share:.1}%"
+    );
+    let largest = found.iter().fold(0.0f64, |m, j| m.max(j.isolation));
+    assert!(
+        largest > 50.0,
+        "and its largest ratios should be extreme, got only {largest:.0}x — if this \
+         ever falls, isolation alone has started to look like proof"
+    );
+}
+
+#[test]
+fn a_step_hidden_in_a_pulse_train_is_the_only_thing_found() {
+    // The case the trace probe actually faces: a signal that is *already* full
+    // of fast, tall events, with one assignment among them. The events must not
+    // register and the assignment must, with room to spare between them — that
+    // gap is what makes a fixed threshold defensible rather than fitted.
+    const AT: usize = 7_000;
+    let mut signal = as_f64(&pulse_train(LEN, RATE, F0, 0.05));
+    for sample in signal.iter_mut().skip(AT) {
+        *sample += 0.3;
+    }
+
+    let found = jumps(&signal, ISOLATION);
+    assert_eq!(
+        found.len(),
+        1,
+        "the pulses are continuous and the step is not; found {} things",
+        found.len()
+    );
+    assert_eq!(found[0].index, AT);
+    assert!(
+        found[0].isolation > 3.0 * ISOLATION,
+        "the step stood only {:.1}x above its neighbours, which leaves no gap \
+         between it and the pulses",
+        found[0].isolation
+    );
+}
+
+#[test]
+fn the_dust_floor_keeps_a_flat_trace_from_reading_as_steps() {
+    // A trace that is flat except for one real step: the flat part still wobbles
+    // in the last bits, and a wobble between two smaller wobbles has an enormous
+    // isolation ratio and no meaning. Only the real step may be reported.
+    let mut signal = vec![0.0f64; 4_096];
+    for (i, sample) in signal.iter_mut().enumerate() {
+        *sample = if i % 7 == 0 { 1e-13 } else { -1e-13 };
+    }
+    for sample in signal.iter_mut().skip(2_000) {
+        *sample += 1.0;
+    }
+    let found = jumps(&signal, ISOLATION);
+    assert_eq!(
+        found.len(),
+        1,
+        "only the 1.0 step is a step; found {} things",
+        found.len()
+    );
+    assert_eq!(found[0].index, 2_000);
 }

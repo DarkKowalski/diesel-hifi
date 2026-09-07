@@ -94,6 +94,21 @@ pub struct Valvetrain {
     pub intake_valve_close_rad: f64,
     /// Signed crank angle from firing TDC at which the cylinder reopens.
     pub exhaust_valve_open_rad: f64,
+    /// Crank angle over which the intake valve ramps between shut and full lift.
+    pub intake_ramp_rad: f64,
+    /// Effective flow area of one cylinder's intake port at full lift.
+    ///
+    /// Milestone 12 needed this, and what it replaced is the reason it exists.
+    /// The intake side used to be a boundary condition: the cylinder was assigned
+    /// the manifold's pressure every step of the intake stroke, and its trapped
+    /// charge was recomputed from the gas law scaled by
+    /// [`AirPath::volumetric_efficiency`]. Both are steps — the trace moves by
+    /// whatever the two descriptions disagree by, in one 25 µs step — and the
+    /// structural path differentiates a step into an impulse. With an area the
+    /// charge arrives by flowing, so the trace is integrated rather than
+    /// assigned, and trapping efficiency becomes an *outcome* of the port instead
+    /// of a multiplier applied to the answer.
+    pub intake_effective_area_m2: f64,
     /// Crank angle over which the exhaust valve ramps between shut and full
     /// lift.
     ///
@@ -709,6 +724,8 @@ impl EngineConfig {
             }
             "valvetrain.intake_valve_close_rad" => self.valvetrain.intake_valve_close_rad,
             "valvetrain.exhaust_valve_open_rad" => self.valvetrain.exhaust_valve_open_rad,
+            "valvetrain.intake_ramp_rad" => self.valvetrain.intake_ramp_rad,
+            "valvetrain.intake_effective_area_m2" => self.valvetrain.intake_effective_area_m2,
             "valvetrain.exhaust_ramp_rad" => self.valvetrain.exhaust_ramp_rad,
             "valvetrain.exhaust_effective_area_m2" => self.valvetrain.exhaust_effective_area_m2,
             "valvetrain.exhaust_area_spread" => self.valvetrain.exhaust_area_spread,

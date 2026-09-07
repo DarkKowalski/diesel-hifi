@@ -244,6 +244,15 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         "valvetrain.exhaust_ramp_rad must be positive and short compared with the \
          exhaust window",
     )?;
+    finite_positive(
+        v.intake_effective_area_m2,
+        "valvetrain.intake_effective_area_m2",
+    )?;
+    require(
+        v.intake_ramp_rad > 0.0 && v.intake_ramp_rad < CYCLE_RAD / 8.0,
+        "valvetrain.intake_ramp_rad must be positive and short compared with the \
+         intake window",
+    )?;
 
     let i = &config.injection;
     finite_positive(i.rail_pressure_max_pa, "injection.rail_pressure_max_pa")?;

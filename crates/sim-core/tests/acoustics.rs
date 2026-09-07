@@ -848,10 +848,22 @@ fn the_structural_path_is_what_puts_energy_above_the_firing_harmonics() {
     // legitimately carries content through the same region — so 500 Hz stopped
     // separating the two paths and started straddling both. A kilohertz is
     // where the block is still the only thing radiating.
+    // Three times rather than the four this asserted through milestone 11, and
+    // the reason is the change that moved it rather than the failure it caused.
+    // That constant was fitted while a fifth of the block path's content above
+    // 2 kHz was a boundary assignment being rung — milestone 11 measured exactly
+    // that and predicted, in advance, that fixing the intake side would take the
+    // content with it. It did: this ratio read 3.98 immediately afterwards, and
+    // the artefact was the difference.
+    //
+    // The claim being made is dominance, not a particular ratio. At three times
+    // the modal bank still supplies about three quarters of the energy above a
+    // kilohertz, which is what "this path is the mechanism" means, and there is
+    // now margin on both sides of the number instead of 0.02 on one.
     let with_energy = high_band_energy(&with, 1_000.0);
     let without_energy = high_band_energy(&without, 1_000.0);
     assert!(
-        with_energy > without_energy * 4.0,
+        with_energy > without_energy * 3.0,
         "the modal bank should dominate above 1 kHz: {with_energy:.4e} with it \
          against {without_energy:.4e} without, which is not a large enough difference \
          to be the mechanism this path claims to be"
@@ -1761,13 +1773,36 @@ fn the_per_cycle_spread_makes_a_cylinder_differ_from_its_own_last_cycle() {
         per_cylinder_pulse_variation(&samples_at(cfg, rpm, 0.15, 293.15, 120_000), rpm, cylinders)
     };
 
+    // **Milestone 12 moved this test's ground, and the direction it moved is the
+    // result.** With the spread switched off the variation used to be
+    // essentially nothing — every cycle of a cylinder really was a copy of its
+    // last, and this parameter was the only thing breaking the loop. It is now
+    // 0.58% at idle with the parameter at zero, because the intake side traps by
+    // integrating flow: what a cylinder traps depends on the residual it kept,
+    // which depends on what the previous cycle burned. That is a cycle-to-cycle
+    // feedback path the assigned charge did not have, and it puts the model's
+    // intrinsic variation at roughly what a spread of 0.04 used to buy.
+    //
+    // So the assertion is split in two, because there are now two claims and
+    // only one of them used to be true.
     let identical = variation(0.0);
-    let varying = variation(0.02);
+    assert!(
+        identical > 1.0e-3,
+        "with the spread at zero the engine should still differ from its own last \
+         cycle, because trapped mass now depends on the previous cycle's residual: \
+         variation {identical:.5}"
+    );
+
+    // The parameter is still a working lever, which is what stops the finding
+    // above from being an excuse to leave a dead knob in the configuration. It
+    // is measured at 0.05 rather than at the shipped 0.02: the intrinsic term is
+    // now larger than 0.02 contributes, so a test that demanded the shipped
+    // value dominate would be demanding the model be worse.
+    let varying = variation(0.05);
     assert!(
         varying > identical * 1.3,
-        "the per-cycle spread must make a cylinder differ from its own last cycle: \
-         pulse-height variation {varying:.5} with it against {identical:.5} without. \
-         An engine whose every cycle is a copy of its last is a loop, not a machine"
+        "the per-cycle spread must still raise cycle-to-cycle variation: \
+         pulse-height variation {varying:.5} at 0.05 against {identical:.5} at zero"
     );
 }
 
@@ -1910,4 +1945,174 @@ fn the_paths_are_emitted_in_the_documented_order() {
         low_heavy(EXHAUST),
         low_heavy(BLOCK)
     );
+}
+
+// --- what the paths are driven by -------------------------------------------
+
+#[test]
+fn the_reported_forcing_is_what_the_paths_were_actually_driven_by() {
+    // `Simulation::acoustic_forcing` is the trace probe's whole view of the
+    // model, so it has to be the arguments `Acoustics::push` was given and not a
+    // second estimate of them — a probe reading a plausible copy would report
+    // discontinuities in the copy.
+    //
+    // Two of the three are checkable against public data the solver publishes by
+    // another route entirely: the snapshot's per-cylinder pressures, and its
+    // torque terms. If the forcing were recomputed, rounded, filtered or taken a
+    // step late, these would not agree.
+    let config = config();
+    let ambient = config.config().air_path.ambient_pressure_pa;
+    let rated = config.config().rated.max_torque_nm;
+    let mut sim = Simulation::new(config, ResetOptions::default()).expect("simulation");
+
+    // A reset engine has not driven anything yet.
+    assert_eq!(
+        sim.acoustic_forcing(),
+        sim_core::sim::AcousticForcing::default(),
+        "a reset engine reports no forcing"
+    );
+
+    sim.set_controls(controls(0.6, false, true))
+        .expect("controls");
+    sim.pin_speed_rpm(1_200.0).expect("pin");
+
+    // Several hundred steps, checked one at a time so the comparison covers the
+    // burn, both valve events and the strokes between them rather than whichever
+    // instant a single check happened to land on.
+    for _ in 0..40 {
+        for _ in 0..25 {
+            sim.advance(1).expect("advance");
+            let forcing = sim.acoustic_forcing();
+            let snapshot = sim.snapshot();
+
+            let pressure_sum: f64 = snapshot.cylinder_pressure_pa.iter().sum::<f64>() / ambient;
+            assert!(
+                (forcing.pressure_sum - pressure_sum).abs() < 1e-9 * pressure_sum.abs().max(1.0),
+                "reported {} as the structural forcing where the cylinders sum to {}",
+                forcing.pressure_sum,
+                pressure_sum
+            );
+
+            let torque_fraction = (snapshot.torque_gas_nm + snapshot.torque_pumping_nm) / rated;
+            assert!(
+                (forcing.torque_fraction - torque_fraction).abs()
+                    < 1e-9 * torque_fraction.abs().max(1.0),
+                "reported {} as the body forcing where gas plus pumping torque is {}",
+                forcing.torque_fraction,
+                torque_fraction
+            );
+
+            assert!(
+                forcing.mouth_volume_velocity.is_finite(),
+                "the exhaust source must stay finite"
+            );
+        }
+        sim.pin_speed_rpm(1_200.0).expect("pin");
+    }
+
+    // And it is cleared by a reset, like every other cached step output.
+    sim.reset(ResetOptions::default()).expect("reset");
+    assert_eq!(
+        sim.acoustic_forcing(),
+        sim_core::sim::AcousticForcing::default()
+    );
+}
+
+#[test]
+fn no_gas_exchange_transition_steps_the_radiated_pressure_trace() {
+    // **This test used to pin a defect and now guards its fix.** In milestone 11
+    // it asserted that the two assigned transitions stepped and the one with
+    // orifice flow across it did not, because that was true and the block path
+    // was ringing the difference. Milestone 12 gave the intake side a real port,
+    // and the assertion is inverted: all three transitions must now be
+    // continuous, and this is what stops the intake boundary quietly becoming an
+    // assignment again.
+    //
+    // Three gas-exchange transitions happen per cylinder per cycle: the exhaust
+    // valve opening, TDC overlap, and intake valve closing. Every one of them is
+    // now something the solver integrates across.
+    //
+    // Measured as excess: how far the trace moved beyond what the differences
+    // either side of it implied. A continuous transition has essentially none.
+    // The exhaust-side reading is the control — it was continuous before this
+    // change and must stay so, which is what distinguishes "the intake was
+    // fixed" from "the measurement stopped working".
+    use sim_core::sim::cylinder::Phase;
+
+    let config = config();
+    let mut sim = Simulation::new(config, ResetOptions::default()).expect("simulation");
+    sim.set_controls(controls(1.0, false, true))
+        .expect("controls");
+    sim.pin_speed_rpm(1_400.0).expect("pin");
+    // Settle: the manifolds have to reach boost before the assignments are
+    // anywhere near their full size, and their size is the point.
+    for _ in 0..1_200 {
+        sim.advance(100).expect("advance");
+        sim.pin_speed_rpm(1_400.0).expect("pin");
+        discard_audio(&mut sim, 100);
+    }
+
+    let mut trace: Vec<f64> = Vec::new();
+    let mut phases: Vec<Vec<Phase>> = Vec::new();
+    for chunk in 0..40 {
+        for _ in 0..100 {
+            sim.advance(1).expect("advance");
+            trace.push(sim.acoustic_forcing().pressure_sum);
+            phases.push(
+                (0..6)
+                    .map(|i| sim.cylinder_phase(i).expect("phase"))
+                    .collect(),
+            );
+        }
+        let _ = chunk;
+        sim.pin_speed_rpm(1_400.0).expect("pin");
+        discard_audio(&mut sim, 100);
+    }
+
+    let differences: Vec<f64> = trace.windows(2).map(|w| w[1] - w[0]).collect();
+    // Largest excess seen at each kind of transition.
+    let mut worst = std::collections::BTreeMap::<(usize, usize), f64>::new();
+    for index in 1..phases.len() {
+        let Some(k) = index.checked_sub(1) else {
+            continue;
+        };
+        if k < 1 || k + 1 >= differences.len() {
+            continue;
+        }
+        let excess = (differences[k] - 0.5 * (differences[k - 1] + differences[k + 1])).abs();
+        for (before, after) in phases[index - 1].iter().zip(phases[index].iter()) {
+            if before == after {
+                continue;
+            }
+            let key = (*before as usize, *after as usize);
+            let slot = worst.entry(key).or_insert(0.0);
+            *slot = slot.max(excess);
+        }
+    }
+
+    let at = |from: Phase, to: Phase| {
+        *worst
+            .get(&(from as usize, to as usize))
+            .unwrap_or_else(|| panic!("no {from:?} -> {to:?} transition in the capture"))
+    };
+    // Every transition is measured against the typical step of the trace it sits
+    // in, so the threshold does not depend on the operating point's loudness.
+    let typical =
+        (differences.iter().map(|d| d * d).sum::<f64>() / differences.len() as f64).sqrt();
+
+    for (from, to, what) in [
+        (Phase::Closed, Phase::Exhaust, "the exhaust valve opening"),
+        (Phase::Exhaust, Phase::Intake, "TDC overlap"),
+        (Phase::Intake, Phase::Closed, "intake valve closing"),
+    ] {
+        let excess = at(from, to);
+        assert!(
+            excess < typical * 0.1,
+            "{what} moved the radiated pressure trace by {excess:.4} against a \
+             typical step of {typical:.4}. Every gas-exchange transition is \
+             supposed to be integrated across rather than assigned; a step here is \
+             an impulse once the structural path differentiates it, and an impulse \
+             is white. See Results -> Sound -> What the traces contain"
+        );
+    }
 }

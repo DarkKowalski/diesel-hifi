@@ -125,6 +125,8 @@ user action before Web Audio starts**.
 | 8 | **Measuring before changing**: a tested metric library, a broken modulation detector replaced, named reproducible scenarios covering idle through engine braking, a WAV capture tool, a level-matched A/B against local recordings, and an audit of the playback chain at both device rates. No acoustic source or calibration was changed. |
 | 9 | **The limiter stops shaping the timbre**: the memoryless soft clipper is replaced by a level follower with an instantaneous attack and a calibrated release, the ceiling becomes transparent below the knee, and the capture tool reports the gain each frame carried. Every operating point gains crest factor; the engine brake gains 5 dB of it and passes the criterion it was failing. No acoustic *source* changed. |
 | 10 | **The reference gets measured**: a firing-rate estimator, so a recording that does not report its speed can still be measured; a probe that annotates any WAV into operating-point segments with a confidence attached; the benchmark's idle characterised from three independent stretches; and its test drive shown to be dominated by a sampled source's loop rather than by an engine. No acoustic source, calibration or criterion changed. |
+| 11 | **The drive gets looked at, before it is amplified**: the three forcings are readable where they enter the acoustic stage, a detector says whether a trace was integrated to or assigned to, and a probe attributes every step in them to the crank event that caused it. It finds that two of the three gas-exchange transitions are boundary assignments, and that the impulse they hand the modal bank is up to **13 of the 21 percentage points** the block path holds above 2 kHz at idle. No acoustic source, calibration or criterion changed. |
+| 12 | **The intake valve becomes a valve**: the cylinder stops being assigned its manifold's pressure during induction and starts drawing gas through a port, so the trapped charge comes from what flowed rather than from a calibrated multiplier. The two assigned gas-exchange transitions become continuous — the largest of them falls from 0.929 to 0.002 — and the artefact they were feeding the modal bank goes with them: the block path's content above 2 kHz drops from **20.9% to 8.6%** at governed idle against a counterfactual bound of 8.1%. Trapping efficiency, valve timing and the brake's charging lobe are recalibrated with it; two open deficits close. |
 
 Milestone 8 deliberately delivered **no change to how the engine sounds**, and
 every figure it measured at an operating point milestone 7 also measured was
@@ -147,36 +149,94 @@ Amending an acceptance criterion in the same breath as first measuring the
 evidence for it is how the previous set came to enforce the defect it was meant
 to catch.
 
+Milestone 11 changes nothing about the sound either, and it is the last of the
+three that will: the acoustic plan puts *inspect the traces for discontinuities
+before amplifying their high-frequency content* ahead of any source work, and
+until now nothing could see the traces. It can now, and there is something in
+them — see **What the traces contain**. Every source experiment the plan lists
+next would have amplified it.
+
+Milestone 12 is the first change to the acoustic *source* since milestone 6, and
+it is the fix milestone 11 blocked the rest of phase 4 on. It is also the first
+change since milestone 9 to move a figure in **Results → Calibration** as well as
+in **Results → Sound**, because the trapped charge stopped coming from a
+calibrated number and started coming from a flow. What it recovered, what it cost
+to recalibrate, and the one residual step it left are recorded under **What the
+traces contain**.
+
+It is worth saying plainly what did *not* happen. The counterfactual in milestone
+11 was recorded as an **upper bound** on what a real port could recover, on the
+grounds that interpolating a step away removes an edge entirely while a real valve
+still makes a fast one. The bound turned out to be within half a percentage point
+of the answer at every operating point. The reasoning offered for expecting that —
+an argument from the exhaust side's 35° ramp — was explicitly labelled "a reason,
+and it is not evidence". It is evidence now.
+
 Still out: aftertreatment chemistry, clutch slip and gear-change behaviour, the
-manual's shift-assist and engine-stop-assist brake functions, ABS interaction,
-and orifice flow through the *intake* valve.
+manual's shift-assist and engine-stop-assist brake functions, ABS interaction, and
+pulsating manifold coupling. **The last of those is the simplification milestone
+12 deliberately kept**: both ports now flow for real, but both manifolds are still
+drained and filled by a mean-value speed-density estimate rather than by the summed
+port flows. That is the treatment the exhaust side has had since milestone 5, so
+the two sides are now symmetric rather than one being a special case — see
+**Modelling simplifications**.
 
 ## Results
 
 ### Calibration
 
-| | Model | Published | Error |
-|---|---:|---:|---:|
-| Peak power | 369.2 kW at **1800 rpm** | 375 kW | −1.5% |
-| Peak torque | 2509 N·m at **1000 rpm** | 2500 N·m | +0.4% |
-| Max cylinder pressure | 20.30 MPa | 23 MPa envelope | 12% margin |
-| Idle | 560 rpm | 560 rpm | on target |
-| Best fuel consumption | 179.9 g/kW·h | not published | — |
+| | Model | Published | Error | Milestone 11 |
+|---|---:|---:|---:|---:|
+| Peak power | 377.6 kW at **1800 rpm** | 375 kW | +0.7% | −1.5% |
+| Peak torque | 2550.6 N·m at **1000 rpm** | 2500 N·m | +2.0% | +0.4% |
+| Max cylinder pressure | 20.20 MPa | 23 MPa envelope | 12% margin | 20.30 MPa |
+| Idle | 568 rpm | 560 rpm | +1.4% | 560 rpm |
+| Best fuel consumption | 180.1 g/kW·h | not published | — | 179.9 |
 
 The **magnitudes** are published; the **speeds in bold are an outcome of our
 calibration** and must never be quoted as OEM data. The UI labels them
 `CALIBRATED`. A real OM 471 is nearer 185–190 g/kW·h, so consumption remains
 slightly optimistic; it is reported rather than tuned away.
 
+**The last column is milestone 11, and every entry in it moved for one reason.**
+Trapping used to be `air_path.volumetric_efficiency`, a constant 0.92 multiplied
+into the charge at the instant the intake valve shut. It is now whatever flowed
+through an intake port, so it varies with speed, boost and valve timing on its
+own — which is what a trapping efficiency does, and is why the numbers had to be
+refitted rather than merely re-read. Two calibrated values carried the refit:
+
+| Value | Was | Now | Why |
+|---|---:|---:|---|
+| `valvetrain.intake_effective_area_m2` | — | 0.0025 | New. Matched to the exhaust port; both are *effective* areas, so a discharge coefficient is already inside them |
+| `valvetrain.intake_valve_close_rad` | −2.7925 (20° ABDC) | −2.4435 (40° ABDC) | Was a boundary switch with no effect on trapping, and is now the dominant lever on it. 40° ABDC is inside the ordinary heavy-duty range |
+| `engine_brake.charge_center_rad` | −2.2689 | −2.2340 | Not a free choice. The validator requires the brake's charging lobe to open after the intake valve shuts, and retarding IVC left 1e-7 rad of margin — an accident, not a calibration. Moved to restore 2° |
+
+A fixed area throttles more the faster the piston asks for gas, so peak power fell
+away with area while peak torque at 1000 rpm barely moved — the port is generous
+enough to reach equilibrium at that speed whatever its size. That is why valve
+timing rather than area is what carried the fit, and it is a property of the
+physics rather than a convenience.
+
+**Idle now settles at 568 rpm rather than on 560.** It is governed, not held, so
+this is where the governor and the new pumping work balance; the scenario test
+that asserts idle is governed rather than pinned still passes. It is reported
+rather than tuned, and it is a 1.4% error against a published figure.
+
 ### Engine brake
 
 Fitted variant **M5U**. The manual publishes two brake-power figures for it, and
 they are the whole acceptance criterion:
 
-| | Model | Published | Error |
-|---|---:|---:|---:|
-| Brake power at 1300 rpm | 109.0 kW | 100 kW | +9.0% |
-| Brake power at 2300 rpm | 274.3 kW | 300 kW | −8.6% |
+| | Model | Published | Error | Milestone 11 |
+|---|---:|---:|---:|---:|
+| Brake power at 1300 rpm | 108.6 kW | 100 kW | +8.6% | +9.0% |
+| Brake power at 2300 rpm | 274.4 kW | 300 kW | −8.5% | −8.6% |
+
+Both moved in milestone 12, and the charging lobe moving is why — see
+**Calibration** above for what forced it. The fit is marginally better balanced
+than the one it replaced and neither anchor was targeted; the lobe position was
+chosen for the margin it leaves against intake valve closing, and these are what
+came out.
 
 Held to ±10% rather than the ±3% the fuelled peaks carry: the manual publishes no
 brake cam contour, lift, timing, effective area or MCM target, so there is far
@@ -262,20 +322,41 @@ rather than reproduced by hand:
 | | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` | `brake-1300` | Target |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Speed, rpm | 551 governed | 900 held | 1200 held | 1400 held | 1800 held | 1300 held | — |
-| Firing orders `f0…4·f0` | 49.2% | 63.9% | 70.1% | 87.1% | 69.4% | 44.0% | ≥ 35% loaded |
-| Crest factor | 16.7 dB | 12.1 dB | 11.9 dB | 13.1 dB | 12.3 dB | 12.4 dB | ≥ 9 dB |
-| Modulation depth | 0.63 | 1.05 | 0.78 | 1.56 | 1.10 | 2.32 | > 0 |
-| `<80 Hz` | **40.8%** | 2.0% | 17.8% | 5.3% | 0.0% | 1.9% | ≤ 35% |
-| `80–300 Hz` | **41.7%** | 80.1% | 55.8% | 83.9% | 71.1% | **42.8%** | ≥ 45% |
-| `300 Hz–2 kHz` | 15.8% | 16.3% | 25.5% | 9.8% | 26.4% | **55.2%** | ≤ 30% |
-| `150 Hz–15 kHz` | 38.8% | 64.6% | 51.1% | 60.9% | 78.7% | 94.5% | ≥ 35% |
-| `>15 kHz` residue | 0.06% | 0.01% | 0.00% | 0.00% | 0.00% | 0.01% | ≤ 1% |
-| Peak | 0.110 | 0.368 | 0.642 | 0.850 | 0.850 | 0.850 | at or under the 0.85 knee |
-| Level, dBFS | −35.8 | −20.7 | −15.7 | −14.5 | −13.7 | −13.8 | — |
-| Limiter gain | 1.000 | 1.000 | 1.000 | 0.592 | 0.719 | 0.247 | reported, not targeted |
-| Exhaust over block | 9.2 dB | **5.2 dB** | 6.7 dB | 11.3 dB | **5.8 dB** | 26.8 dB | ≥ 6 dB |
+| Firing orders `f0…4·f0` | 48.1% | 60.0% | 72.0% | 88.2% | 72.2% | 43.3% | ≥ 35% loaded |
+| Crest factor | 15.5 dB | 12.0 dB | 11.9 dB | 12.7 dB | 11.5 dB | 12.5 dB | ≥ 9 dB |
+| Modulation depth | 0.66 | 1.11 | 0.77 | 1.55 | 1.08 | 2.31 | > 0 |
+| `<80 Hz` | **39.3%** | 1.9% | 17.8% | 5.4% | 0.0% | 2.0% | ≤ 35% |
+| `80–300 Hz` | 45.4% | 80.1% | 57.8% | 84.9% | 73.9% | **42.1%** | ≥ 45% |
+| `300 Hz–2 kHz` | 14.7% | 16.3% | 23.6% | 9.3% | 24.9% | **55.9%** | ≤ 30% |
+| `>2 kHz` | 0.6% | 1.7% | 0.9% | 0.4% | 1.2% | 0.0% | — |
+| `150 Hz–15 kHz` | 38.5% | 65.3% | 50.1% | 59.7% | 77.2% | 94.4% | ≥ 35% |
+| `>15 kHz` residue | 0.02% | 0.01% | 0.00% | 0.00% | 0.00% | 0.01% | ≤ 1% |
+| Peak | 0.105 | 0.367 | 0.652 | 0.850 | 0.850 | 0.850 | at or under the 0.85 knee |
+| Level, dBFS | −35.1 | −20.7 | −15.6 | −14.1 | −12.9 | −13.9 | — |
+| Exhaust over block | 10.8 dB | **5.2 dB** | 7.1 dB | 12.2 dB | 6.3 dB | 26.8 dB | ≥ 6 dB |
 
 Bold entries miss their target and are discussed under **Known deficits** below.
+
+**Milestone 12 moved every column, and two bold entries stopped being bold.**
+`80–300 Hz` at governed idle went from 41.7% to 45.4% and now clears its floor,
+and `rated-1800` went from 5.8 dB to 6.3 dB of exhaust over block and now clears
+the 6 dB balance criterion. Neither criterion was touched. Both were failing
+because the block path was carrying an artefact, and removing the artefact moved
+the share and the balance in the same motion.
+
+| | Was, milestone 11 | Now | Target |
+|---|---:|---:|---:|
+| `idle` `<80 Hz` | 40.8% | 39.3% | ≤ 35%, still failing |
+| `idle` `80–300 Hz` | **41.7%** | 45.4% | ≥ 45%, **now passing** |
+| `rated-1800` exhaust over block | **5.8 dB** | 6.3 dB | ≥ 6 dB, **now passing** |
+| `light-900` exhaust over block | **5.2 dB** | 5.2 dB | ≥ 6 dB, unmoved |
+| `brake-1300` `300 Hz–2 kHz` | **55.2%** | 55.9% | ≤ 30%, still undecided |
+
+Crest factor fell between 0.1 and 0.8 dB at five of the six points, and that
+needs saying rather than burying: part of what was being counted as pulse
+dynamics was an impulse train at the gas-exchange rate. `idle` lost 1.2 dB, which
+is almost exactly the 1.27 dB milestone 11 measured the steps as contributing
+there. The figure is lower and it is now measuring combustion.
 
 **Milestone 9 moved these figures, and the crest row is why.** The limiter was a
 memoryless soft clipper — `knee · tanh(mix / knee)` — applied to each sample as it
@@ -330,14 +411,135 @@ whole question and a mixed band share cannot say which one moved:
 
 | Alone, at `full-1400` | dBFS | `<80 Hz` | `80–300` | `300–2k` | `>2 kHz` | orders |
 |---|---:|---:|---:|---:|---:|---:|
-| Exhaust | −14.3 | 7.7% | 86.1% | 6.1% | 0.0% | 91.7% |
-| Block | −25.6 | 3.7% | 20.1% | 63.4% | 12.8% | 23.5% |
-| Body | −27.1 | 84.0% | 16.0% | 0.0% | 0.0% | 99.8% |
+| Exhaust | −13.9 | 7.9% | 86.3% | 5.8% | 0.0% | 92.1% |
+| Block | −26.1 | 4.3% | 21.9% | 68.2% | 5.6% | 25.8% |
+| Body | −26.8 | 84.3% | 15.7% | 0.0% | 0.0% | 99.8% |
+
+The block's `>2 kHz` share is the row milestone 12 was for: 12.8% became 5.6%,
+against the 5.7% a perfect removal of the steps predicted.
 
 The exhaust leads the block by 5 to 27 dB at every point measured. That figure is
 the single one that decides whether this reads as a truck: the exhaust carries the
 firing orders and the block sits on top of them, and a block in front of the
 exhaust is a small engine however the bands come out.
+
+#### What the traces contain
+
+Everything above measures what leaves the boundary. This measures what goes in,
+and the two are not the same question asked twice: each path filters, and a
+resonator bank spreads a single defective step over tens of milliseconds, so by
+the time a sample is emitted a one-step artefact and a combustion event look
+alike — broadband, decaying, arriving at the firing rate.
+
+The question is **whether a trace got where it is by being integrated or by
+being assigned.** Anything a fixed-step solver integrates is continuous, because
+a derivative bounds how far it can move in 25 µs. A boundary that clamps a
+cylinder to a manifold pressure, or a charge recomputed from a fresh gas-law
+evaluation, moves it by whatever the two descriptions disagree by, in one step.
+In the gas model that is a legitimate simplification making a small bounded
+error. It stops being small the moment the same trace is radiated, because the
+structural path differentiates it, and the derivative of a step is an impulse,
+and an impulse is white.
+
+From `cargo run --release -p sim-core --example trace_probe`. Every cylinder
+makes three gas-exchange transitions per cycle, and **as of milestone 12 all
+three are modelled as orifice flow**. Mean excess at each, in atmospheres of
+summed cylinder pressure, where excess is how far the trace moved beyond what the
+differences either side of it implied:
+
+| Transition | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` | `brake-1300` |
+|---|---:|---:|---:|---:|---:|---:|
+| exhaust valve opens | 0.0000 | 0.0002 | 0.0002 | 0.0004 | 0.0010 | 0.0000 |
+| TDC overlap | 0.0001 | 0.0030 | 0.0011 | 0.0001 | 0.0017 | 0.0000 |
+| intake valve closes | 0.0000 | 0.0000 | 0.0001 | 0.0001 | 0.0001 | **0.0371** |
+
+And what it was before, on the same measurement, with the two assignments in
+place:
+
+| Transition, milestone 11 | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` | `brake-1300` |
+|---|---:|---:|---:|---:|---:|---:|
+| TDC overlap | 0.0406 | 0.0457 | 0.1513 | 0.6060 | **0.9288** | 0.0702 |
+| intake valve closes | 0.0701 | 0.0683 | 0.0959 | 0.1049 | 0.0666 | 0.0609 |
+
+**The largest assignment in the model fell from 0.929 to 0.002, and the blind
+detector now finds no steps in the pressure forcing at any operating point.** The
+exhaust row is the control and is unchanged, which is what distinguishes the
+intake side being fixed from the measurement having stopped working.
+
+What that was worth, from the same probe — the block path's own band shares, as
+built now, against what it was and against the counterfactual that interpolated
+every step away:
+
+| Block path `>2 kHz` | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` | `brake-1300` |
+|---|---:|---:|---:|---:|---:|---:|
+| Milestone 11, as built | 20.9% | 7.5% | 5.6% | 12.8% | 7.6% | 0.9% |
+| Milestone 11 counterfactual | 8.1% | 7.6% | 5.8% | 5.7% | 4.0% | 0.1% |
+| **Milestone 12, as built** | **8.6%** | **7.6%** | **5.7%** | **5.6%** | **4.1%** | **0.2%** |
+| `300 Hz–2 kHz` now | 39.5% | 68.1% | 71.7% | 67.9% | 78.9% | 81.3% |
+
+**The middle row was recorded as an upper bound and it landed within half a
+percentage point of the answer everywhere.** That was the open question milestone
+11 could not settle — how much of the artefact a *finite-rate* transition removes,
+as against the perfect removal an interpolation measures — and the answer is
+essentially all of it. At idle the port recovered 12.3 of the 12.8 points that
+were available; at full load and at rated it landed a tenth of a point *past* the
+bound, which is within the run-to-run reach of a different 32 768 samples rather
+than a real overshoot. A real valve does still make a fast edge. At a 35° ramp it
+is worth under half a percentage point.
+
+The counterfactual is now flat. Removing every gas-exchange step from the pressure
+forcing changes its level by 0.00 dB and no band share by more than 0.1 of a
+point at five of the six points, which is the same statement as the first table
+made twice.
+
+**One residual step remains and it is a calibration consequence, not a leftover.**
+`brake-1300` reads 0.0371 at intake valve closing — a factor of 25 below the worst
+assignment it replaced, invisible to the blind detector, worth 0.17 dB of crest
+and no band share. Its cause is the recalibration: retarding intake valve closing
+to 40° ABDC left the brake's charging lobe opening only 2° later, so during
+braking a cylinder shuts its intake valve and is immediately charged from the
+exhaust manifold through a lobe facing a large pressure difference. That is a real
+fast flow event rather than an assignment, and widening the gap between the two
+events is the lever on it if it ever matters.
+
+Idle was the worst case before for a reason that was not the step size — the steps
+there were the smallest measured. It was that idle has the least combustion noise
+to hide them behind: no boost, the gentlest premixed rise, and a block path nearly
+29 dB below the one at rated. That is also why it is where the fix shows most.
+
+The other two forcings are clean, and that matters as much:
+
+- **The exhaust source.** No valve event moves it by more than 0.003, because
+  what it radiates *is* the flow through the port and the flow is what the
+  transition is about. The blind detector does flag 0.8 to 1.7% of it at four of
+  the six points, at magnitudes down to 0.0001 — that is the near-Nyquist limit
+  cycle the clamped port transfer is documented to carry. Removing every one of
+  them changes the path's level by at most 0.02 dB and no band share by more than
+  0.1 of a point. The claim that this residue is real and inaudible has been in
+  this document for three milestones; it is now measured.
+- **The body path.** No steps at any operating point, and the largest valve-event
+  excess anywhere is 0.0007. Torque is a sum over six cylinders of pressure times
+  a geometric factor that goes to zero at the dead centres where the transitions
+  happen, so a gas-exchange event arrives weighted by almost nothing. This was
+  true when the transitions were assignments too, which is why the body path never
+  needed fixing.
+
+**The blind detector is why this cannot be checked by the blind detector alone,
+and milestone 11 said so before there was a fix to check.** A difference standing
+three times above the differences either side of it is an *isolation* test, and
+isolation cannot see a discontinuity that lands on a steep enough slope: at
+1800 rpm the crank covers more angle per step, so the neighbouring differences
+grow and the ratio falls under three while the step itself grows. It found nothing
+at `rated-1800` in milestone 11, where the largest assignment in the model sat. It
+finds nothing there now either — and the two readings mean opposite things.
+
+Which is exactly why the probe reports both, and why the row that carries the
+result here is the valve-event attribution rather than the blind one: 0.9288
+against 0.0017 at the transition the solver *knows* happened. A measurement that
+reads "nothing" both before and after a fix has told you nothing about the fix.
+Pointing a new instrument at a signal whose answer is already known is what found
+the modulation detector in milestone 8 and the octave error in milestone 10; here
+it is what stopped a clean blind result from being mistaken for evidence.
 
 #### Known deficits
 
@@ -359,45 +561,65 @@ point:
   three of the ten scenarios, and where it does it changes the level rather than
   the shape.
 
+**Closed in milestone 12**, and what closed them is the point:
+
+- ~~`80–300 Hz` at governed idle is 41.7% against a 45% floor.~~ It now reads
+  45.4%. Nothing was done to the band and no criterion was touched: the block path
+  was ringing a boundary assignment, that artefact lived above 2 kHz, and the
+  shares are shares. Removing it moved weight back into the band that was short.
+- ~~`rated-1800` has the exhaust only 5.8 dB in front of the block.~~ It now reads
+  6.3 dB. Same cause, read a different way — the block was 0.5 dB louder than the
+  engine warranted because part of what it radiated was an impulse train, and the
+  balance criterion is a ratio against exactly that path.
+
+Both were listed as failing for two milestones and neither was ever a balance
+problem. They were one defect in the source, seen through two criteria.
+
 **Still open:**
 
-- **Governed idle sits 40.8% below 80 Hz, against a 35% ceiling.** A six at 551 rpm
-  has its fundamental at 27.5 Hz and its second order at 55 Hz, so the energy is
-  genuinely there and the model is not obviously wrong. What is wrong is the
-  criterion: a fixed ceiling asks "can ordinary hardware reproduce this" at a
+- **Governed idle sits 39.3% below 80 Hz, against a 35% ceiling.** A six at
+  551 rpm has its fundamental at 27.5 Hz and its second order at 55 Hz, so the
+  energy is genuinely there and the model is not obviously wrong. What is wrong is
+  the criterion: a fixed ceiling asks "can ordinary hardware reproduce this" at a
   frequency that sweeps by a factor of four across the range, and at the bottom of
   the range the honest answer is *not the fundamental, no*.
 
-  Milestone 10 measured the reference this was waiting on, and it reads **89 to
-  92% below 80 Hz at idle** across three independent stretches — so the model is
-  the *less* low-heavy of the two, by a wide margin. The number is still left as
-  it stands, failing, and the criterion is still not widened. That reference is a
-  **sampled source played back by a game**, so what it establishes is where one
-  convincing sound design puts the balance rather than where an engine does, and
-  the two figures are not taken at the same point in their chains either. See
-  **Characterising the reference**. What has changed is that the question now has
-  evidence attached rather than none, and the evidence says the gap is not small.
-- **`light-900` has the exhaust only 5.2 dB in front of the block**, and
-  `rated-1800` 5.8 dB, both under the 6 dB floor. Light load is where ignition
-  delay is longest and the premixed fraction largest, so the block is loudest
-  relative to the exhaust exactly where the balance criterion is tightest.
-  `rated-1800` crossed the line in milestone 9 from 6.0 dB, which is arithmetic
-  rather than a change in the engine: a gain that varies over the capture weights
-  each path's RMS by how its own envelope lines up with the reduction, and the
-  three paths have different envelopes. A criterion that a passing point can drift
-  across by 0.2 dB is a criterion with no margin in it.
+  Milestone 12 moved it from 40.8% to 39.3%, which is a side effect rather than an
+  attempt and does not change the situation.
 
-  **This one is not waiting on the reference, because the reference cannot ever
-  answer it.** A ratio between two radiating paths needs the two paths measured
+  **There are now two independent pieces of evidence against the criterion and
+  none for it.** Milestone 10 measured the reference this was waiting on, and it
+  reads **89 to 92% below 80 Hz at idle** across three independent stretches — so
+  the model is the *less* low-heavy of the two, by a wide margin. And the first
+  listening report on the model, recorded in milestone 12, is that it has *too
+  much high frequency and not enough low* — which points the same way as the
+  reference and the opposite way from the ceiling. See **What listening has said
+  so far**.
+
+  The number is still left as it stands, failing, and the criterion is still not
+  widened, because that reference is a **sampled source played back by a game** and
+  one listening report is one listening report. What has changed is that the
+  question has evidence on one side of it and a convention on the other, and that
+  is the state in which a criterion normally gets changed. It is the next decision
+  rather than this milestone's.
+- **`light-900` has the exhaust only 5.2 dB in front of the block**, under the
+  6 dB floor, and it did not move in milestone 12 while `rated-1800` did. Light
+  load is where ignition delay is longest and the premixed fraction largest, so
+  the block is loudest relative to the exhaust exactly where the balance criterion
+  is tightest — and that loudness is combustion rather than artefact, which is
+  why removing the artefact did nothing here. This is the one balance figure that
+  is asking a real question about the model.
+  **It is not waiting on the reference, because the reference cannot ever answer
+  it.** A ratio between two radiating paths needs the two paths measured
   separately, and the benchmark is a stereo mix in which they arrived added
   together. Milestone 8 recorded this as one of three things blocked on
   characterisation; milestone 10 establishes that it is blocked on something else.
   Settling it needs either a multi-microphone measurement of a real engine or an
   argument from mechanism, not more analysis of this file.
 
-**Newly visible, because the clipper had been flattering it:**
+**Still visible, because the clipper had been flattering it:**
 
-- **`brake-1300` puts 55.2% in `300 Hz–2 kHz` against a 30% ceiling**, and 42.8%
+- **`brake-1300` puts 55.9% in `300 Hz–2 kHz` against a 30% ceiling**, and 42.1%
   in `80–300 Hz` against a 45% floor. Under the old stage these read 40.4% and
   54.4%, and that was attributed to clipping being broadband. It was the reverse.
   The clipper was reducing the tall fast release-lobe pulses — which is where this
@@ -418,6 +640,63 @@ point:
   and looped source rather than of an engine — so no passage in it can be
   identified as engine braking with any confidence. The question stands where it
   stood, now with the search on record.
+
+**Fixed in milestone 12**, and kept because the shape of the diagnosis is worth
+more than the fix:
+
+- ~~The block path is partly ringing a boundary assignment.~~ It was, and it was
+  worth 13 of the 21 percentage points above 2 kHz at governed idle. Both assigned
+  transitions became orifice flow, the largest of them fell from 0.929 to 0.002,
+  and the block path's `>2 kHz` share went to 8.6% against the 8.1% a perfect
+  removal predicted. See **What the traces contain**.
+
+  Three things were written down before the fix and all three can now be checked
+  against it, which is the only reason to record predictions:
+
+  - The counterfactual was labelled an **upper bound**, on the grounds that a real
+    valve still makes a fast edge. It was within half a percentage point
+    everywhere. The supporting argument — that the exhaust side's 35° ramp is
+    about 130 solver steps at 1800 rpm — was labelled "a reason, and it is not
+    evidence". Correct reason.
+  - The **cheaper alternative was rejected on principle**: relaxing intake
+    pressure towards the manifold while still trapping by volumetric efficiency,
+    which would have removed the discontinuity without moving a calibrated peak.
+    Rejected because pressure and mass would then disagree at a known volume. That
+    rejection cost what it was predicted to cost — every peak in
+    **Results → Calibration** moved and two valve-timing values had to be refitted
+    — and the model is coherent with the gas law instead of quietly not.
+  - The **objection** was that the intake sits near equilibrium, which is where an
+    explicit orifice solver overshoots into a two-sample Nyquist limit cycle. It
+    was answered by pointing at the settle clamp `flow::exchange` already carries.
+    That held: the pressure forcing carries no detectable residue at any operating
+    point, and the intake side contributes none to the exhaust source's documented
+    0.8–1.7%.
+
+  One thing was **wrong**, and it was a scope estimate rather than a physical
+  claim: this was recorded as taking "the intake manifold's own mass balance" with
+  it. It did not have to. Both manifolds are still mean-value, which is what the
+  exhaust side had always done — see **Modelling simplifications**.
+
+**Newly measured, and not caused by milestone 12:**
+
+- **The air path limit-cycles at high speed under load.** At full pedal against
+  1500 N·m the engine settles near 1900 rpm, and there the wastegate loop does not
+  converge: boost swings between roughly 25 and 155 kPa over tens of seconds. The
+  full-load sweep has been reporting `conv false` at 1900 rpm for several
+  milestones, which is the same fact in one column.
+
+  **It is not new and it was not found by looking for it.** Milestone 12 shifted
+  the *phase* of the oscillation, which made a turbo test that sampled boost at one
+  instant fail — and measuring the previous solver at the same operating point
+  found the same oscillation at the same amplitude. `tests/turbo.rs` now averages
+  boost over a second rather than reading it once, so the suite no longer depends
+  on where in the cycle a run happens to stop, and the deficit is recorded here
+  instead of being absorbed by a lucky assertion.
+
+  It does not touch any figure in **Results → Calibration**, which is measured at
+  held speeds where the loop is stable, and it is upstream of nothing acoustic:
+  boost that swings over tens of seconds is not a sound. It is a control
+  calibration defect and belongs with the wastegate gains.
 
 None of the milestone 8 deficits was visible before it, for three separate
 reasons: two of the four operating points did not exist as scenarios, the
@@ -480,11 +759,32 @@ rather than sound, and the probe reports it separately so it cannot satisfy a
 high-frequency target it is not signal for. The probe's four full-range bands sum
 to 100% as a self-check.
 
-Ten mistakes this chain invites, all of which were made:
+Eleven mistakes this chain invites, all of which were made:
 
 - **A boundary condition cannot make a sound.** Clamping cylinder pressure to the
   manifold during the exhaust stroke makes the pressure difference across the
   port identically zero. Real orifice flow had to come first.
+- **And a boundary condition can make a sound it should not.** The mirror of the
+  one above, found ten milestones later and fixed in milestone 12. A clamp does
+  not merely fail to produce the pulse it should — it produces a step it should
+  not, because the two descriptions either side of it do not agree, and a step
+  differentiated is an impulse and an impulse is white. The lesson is not about
+  clamps. It is that the moment a trace is *radiated*, every simplification in it
+  is promoted from an approximation with a bounded error to a signal with a
+  spectrum, and those are judged by completely different standards. Nothing about
+  the intake clamp changed when the structural path was added in milestone 5; what
+  changed was what it was being asked to be, and it took six more milestones to
+  notice because the pressure trace it appears in looks perfectly reasonable.
+- **A calibration constant applied at an instant is a step.**
+  `air_path.volumetric_efficiency` was 0.92, multiplied into the charge at the
+  moment the intake valve shut, and the intake-closing step measured 6 to 8% of
+  cylinder pressure. Those are the same number: the step *was* the constant,
+  arriving all at once. A trapping efficiency is the integral of a throttling
+  loss over an induction stroke, and the difference between modelling it that way
+  and multiplying by the answer is invisible in every quantity except the one that
+  gets radiated. Its replacement is a port area, and trapping is now an outcome
+  that varies with speed on its own — which is also why it could not be refitted
+  by scaling the new area, and valve timing had to carry it.
 - **An open pipe radiates the rate of change of flow, not the flow.** A pipe
   mouth is a monopole. Radiating flow loses 6 dB per octave and buries the energy
   below 80 Hz — a signal that passes every test for being finite, bounded and
@@ -875,6 +1175,38 @@ None of this is published. The manual says nothing about how the engine sounds
 and less about how its cab sounds; these are listening choices and the UI says so
 where you switch them.
 
+### What listening has said so far
+
+Every figure in **Results → Sound** is a signal measurement, and the acoustic plan
+has recorded from milestone 8 onward that no measurement substitutes for hearing
+it. This section exists so that what has actually been heard is on the record at
+the same standard as what has been measured — which means it is short.
+
+**Milestone 12, on the build immediately before it.** The report was that there is
+**too much high frequency and not enough low**. One listener, one unrecorded
+playback chain, no level matching, no blind comparison, no operating point
+specified. That is the weakest kind of evidence this document accepts, and it is
+recorded rather than discarded because it is the only evidence of its kind and
+because it agreed with two instruments that had already been pointed at the same
+thing:
+
+- The high-frequency half was **already measured and already attributed**.
+  Milestone 11 had found that 13 of the 21 percentage points the block path held
+  above 2 kHz at governed idle were a boundary assignment being rung rather than
+  combustion. Milestone 12 removed it. Whether that is audible has not been
+  reported back on.
+- The low-frequency half **agrees with the reference and disagrees with the
+  acceptance criterion**. Milestone 10 measured the benchmark at 89–92% below
+  80 Hz at idle against the model's 39.3%, and the criterion demands ≤ 35%. Two
+  independent sources now say the model wants more low end and one convention says
+  less. See **Known deficits**.
+
+What this is not: a validation. Phase 7 of the acoustic plan asks for blinded,
+level-matched comparisons across operating conditions with the playback equipment
+recorded, and none of that has happened. A listening report that happens to
+confirm the instruments is worth exactly as much as one that contradicts them, and
+the reason to write it down is that the next one may.
+
 ### The acoustic reference, and what it is not
 
 The comparison workflow is built to be used against a benchmark recording. The
@@ -1153,7 +1485,9 @@ none of it supplies these numbers.
 |---|---|
 | Firing order / phase offsets | 1-5-3-6-2-4, conventional inline-six |
 | Rotating inertia | 3.5 kg·m²; the ≈1200 kg engine mass is **never** used here |
-| Gas-exchange boundaries | intake valve close 160° BTDC, exhaust valve open 140° ATDC |
+| Valve events | intake valve close 140° BTDC (40° after intake BDC), exhaust valve open 140° ATDC. Each opens and shuts over a 35° ramp. **The intake closing angle moved 20° later in milestone 12** — it used to be a boundary switch with no effect on trapping and is now the dominant lever on it, so the old value was calibrated against a question it was not being asked |
+| Port effective areas | 2.5e-3 m² per cylinder at full lift, intake and exhaust alike. Both are *effective*, so a discharge coefficient is inside them; the manual publishes valve counts and nothing else |
+| Trapping efficiency | **not assumed — an outcome.** It falls out of port area, valve timing, speed and manifold pressure. `air_path.volumetric_efficiency` survives at 0.92 as the coefficient of the manifolds' mean-value flow, which is a different quantity that happens to share a name |
 | **Boost setpoint schedule** | 1.28–3.08 bar absolute against speed — the target the wastegate controller regulates towards, not a written-in manifold pressure |
 | Turbocharger | 100 mm compressor wheel, 0.72/0.70 compressor/turbine efficiency, 3.5e-5 kg·m² shaft inertia, 6.0e-4 m² turbine area, 2.5e-3 m² wastegate |
 | Manifold volumes | 0.020 m³ intake, 0.010 m³ exhaust |
@@ -1184,16 +1518,39 @@ none of it supplies these numbers.
 | **Exhaust system** | 3.5 m tailpipe of 0.008 m² section; open-end reflection −0.8 with 2 kHz radiation loss; 12 L of free aftertreatment volume acting as 1.5 m of added acoustic length, and a substrate transmission of 0.61 per traverse acting as its flow resistance; 14 dB turbine insertion loss above 400 Hz; runners spanning 100–700 mm. **None of this geometry is published** |
 | **Combustion noise** | The weights still *ascend* with frequency, which is the opposite of the radiating physics. This was re-examined and kept: descending weights were tried, on the argument that a big engine should ring low, and they starved the top end to under 1% above 2 kHz because the drive genuinely falls that steeply — the premixed Wiebe rise starts with zero slope, so the model's burn onset drives the upper modes far more weakly than a real one would. The weights compensate for a shortfall in the drive rather than claiming an engine radiates more at 3.6 kHz than at 750 Hz. What changed instead is where the bank *starts* and how sharp it is |
 | **Cylinder build scatter** | ±2% exhaust port area, ±1.5% injector delivery, drawn once per cylinder at reset from the reset seed and never per step. Six bit-identical cylinders sum to a pure harmonic comb the ear hears as synthesised. Far too small to move any calibration result, and a test asserts peak power and torque are unchanged by it |
-| **Cycle-to-cycle scatter** | ±2% delivered fuel, drawn once per cylinder *per cycle* at intake valve closing from the same seeded stream. Build scatter makes the cylinders differ from each other; this makes a cylinder differ from its own last cycle, without which the engine is a six-event loop on repeat. Its effect is honestly modest — see **Modelling simplifications** — and it is held to the same no-calibration-change standard as the build spreads |
+| **Cycle-to-cycle scatter** | ±2% delivered fuel, drawn once per cylinder *per cycle* at intake valve closing from the same seeded stream. Build scatter makes the cylinders differ from each other; this was the only thing making a cylinder differ from its own last cycle until milestone 12, and is now the smaller of two such things — trapping through a real port carries the residual forward, which does the same job at roughly twice the size. Its effect is honestly modest, it is kept because it is still a working lever, and see **Modelling simplifications** for the measurement |
 | **Cockpit listening stage** | Per path: exhaust low-passed at 1.6 kHz with −3 dB at 400 Hz, delayed 12 ms, full room send; block low-passed at 3.2 kHz with +2 dB at 1 kHz, delayed 2 ms, 0.4 room send; body low-passed at 250 Hz with +1 dB at 120 Hz, no delay and **no room send at all**. Then shared: 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.41 out. No shared low pass: one figure could not describe a tailpipe metres away and an engine through the bulkhead at once. Presentation only — downstream of everything, changes no state, bypassable |
 | **Body and mount response** | Four modes at 60, 95, 150 and 220 Hz at Q 4.0, 4.0, 4.5 and 5.0, weighted 1.0, 1.0, 0.8 and 0.5, driven by gas plus pumping torque normalised by rated torque. Q in the single figures because a trimmed cab panel is heavily damped and a sharp bank here jumps in level as the firing frequency sweeps past each mode. This is a *vehicle* response excited by the engine, not an engine property; the source is an engine manual and publishes nothing about either |
 
 ## Modelling simplifications
 
-- **Only the exhaust valve has orifice flow.** The intake stays a manifold
-  boundary because it sits near equilibrium; the exhaust valve opens onto a
-  pressure ratio large enough to choke. Volumetric efficiency is a calibrated
-  constant, not an emergent result.
+- **Both valves have orifice flow; both manifolds are mean-value.** Every cylinder
+  draws and expels gas through a port area under a pressure ratio, so all three
+  gas-exchange transitions are integrated rather than assigned and trapping
+  efficiency is an emergent result. But neither *manifold* is drained or filled by
+  the summed port flows: both still use the speed-density estimate
+  `eta_v · V_d · (N/120) · rho`, with `air_path.volumetric_efficiency` as its
+  coefficient.
+
+  So `volumetric_efficiency` is still a calibrated 0.92 and still means something,
+  but it means a different thing than it did before milestone 12: it is the
+  coefficient of the manifold's mean-value flow, not a multiplier on the trapped
+  charge. The two numbers no longer have to agree, and they do not — the port traps
+  what it traps.
+
+  **This is a real inconsistency, deliberately kept, and it is symmetric.** The
+  exhaust side has worked exactly this way since milestone 5: real orifice flow at
+  the cylinder, mean-value flow at the manifold. Milestone 12 gave the intake the
+  same treatment rather than inventing a third arrangement, so what remains is one
+  simplification stated once instead of an asymmetry needing explanation. Closing
+  it means feeding both manifolds their summed port flows, which makes manifold
+  pressure ripple at the firing rate — genuine induction and exhaust pulsation, a
+  plausible future sound source, and a change to the turbo and EGR loops rather
+  than to the acoustic source. It is not a prerequisite for anything currently
+  measured.
+
+  The acoustic cost that *was* here has been paid: see **Results → Sound → What
+  the traces contain**.
 - **The compressor map is a simplified ellipse** and the turbine a fixed
   effective area, not measured maps.
 - **No aftertreatment chemistry.** The restriction downstream of the turbine is a
@@ -1216,17 +1573,30 @@ none of it supplies these numbers.
   frame and cab are the *vehicle*, and about those the source manual says nothing
   at all, exactly as it says nothing about the driveline that is modelled on the
   same footing.
-- **Cycle-to-cycle variation is physically right and acoustically minor.** It is
-  measurable — a cylinder's pulse height varies 1.5 times more with it than
-  without, at idle — but it is not what fixed the sound, and saying otherwise
-  would be overselling it. Two reasons. The acoustic source is the mass flow
-  through the port, and by exhaust valve opening 140° after top dead centre the
-  cylinder has expanded far enough that trapped mass, not the last 2% of fuel, is
-  setting the pressure. And at full load the smoke limit clamps commanded fuel to
-  the trapped air, which erases the trim entirely: measured at full pedal the
-  variation is 1.00 times, exactly none. That load dependence matches published
-  behaviour — a few percent at light load, under one at high — and it emerges
-  from a limiter that is there for another reason rather than from a schedule.
+- **Cycle-to-cycle variation is physically right, acoustically minor, and as of
+  milestone 12 mostly no longer the configured parameter's doing.** The acoustic
+  source is the mass flow through the port, and by exhaust valve opening 140° after
+  top dead centre the cylinder has expanded far enough that trapped mass, not the
+  last 2% of fuel, is setting the pressure. And at full load the smoke limit clamps
+  commanded fuel to the trapped air, which erases the trim entirely: measured at
+  full pedal the variation is exactly none. That load dependence matches published
+  behaviour — a few percent at light load, under one at high — and it emerges from
+  a limiter that is there for another reason rather than from a schedule.
+
+  What changed is where the variation comes from. With
+  `injection.cycle_delivery_spread` set to zero the model used to be a six-event
+  loop played on repeat, and that parameter was the only thing breaking it. It now
+  measures 0.58% pulse-height variation at idle *with the parameter at zero*,
+  because the intake side traps by integrating flow: what a cylinder traps depends
+  on the residual it kept, which depends on what its previous cycle burned. That is
+  a cycle-to-cycle feedback path the assigned charge did not have, and it is worth
+  roughly what a spread of 0.04 used to buy — twice the shipped 0.02.
+
+  The parameter is kept, at 0.02, and is still a working lever: 0.05 gives 1.6
+  times the intrinsic variation and 0.10 gives 2.9 times. But it is no longer the
+  mechanism, and `tests/acoustics.rs` now asserts both halves separately — that
+  the engine varies with the knob at zero, and that the knob still does something —
+  because only the second of those used to be true.
 - **The three paths are aligned by construction, not by agreement.** They share
   one ring buffer and one fractional read position from the solver through to the
   worklet's resampler, interleaved a frame at a time. Three buffers with three
@@ -1337,8 +1707,29 @@ repeating its last block, so a stall is audible rather than disguised.
   tone reads unmodulated at any carrier and any level; a tone modulated to a
   stated depth reads that depth; a pulse train reads deeply modulated and a
   high crest factor; noise reads neither; a comb at the firing rate reads as
-  orders and a tone between them does not. Passing on engine audio is not
-  evidence that a metric is correct.
+  orders and a tone between them does not; a ramp, a tone and a fast pulse train
+  contain no discontinuities and a step added to any of them is found at the
+  index and the size it was added. Passing on engine audio is not evidence that a
+  metric is correct.
+- **A metric's limitations are measured, not assumed.** Where an instrument has a
+  signal class it cannot handle, a test states what it reads for that class and
+  what that number is. Isolation cannot distinguish white noise from a trace full
+  of assignments, and cannot see a discontinuity that lands on a steep enough
+  slope; both are on the record with figures, and neither was resolved by moving a
+  threshold until the awkward signal went quiet.
+- **The forcings are readable where they enter the acoustic stage**, and are the
+  arguments the stage was given rather than a second estimate of them: the
+  reported structural forcing equals the snapshot's summed cylinder pressure over
+  ambient, and the reported body forcing equals its gas plus pumping torque over
+  rated, at every step.
+- **A radiated trace is integrated to, not assigned to.** No gas-exchange
+  transition moves the radiated pressure forcing by more than a tenth of that
+  trace's own typical step. This is the durable form of milestone 12: an
+  approximation with a small bounded error in the gas becomes an impulse with a
+  white spectrum once the same trace is differentiated by a structural path, so a
+  simplification that is acceptable in the pressure trace is not automatically
+  acceptable in the sound. Measured against the trace's own step so it does not
+  depend on the operating point's loudness.
 - **A scenario is reproducible.** The same scenario run twice is bit-identical in
   every sample and in every recorded condition; a capture contains its measurement
   phases and not the settling before them; a held phase holds; nothing is dropped
@@ -1424,13 +1815,14 @@ pnpm install --frozen-lockfile
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 300 tests: geometry, provenance, catalog,
+cargo test --workspace          # 309 tests: geometry, provenance, catalog,
                                 # determinism, limits, combustion, heat transfer,
                                 # turbo, EGR, acoustics, the limiter, brake,
                                 # driveline, dyno calibration, ID-branch guard,
                                 # the metric library against known signals,
                                 # the firing-rate estimator against its octave
-                                # traps, scenario reproducibility
+                                # traps, the jump detector against continuous
+                                # signals, scenario reproducibility
 
 pnpm wasm:build                 # wasm-pack -> web/src/wasm (generated, gitignored)
 pnpm wasm:test                  # wasm-pack test --node: WASM API smoke test
@@ -1484,6 +1876,128 @@ The annotation lands in `target/reference-annotation/annotation.json`, with ever
 window's metrics, order shares and strongest lines. The reference recordings are
 gitignored and are not in this repository; without them the tool says so and
 names this section.
+
+### Inspecting the drive
+
+`trace_probe` runs each steady scenario and reports the three forcings *before*
+any filtering: how many samples the solver assigned rather than integrated to,
+which crank event each one coincides with, and what removing them would do to
+the path they drive.
+
+```bash
+cargo run --release -p sim-core --example trace_probe
+```
+
+It replays each scenario a step at a time at the same chunk cadence
+`scenario::run` uses, and `advance(n)` equals `n` calls of `advance(1)`, so these
+are the traces behind the very captures `audio_probe` reports rather than a
+similar run at a similar speed.
+
+Read the two halves of each block against each other. **Blind** is what
+[`analysis::jumps`] finds without being told where to look — a difference
+standing three times above the differences either side of it. **By cause** is
+every valve event, whether or not it stands out.
+
+**The by-cause half is the one that carries a result, and milestone 12 is why.**
+Blind found nothing in the pressure forcing at `rated-1800` in milestone 11, where
+the largest assignment in the model sat, because isolation cannot see a
+discontinuity that lands on a steep enough slope. It finds nothing there now
+either, and the assignment is gone. A measurement that reads the same before and
+after a fix has said nothing about the fix; the by-cause row went from 0.9288 to
+0.0017 and did.
+
+The counterfactual line is the same path run again with the steps interpolated
+away. It is a measurement device. Interpolating a solver's output is not a
+proposed fix and the probe's own documentation says so — and having now been
+checked against a real fix, it turned out to predict one to within half a
+percentage point.
+
+[`analysis::jumps`]: crates/sim-core/src/analysis.rs
+
+### Verification, milestone 12
+
+Run on Windows 11.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --workspace` | 310 passed, 0 failed |
+| `cargo run --release -p sim-core --example sweep` | passed; the figures under **Results → Calibration** |
+| `cargo run --release -p sim-core --example brake_sweep` | passed; the figures under **Results → Engine brake** |
+| `cargo run --release -p sim-core --example audio_probe` | passed; the figures under **Results → Sound** |
+| `cargo run --release -p sim-core --example trace_probe` | passed; the figures under **What the traces contain** |
+
+**The web checks were not run, and unlike milestones 10 and 11 that needs a
+reason rather than a scope rule.** This milestone changes the physics, so the
+audio the browser plays changes with it — but no TypeScript, no worker protocol,
+no channel descriptor, no worklet and no routing was touched, and nothing in
+`web/src` references any configuration value that moved. What the browser would
+be re-verifying is a different WASM blob through an unchanged pipe. `pnpm build`,
+`pnpm check` and the Playwright suite are the checks for that pipe and are stale
+rather than failing; they should be run before this reaches a deployment.
+
+**Four tests changed, and none of them changed to accommodate a regression.** The
+distinction matters enough to itemise:
+
+| Test | Was | Now | Why |
+|---|---|---|---|
+| `no_gas_exchange_transition_steps_the_radiated_pressure_trace` | asserted two transitions step and one does not | asserts none of the three steps | It was written in milestone 11 to pin the defect, and its own failure message said to invert it when the intake side was fixed. Renamed from `the_intake_side_boundaries_step_and_the_exhaust_side_does_not` |
+| `the_structural_path_is_what_puts_energy_above_the_firing_harmonics` | modal bank dominates above 1 kHz by 4× | by 3× | The 4× was fitted while a fifth of the block path's content above 2 kHz was the artefact. It measured 3.98 after the fix. The claim is dominance; the constant was carrying a defect |
+| `the_per_cycle_spread_makes_a_cylinder_differ_from_its_own_last_cycle` | the spread at 0.02 raises variation 1.3× over zero | the engine varies at zero, **and** 0.05 raises it 1.3× | The model now has intrinsic cycle coupling larger than the shipped spread contributes. Split into two assertions because only one of them used to be true |
+| `running_under_load_spins_the_shaft_up_and_makes_real_boost`, `boost_decays_back_toward_ambient_when_fuelling_stops` | boost at one instant > 30 kPa | mean boost over a second > 30 kPa | The plant limit-cycles there and always has. Verified by measuring the previous solver at the same point. See **Known deficits** |
+
+One test is new: `the_intake_port_is_shut_at_overlap_and_at_valve_closing`, which
+holds the intake window shut at both ends. An intake port still open at valve
+closing would trap the charge through a discontinuity in *area* instead of one in
+pressure, which is the same defect wearing a different hat.
+
+The middle two rows are the ones to be suspicious of, because relaxing a
+threshold the day it fails is how the previous round of acceptance criteria came
+to enforce the defect they were meant to catch. What distinguishes these: both
+thresholds were fitted against a signal that contained the artefact, milestone 11
+measured the artefact and **predicted in advance** that removing it would take
+that content with it, and both new values are stated with the measurement that
+moved them. Neither is an acceptance criterion from **Acceptance criteria** — none
+of those changed, and two of them stopped failing.
+
+### Verification, milestone 11
+
+Run on Windows 11. This change adds a measurement tool, one cached struct on the
+step, and tests; it touches neither the physics nor the browser audio, so the web
+checks were not run — `AGENTS.md` scopes the full suite to changes that span
+them.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --workspace` | 309 passed, 0 failed |
+| `cargo run --release -p sim-core --example audio_probe` | passed; **every engine figure identical to milestones 9 and 10**, which is the check that this milestone changed nothing |
+| `cargo run --release -p sim-core --example trace_probe` | passed; the figures under **What the traces contain** |
+
+Nine tests are new. Seven hold the jump detector against signals whose answer is
+known before the code runs — a ramp, a tone, a fast pulse train, a lone step
+added to each, and white noise — and one of those seven asserts the instrument's
+*limitation* rather than its strength: white noise defeats isolation, registering
+a few percent with ratios into the hundreds, and that is recorded as a measured
+fact rather than tuned away. Raising the threshold until noise went quiet would
+fit the number to a signal nobody measures.
+
+The two in `tests/acoustics.rs` are the ones that matter to the finding. The
+first checks that the reported forcing is what the paths were actually driven by,
+against the snapshot's cylinder pressures and torque terms — data the solver
+publishes by an entirely different route — so a probe cannot be reading a
+plausible copy. The second pins the defect: the transition modelled as orifice
+flow is continuous against the trace's own typical step, and the two modelled as
+assignments are at least ten times larger. **That second assertion is expected to
+fail when the intake side is fixed**, and it says so in its own failure message.
+It failed in milestone 12 and was inverted; see **Verification, milestone 12**.
+
+No sweep was re-run. Three stores into a struct after the acoustic push cannot
+reach combustion, the crank or the brake, and `audio_probe` reproducing every
+figure to the last digit is the stronger statement: identical audio requires
+identical cylinder pressure at every one of 48 000 steps.
 
 ### Verification, milestone 10
 

@@ -19,6 +19,8 @@ pub const PARAMETER_PATHS: &[&str] = &[
     "valvetrain.exhaust_valves_per_cylinder",
     "valvetrain.intake_valve_close_rad",
     "valvetrain.exhaust_valve_open_rad",
+    "valvetrain.intake_ramp_rad",
+    "valvetrain.intake_effective_area_m2",
     "valvetrain.exhaust_ramp_rad",
     "valvetrain.exhaust_effective_area_m2",
     "valvetrain.exhaust_area_spread",
