@@ -1,776 +1,552 @@
-import { expect, test, type Page, type Request } from '@playwright/test';
-
-/**
- * End-to-end coverage of the vertical slice, run against the built static site.
- *
- * Covers README "Acceptance criteria": WASM loads and advances in a browser through the
- * worker; the UI stays responsive while the simulation runs and takes its
- * selector entries from the real API; and the build makes no external requests.
- *
- * The suite runs twice — once at a domain root, once under a configured
- * subpath — via the two Playwright projects.
- */
+import { expect, test, type Page } from '@playwright/test';
+import { chooseOption } from './ui';
 
 const ENGINE_ID = 'mercedes-benz-om471-9-m3d-375kw';
 
-/** Collects any request that leaves the page's own origin. */
-function watchForExternalRequests(page: Page): string[] {
-  const external: string[] = [];
-  page.on('request', (request: Request) => {
-    const url = new URL(request.url());
-    if (url.protocol === 'blob:' || url.protocol === 'data:') return;
-    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
-      external.push(request.url());
-    }
-  });
-  return external;
-}
-
 async function bootstrap(page: Page) {
-  const external = watchForExternalRequests(page);
   await page.goto('./');
-  await expect(page.getByTestId('lifecycle')).toHaveText('ready');
-  return external;
+  await expect(page.getByTestId('status-bar')).toHaveAttribute('data-lifecycle', 'ready');
+}
+async function numeric(page: Page, id: string) {
+  return Number.parseFloat(await page.getByTestId(id).textContent() ?? 'NaN');
+}
+async function openControls(page: Page) {
+  const toggle = page.getByTestId('controls-toggle');
+  if (await toggle.isVisible() && await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+}
+async function start(page: Page) {
+  await openControls(page);
+  await page.getByTestId('start').click();
+  await expect(page.getByTestId('run-state')).toHaveAttribute('data-state', 'running');
+  await expect.poll(() => numeric(page, 'rpm'), { timeout: 30_000 }).toBeGreaterThan(500);
 }
 
-/** Telemetry readings carry unit suffixes, so parse rather than cast. */
-async function numeric(page: Page, testId: string): Promise<number> {
-  return Number.parseFloat(await page.getByTestId(testId).innerText());
-}
-
-async function rpm(page: Page): Promise<number> {
-  return numeric(page, 'rpm');
-}
-
-/**
- * Wait for the engine to reach governed idle.
- *
- * `run-state` reads `running` as soon as the worker is stepping, which is while
- * the starter is still dragging the crank up through a few hundred rpm — a long
- * way below the 560 rpm the governor holds. Loading it there is loading an
- * engine that has not caught yet.
- *
- * **This is a real margin rather than a theoretical one.** Reproduced natively,
- * applying 500 N·m at 395 rpm dips the crank to 269 rpm before the turbo has any
- * boost to give, and 269 rpm is close enough to a stall that how many steps the
- * worker got through in the last animation frame decides the outcome. Browser
- * step counts come from wall-clock time by design, so under load the dip goes
- * deeper. Six of these tests failed on the previous solver and five on the
- * current one, in a *different combination* each run and all with the same
- * symptom — an engine reading `stopped` where a speed was expected.
- *
- * Waiting for idle is what a driver does and it removes the coupling to machine
- * timing entirely.
- */
-async function awaitIdle(page: Page): Promise<void> {
-  await expect
-    .poll(() => rpm(page), {
-      timeout: 30_000,
-      message: 'the engine should reach governed idle before it is loaded',
-    })
-    .toBeGreaterThan(500);
-}
-
-/**
- * Bring a running engine up to a loaded working point.
- *
- * The load is ramped rather than dropped on all at once. Boost is no longer
- * prescribed from a schedule — it has to be earned from exhaust energy — so an
- * idling engine buried under full load simply stalls, and a stalled engine makes
- * no boost. A real truck pulls away the same way, and it waits for the engine to
- * be idling first.
- */
-async function pullAway(page: Page): Promise<void> {
-  await awaitIdle(page);
-  await page.getByTestId('pedal').fill('90');
-  await page.getByTestId('load').fill('500');
-  await expect
-    .poll(() => rpm(page), { timeout: 30_000, message: 'the engine should pick up speed' })
-    .toBeGreaterThan(1_100);
-  await page.getByTestId('load').fill('1800');
-}
-
-/** Bar heights from the spectrum view, which is drawn off the output path. */
-async function spectrumBars(page: Page): Promise<number[]> {
-  return page
-    .getByTestId('spectrum')
-    .locator('rect.bar')
-    .evaluateAll((nodes) =>
-      nodes.map((node) => Number.parseFloat(node.getAttribute('height') ?? '0')),
-    );
-}
-
-/**
- * Which bar a frequency lands in.
- *
- * The axis is logarithmic from 20 Hz to 20 kHz across all the bars, so the
- * bucket for a frequency f is floor(log10(f/20) / log10(1000) * count).
- */
-function bucketOf(hz: number, buckets: number): number {
-  return Math.floor((Math.log10(hz / 20) / Math.log10(20_000 / 20)) * buckets);
-}
-
-/** Mean bar height across a frequency band. */
-function bandMean(bars: number[], lowHz: number, highHz: number): number {
-  const slice = bars.slice(bucketOf(lowHz, bars.length), bucketOf(highHz, bars.length));
-  return slice.reduce((sum, height) => sum + height, 0) / Math.max(1, slice.length);
-}
-
-/**
- * Average the output over a couple of seconds.
- *
- * The exhaust is a pulse train, not a tone: any single reading of either the
- * spectrum or the level is a snapshot of something that moves with every firing
- * event. Comparing two stages on single readings compares the moment they were
- * taken in.
- */
-/** Bar heights averaged over a couple of seconds, bin by bin. */
-async function averagedBars(page: Page): Promise<number[]> {
-  const sums: number[] = [];
-  const reads = 10;
-  for (let i = 0; i < reads; i += 1) {
-    await page.waitForTimeout(200);
-    const bars = await spectrumBars(page);
-    bars.forEach((height, bin) => {
-      sums[bin] = (sums[bin] ?? 0) + height;
-    });
-  }
-  return sums.map((sum) => sum / reads);
-}
-
-async function measureOutput(page: Page): Promise<{ low: number; high: number; levelDb: number }> {
-  const lows: number[] = [];
-  const highs: number[] = [];
-  const powers: number[] = [];
-  for (let i = 0; i < 10; i += 1) {
-    await page.waitForTimeout(200);
-    const bars = await spectrumBars(page);
-    lows.push(bandMean(bars, 60, 400));
-    highs.push(bandMean(bars, 2_000, 8_000));
-    const db = Number.parseFloat(await page.getByTestId('audio-output-level').innerText());
-    // Average power, not decibels: the mean of a set of logarithms is not the
-    // logarithm of their mean, and it is loudness that is being compared.
-    powers.push(10 ** (db / 10));
-  }
-  const mean = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / values.length;
-  return { low: mean(lows), high: mean(highs), levelDb: 10 * Math.log10(mean(powers)) };
-}
-
-test('the worker boots and the selector is populated from the real catalog API', async ({
-  page,
-}) => {
+test('selection menus support keyboard, outside dismissal and localized mobile options', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await bootstrap(page);
-
-  // The selector renders only after the worker answers `listConfigs`.
-  const select = page.getByTestId('engine-select');
-  await expect(select).toHaveAttribute('data-source', 'catalog-api');
-  await expect(select.locator('option')).toHaveCount(1);
-  await expect(select).toHaveValue(ENGINE_ID);
-  await expect(page.getByTestId('active-id')).toHaveText(ENGINE_ID);
-  await expect(page.getByTestId('disclaimer')).not.toBeEmpty();
-
-  // Versions come from the WASM module, so a boot means WASM really loaded.
-  await expect(page.getByTestId('status-bar')).toContainText('api v4');
-  await expect(page.getByTestId('status-bar')).toContainText('Web Worker');
+  const language = page.getByTestId('language-select');
+  await language.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('option', { name: 'English' })).toHaveAttribute('aria-selected', 'true');
+  await page.screenshot({ path: testInfo.outputPath('language-menu.png') });
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(language).toHaveText('简体中文');
+  await language.click();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Escape');
+  await expect(language).toHaveAttribute('data-value', 'zh-CN');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await language.click();
+  await page.getByTestId('engine-select').click();
+  await expect(page.getByRole('listbox')).toHaveCount(1);
+  await expect(page.getByRole('option')).toContainText('参考模型');
+  const menu = (await page.getByRole('listbox').boundingBox())!;
+  expect(menu.x).toBeGreaterThanOrEqual(0);
+  expect(menu.x + menu.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath('engine-menu.png') });
+  await page.getByTestId('speed-panel').click({ position: { x: 5, y: 5 } });
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(page.locator('select')).toHaveCount(0);
+  for (const locale of ['en', 'zh-CN']) {
+    await chooseOption(page, 'language-select', locale);
+    const selector = (await page.getByTestId('engine-select').boundingBox())!;
+    const specs = (await page.getByTestId('specs-toggle').boundingBox())!;
+    expect(Math.abs(selector.y - specs.y)).toBeLessThan(1);
+    expect(Math.abs(selector.height - specs.height)).toBeLessThan(1);
+    await page.getByTestId('specs-toggle').click();
+    await expect(page.getByTestId('engine-spec')).toBeVisible();
+    await page.getByTestId('specs-toggle').click();
+    await expect(page.getByTestId('engine-spec')).toBeHidden();
+  }
 });
 
-test('provenance crosses the boundary and is visible in the UI', async ({ page }) => {
+test('Diesel HiFi loads its catalog without production debugging tools or external requests', async ({ page }) => {
+  const external: string[] = [];
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (!['localhost', '127.0.0.1'].includes(url.hostname) && !['blob:', 'data:'].includes(url.protocol)) external.push(url.href);
+  });
   await bootstrap(page);
-
-  const published = Number(await page.getByTestId('count-published').innerText());
-  const calibrated = Number(await page.getByTestId('count-calibrated').innerText());
-  const derived = Number(await page.getByTestId('count-derived').innerText());
-
-  expect(published).toBeGreaterThan(0);
-  expect(calibrated).toBeGreaterThan(0);
-  expect(published + calibrated + derived).toBeGreaterThan(40);
-
-  // Calibration targets that are not published must be visible as such.
-  const entries = page.getByTestId('provenance-entries');
-  await expect(entries).toContainText('inertia.rotating_inertia_kg_m2');
-  await expect(entries).toContainText('geometry.firing_order');
+  await expect(page).toHaveTitle('Diesel HiFi');
+  await expect(page.getByTestId('engine-select')).toHaveAttribute('data-value', ENGINE_ID);
+  await expect(page.getByTestId('engine-select')).toHaveAttribute('data-source', 'catalog-api');
+  await page.getByTestId('engine-select').click();
+  await expect(page.getByRole('option')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('engine-spec')).toContainText('Published');
+  for (const view of ['drive', 'sound', 'details']) {
+    await page.getByTestId(`nav-${view}`).click();
+    for (const id of ['run-sweep', 'provenance-entries', 'spectrum', 'audio-paths', 'audio-compare', 'egr-toggle', 'enable-audio', 'disable-audio']) {
+      await expect(page.getByTestId(id)).toHaveCount(0);
+    }
+  }
+  await start(page);
+  expect(external).toEqual([]);
 });
 
-test('starting the engine advances the simulation through the worker', async ({ page }) => {
+test('engine start, accelerator, release, stop and restart reach the real simulation', async ({ page }) => {
   await bootstrap(page);
-
-  await expect(page.getByTestId('run-state')).toHaveText('stopped');
   await expect(page.getByTestId('rpm')).toHaveText('0');
-
-  await page.getByTestId('start').click();
-
-  // The engine cranks and then runs on its own.
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-  await expect
-    .poll(() => rpm(page), { timeout: 20_000, message: 'the engine should reach idle' })
-    .toBeGreaterThan(400);
-
-  // Telemetry that can only come from the physics.
-  await expect
-    .poll(() => numeric(page, 'peak-session'), {
-      message: 'compression should build real cylinder pressure',
-    })
-    .toBeGreaterThan(1);
-  await expect(page.getByTestId('cylinders').locator('li')).toHaveCount(6);
-  await expect.poll(() => numeric(page, 'steps')).toBeGreaterThan(10_000);
-});
-
-test('the UI stays responsive while the simulation runs', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
-  // Idle first, for the reason `awaitIdle` gives: 500 N·m applied to an engine
-  // still on the starter is a coin toss decided by how many steps the last frame
-  // managed, and this test is about input latency rather than about that.
-  await awaitIdle(page);
-  const before = await rpm(page);
-
-  // Interacting with the page while the worker is stepping must be immediate.
-  const started = Date.now();
-  await page.getByTestId('pedal').fill('80');
-  await page.getByTestId('load').fill('500');
-  const elapsed = Date.now() - started;
-  expect(elapsed, 'input handling must not be blocked by the simulation').toBeLessThan(3_000);
-
-  // Opening full pedal must change the engine speed, proving the input reached
-  // the physics through the worker.
-  await expect
-    .poll(() => rpm(page), { timeout: 20_000, message: 'the pedal should raise engine speed' })
-    .toBeGreaterThan(before + 100);
-});
-
-test('stopping the engine brings it to rest and reset clears telemetry', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
+  await expect(page.getByTestId('run-state')).toHaveAttribute('data-state', 'stopped');
+  await start(page);
+  await page.getByTestId('pedal').fill('65');
+  await expect.poll(() => numeric(page, 'rpm')).toBeGreaterThan(1500);
+  await page.getByTestId('release-pedal').click();
+  await expect(page.getByTestId('pedal')).toHaveValue('0');
+  await expect.poll(() => numeric(page, 'rpm'), { timeout: 30_000 }).toBeLessThan(650);
   await page.getByTestId('stop').click();
-  await expect
-    .poll(() => rpm(page), { timeout: 30_000, message: 'the engine should coast down' })
-    .toBe(0);
-  await expect(page.getByTestId('run-state')).toHaveText('stopped');
-
+  await expect.poll(() => numeric(page, 'rpm'), { timeout: 30_000 }).toBe(0);
+  await start(page);
   await page.getByTestId('reset').click();
-  await expect(page.getByTestId('sim-time')).toHaveText('0.00 s');
-  await expect(page.getByTestId('steps')).toHaveText('0');
-});
-
-test('re-selecting the active engine performs a deterministic reset', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect
-    .poll(() => numeric(page, 'steps'), { timeout: 20_000 })
-    .toBeGreaterThan(1_000);
-
-  // Selecting the configuration that is already active must reset the run.
-  await page.getByTestId('engine-select').selectOption(ENGINE_ID);
-
-  await expect(page.getByTestId('steps')).toHaveText('0');
-  await expect(page.getByTestId('sim-time')).toHaveText('0.00 s');
   await expect(page.getByTestId('rpm')).toHaveText('0');
-  await expect(page.getByTestId('run-state')).toHaveText('stopped');
+  await expect(page.getByTestId('pedal')).toHaveValue('0');
+  await expect(page.getByTestId('run-state')).toHaveAttribute('data-state', 'stopped');
 });
 
-test('the built site makes no external network requests', async ({ page }) => {
-  const external = await bootstrap(page);
-
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-  await page.waitForTimeout(1_500);
-
-  expect(external, `unexpected external requests: ${external.join(', ')}`).toEqual([]);
-});
-
-test('cycle-averaged torque and power appear once the engine runs', async ({ page }) => {
+test('Drive cutaway animates with the engine and respects reset, navigation and reduced motion', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1200 });
   await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
+  const engine = page.getByTestId('engine-animation');
+  const piston = page.getByTestId('engine-piston').first();
+  await expect(engine).toBeVisible();
+  await expect(page.getByTestId('engine-piston')).toHaveCount(6);
+  await expect(engine).toHaveAttribute('data-moving', 'false');
+  const initial = await piston.getAttribute('transform');
+  await expect(page.getByTestId('audio-volume')).toHaveCount(0);
+  await start(page);
+  await expect(engine).toHaveAttribute('data-moving', 'true');
+  await expect.poll(() => piston.getAttribute('transform')).not.toBe(initial);
+  await page.getByTestId('reset').click();
+  await expect(engine).toHaveAttribute('data-moving', 'false');
+  await expect(piston).toHaveAttribute('transform', initial!);
+  await start(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(engine).toHaveAttribute('data-moving', 'false');
+  await expect(page.getByRole('switch', { name: 'Slow motion' })).toBeDisabled();
+  const frozen = await piston.getAttribute('transform');
+  await page.waitForTimeout(200);
+  await expect(piston).toHaveAttribute('transform', frozen!);
+  await page.getByTestId('nav-sound').click();
+  await expect(engine).toHaveCount(0);
+  await expect(page.getByTestId('audio-volume')).toBeVisible();
+});
 
-  // Whole-cycle averages only exist after a complete four-stroke cycle.
-  await expect(page.getByTestId('cycle-averages')).toBeVisible({ timeout: 20_000 });
+test('speed pointer stays on the rail and tracks live RPM during acceleration and reset', async ({ page }) => {
+  // Observe real worker snapshots from the test, without a production debug API.
+  await page.addInitScript(() => {
+    const state = window as typeof window & { pointerRpm: number };
+    state.pointerRpm = 0;
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        this.addEventListener('message', ({ data }) => {
+          if (data.t === 'snapshot') state.pointerRpm = data.snapshot.rpm;
+        });
+      }
+    };
+  });
+  await bootstrap(page);
+  await start(page);
+  const samplePointer = (duration: number) => page.evaluate(async (durationMs) => {
+    const marker = document.querySelector<SVGCircleElement>('[data-testid="rpm-pointer"]')!;
+    const rail = document.querySelector<SVGPathElement>('[data-testid="rpm-rail"]')!;
+    const svg = marker.ownerSVGElement!;
+    const length = rail.getTotalLength();
+    const until = performance.now() + durationMs;
+    let maxError = 0;
+    let frames = 0;
+    let maxRpm = 0;
+    do {
+      await new Promise(requestAnimationFrame);
+      const rpm = (window as typeof window & { pointerRpm: number }).pointerRpm;
+      const style = getComputedStyle(marker);
+      const matrix = svg.getScreenCTM()!.inverse().multiply(marker.getScreenCTM()!);
+      const actual = new DOMPoint(parseFloat(style.cx), parseFloat(style.cy)).matrixTransform(matrix);
+      const expected = rail.getPointAtLength(Math.max(0, Math.min(1, rpm / 2500)) * length);
+      maxError = Math.max(maxError, Math.hypot(actual.x - expected.x, actual.y - expected.y));
+      maxRpm = Math.max(maxRpm, rpm);
+      frames++;
+    } while (performance.now() < until);
+    return { maxError, frames, maxRpm };
+  }, duration);
+  await page.getByTestId('pedal').fill('90');
+  const acceleration = await samplePointer(900);
+  expect(acceleration.frames).toBeGreaterThan(10);
+  expect(acceleration.maxRpm).toBeGreaterThan(1000);
+  expect(acceleration.maxError).toBeLessThan(2);
+  const resetting = samplePointer(300);
+  await page.getByTestId('reset').click();
+  expect((await resetting).maxError).toBeLessThan(2);
+  await expect(page.getByTestId('rpm')).toHaveText('0');
+});
+
+test('slow motion switch changes drawing speed and persists across views and languages', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await bootstrap(page);
+  const toggle = page.getByTestId('engine-slow-motion');
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await start(page);
+  const angularSpeed = () => page.evaluate(async () => {
+    const pin = document.querySelector<SVGCircleElement>('[data-testid="engine-crank-pin"]')!;
+    const center = pin.nextElementSibling as SVGCircleElement;
+    const angle = () => Math.atan2(pin.cx.baseVal.value - center.cx.baseVal.value,
+      center.cy.baseVal.value - pin.cy.baseVal.value);
+    let previous = angle();
+    let traveled = 0;
+    const started = performance.now();
+    do {
+      await new Promise(requestAnimationFrame);
+      const current = angle();
+      traveled += Math.atan2(Math.sin(current - previous), Math.cos(current - previous));
+      previous = current;
+    } while (performance.now() - started < 600);
+    return traveled / (performance.now() - started) * 1000;
+  });
+  const slow = await angularSpeed();
+  expect(slow).toBeGreaterThan(1);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  const fullSpeed = await angularSpeed();
+  expect(fullSpeed / slow).toBeGreaterThan(7);
+  expect(fullSpeed / slow).toBeLessThan(13);
+  expect(await numeric(page, 'rpm')).toBeLessThan(650);
+  await page.getByTestId('nav-sound').click();
+  await page.getByTestId('nav-drive').click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await chooseOption(page, 'language-select', 'zh-CN');
+  await expect(page.getByRole('switch', { name: '慢动作' })).toHaveAttribute('aria-checked', 'false');
+  await page.getByTestId('reset').click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await toggle.focus();
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+});
+
+test('telemetry is separate from driving and keeps pressure, torque, starter and air-path readings', async ({ page }) => {
+  await bootstrap(page);
+  await expect(page.getByTestId('cycle-averages')).toBeHidden();
+  await start(page);
+  await page.getByTestId('nav-details').click();
+  await expect(page.getByTestId('cycle-averages')).toBeVisible();
   await expect.poll(() => numeric(page, 'brake-power')).not.toBeNaN();
-
-  // Milestone 2 combustion telemetry: the published APCRS variant is reported.
-  await expect(page.getByTestId('variant')).toHaveText(/standard|amplified/);
-
-  // Load the engine so the turbocharger actually spools.
-  await pullAway(page);
-  await expect
-    .poll(() => numeric(page, 'intake-pressure'), {
-      timeout: 30_000,
-      message: 'charge pressure should rise above ambient under load',
-    })
-    .toBeGreaterThan(1.1);
+  await page.getByTestId('telemetry-starter-data').locator('summary').click();
+  await expect(page.getByTestId('starter-current')).toBeVisible();
+  await expect.poll(() => numeric(page, 'starter-current')).toBe(0);
+  await expect.poll(() => numeric(page, 'starter-volts')).toBeGreaterThan(20);
+  await page.getByTestId('telemetry-cylinders').locator('summary').click();
+  await expect(page.getByTestId('cylinders').locator('li')).toHaveCount(6);
+  await expect.poll(() => numeric(page, 'peak-session')).toBeGreaterThan(1);
+  await page.getByTestId('telemetry-air-path').locator('summary').click();
+  await page.getByTestId('pedal').fill('80');
+  await expect.poll(() => numeric(page, 'turbo-shaft')).toBeGreaterThan(5);
 });
 
-test('the dynamometer sweep renders a calibrated curve', async ({ page }) => {
+test('catalog selection resets the session and controls', async ({ page }) => {
   await bootstrap(page);
-
-  await expect(page.getByTestId('dyno-chart')).toHaveCount(0);
-  await page.getByTestId('run-sweep').click();
-
-  // The chart appears once every point is measured.
-  await expect(page.getByTestId('dyno-chart')).toBeVisible({ timeout: 120_000 });
-
-  // Peaks are labelled CALIBRATED, never presented as OEM data, and the
-  // published magnitudes are drawn as a separate reference.
-  await expect(page.getByTestId('peak-power-label')).toContainText('CALIBRATED');
-  await expect(page.getByTestId('peak-torque-label')).toContainText('CALIBRATED');
-  await expect(page.getByTestId('dyno-chart')).toContainText('PUBLISHED 375');
-  await expect(page.getByTestId('dyno-chart')).toContainText('PUBLISHED 2500');
-  await expect(page.getByTestId('calibration-note')).toContainText('not OEM data');
-
-  // The measured peaks land near the published magnitudes.
-  const peaks = page.getByTestId('dyno-peaks');
-  await expect(peaks).toBeVisible();
-  const text = await peaks.innerText();
-  const power = Number.parseFloat(text.match(/([\d.]+) kW/)?.[1] ?? 'NaN');
-  const torque = Number.parseFloat(text.match(/([\d]+) N·m/)?.[1] ?? 'NaN');
-  expect(Math.abs(power - 375) / 375).toBeLessThanOrEqual(0.03);
-  expect(Math.abs(torque - 2500) / 2500).toBeLessThanOrEqual(0.03);
-
-  // An accessible table view of the same numbers exists.
-  await page.getByRole('button', { name: 'Show table' }).click();
-  await expect(page.getByTestId('sweep-table')).toBeVisible();
-  expect(await page.getByTestId('sweep-table').locator('tbody tr').count()).toBeGreaterThan(9);
+  await start(page);
+  await page.getByTestId('pedal').fill('40');
+  await chooseOption(page, 'engine-select', ENGINE_ID);
+  await expect(page.getByTestId('rpm')).toHaveText('0');
+  await expect(page.getByTestId('pedal')).toHaveValue('0');
+  await expect(page.getByTestId('run-state')).toHaveAttribute('data-state', 'stopped');
+  await page.getByTestId('nav-details').click();
+  await expect(page.getByTestId('sim-time')).toHaveText('0.00 s');
 });
 
-test('the air path is computed rather than prescribed', async ({ page }) => {
+test('a downhill gear drives the crank and engine braking slows it', async ({ page }) => {
   await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
-  // Load it so the turbo has exhaust energy to work with.
-  await pullAway(page);
-
-  // Boost is the output of a compressor on a shaft with inertia, so the shaft
-  // must actually be turning for boost to exist.
-  await expect
-    .poll(() => numeric(page, 'turbo-shaft'), {
-      timeout: 30_000,
-      message: 'the turbo shaft should spin up under load',
-    })
-    .toBeGreaterThan(10);
-  await expect
-    .poll(() => numeric(page, 'boost'), { timeout: 30_000 })
-    .toBeGreaterThan(0.3);
-
-  // Exhaust manifold pressure is a state too, not a fixed boundary condition.
-  await expect.poll(() => numeric(page, 'exhaust-pressure')).toBeGreaterThan(1.1);
-});
-
-test('switching EGR off changes what reaches the cylinders', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
-  await pullAway(page);
-
-  const toggle = page.getByTestId('egr-toggle');
-  await expect(toggle).toBeChecked();
-
-  // Recirculation dilutes the intake charge, which is what the smoke limit sees.
-  await expect
-    .poll(() => numeric(page, 'intake-burned'), {
-      timeout: 30_000,
-      message: 'recirculated exhaust should show up in the intake',
-    })
-    .toBeGreaterThan(0.5);
-
-  await toggle.uncheck();
-
-  // With the valve shut the loop stops and the intake cleans up.
-  await expect
-    .poll(() => numeric(page, 'egr-valve'), { timeout: 20_000 })
-    .toBe(0);
-  await expect
-    .poll(() => numeric(page, 'intake-burned'), { timeout: 30_000 })
-    .toBeLessThan(0.5);
-});
-
-test('sound starts only from an explicit action and then really plays', async ({ page }) => {
-  await bootstrap(page);
-
-  // README "WASM and worker API": nothing audio-related exists before the user asks for
-  // it.
-  await expect(page.getByTestId('audio-status')).toHaveCount(0);
-  await expect(
-    page.evaluate(() => (window as unknown as { AudioContext?: unknown }).AudioContext !== undefined),
-  ).resolves.toBe(true);
-
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
-  await page.getByTestId('enable-audio').click();
-  await expect(page.getByTestId('audio-status')).toBeVisible({ timeout: 20_000 });
-
-  // The solver produces at its own fixed-step rate; the worklet resamples.
-  await expect(page.getByTestId('audio-source-rate')).toHaveText('40.0 kHz');
-  await expect
-    .poll(() => numeric(page, 'audio-device-rate'), { timeout: 10_000 })
-    .toBeGreaterThan(0);
-
-  // Samples must actually reach the worklet, which is what proves the whole
-  // chain works: solver -> worker -> main thread -> AudioWorklet.
-  await expect
-    .poll(() => numeric(page, 'audio-received'), {
-      timeout: 30_000,
-      message: 'the worklet should be receiving exhaust samples',
-    })
-    .toBeGreaterThan(10_000);
-
-  await page.getByTestId('disable-audio').click();
-  await expect(page.getByTestId('enable-audio')).toBeVisible();
-});
-
-test('the exhaust output has energy where a speaker can reproduce it', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
-  await page.getByTestId('enable-audio').click();
-  await expect(page.getByTestId('spectrum')).toBeVisible({ timeout: 20_000 });
-
-  // The raw stage on purpose. This asserts something about the signal the
-  // *solver* produces, and measuring it through the cab filter would be
-  // measuring the filter.
-  await page.getByTestId('audio-stage-raw').click();
-
-  await pullAway(page);
-  await page.waitForTimeout(2_000);
-
-  // Bars are drawn from the analyser on the *output* path, so a bar with height
-  // is energy actually being played.
-  //
-  // This is the assertion that a "finite, bounded, correct fundamental" test
-  // suite cannot make. The signal can pass every one of those and still be
-  // silent in practice, because all of its energy sits below roughly 150 Hz
-  // where ordinary speakers reproduce nothing. Here that shows up as bars only
-  // at the far left, and this fails.
-  //
-  // Averaged over a couple of seconds rather than read once. The exhaust is a
-  // pulse train, not a tone, so any single frame of the spectrum is a snapshot
-  // of something that moves with every firing event — and at `pullAway`'s full
-  // 1800 N·m the engine is also close to losing the fight, so one badly timed
-  // read can land on a trough. This was an intermittent failure, not a
-  // borderline one: the same reasoning `measureOutput` was written for.
-  const heights = await averagedBars(page);
-
-  expect(heights.length).toBeGreaterThan(16);
-  const tallest = Math.max(...heights);
-  expect(tallest, 'the spectrum should show real output').toBeGreaterThan(1);
-
-  const audible = heights
-    .slice(bucketOf(150, heights.length), bucketOf(4_000, heights.length))
-    .reduce((max, h) => Math.max(max, h), 0);
-
-  expect(
-    audible,
-    'most of the exhaust energy must sit above 150 Hz, or nothing will be heard',
-  ).toBeGreaterThan(tallest * 0.25);
-});
-
-test('the cockpit stage muffles the top end without simply being louder', async ({ page }) => {
-  const external = await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
-  await page.getByTestId('enable-audio').click();
-  await expect(page.getByTestId('spectrum')).toBeVisible({ timeout: 20_000 });
-
-  const raw = page.getByTestId('audio-stage-raw');
-  const cockpit = page.getByTestId('audio-stage-cockpit');
-
-  // The cab is the default; raw is one click away.
-  await expect(cockpit).toHaveAttribute('aria-pressed', 'true');
-
-  // Let the start transient go before measuring anything. Starting is the
-  // loudest thing this engine does — louder than the governed rev limit — so a
-  // measurement taken too soon after it is a measurement of the start, and the
-  // two stages are measured seconds apart.
-  await expect
-    .poll(() => rpm(page), { timeout: 20_000, message: 'the engine should settle to idle' })
-    .toBeLessThan(700);
-  await page.waitForTimeout(2_000);
-
-  // Idle first. Level-matching at one operating point is not level-matching:
-  // the compressor in the cab chain works at the loud end and does nothing at
-  // the quiet end, so both ends have to be measured or the match is an
-  // accident of where it was measured.
-  const idleCockpit = await measureOutput(page);
-  await raw.click();
-  await expect(raw).toHaveAttribute('aria-pressed', 'true');
-  await expect(cockpit).toHaveAttribute('aria-pressed', 'false');
-  await page.waitForTimeout(500);
-  const idleRaw = await measureOutput(page);
-
-  // Then working, where there is enough signal above 2 kHz for the spectrum
-  // comparison to be a comparison of content rather than of two noise floors.
-  //
-  // Deliberately not `pullAway`'s full 1800 N·m. This test sits at its working
-  // point for the best part of ten seconds while it measures, and an engine
-  // held at maximum load for that long with no gear to drop into eventually
-  // loses the fight and stalls. That is a truthful thing for the model to do
-  // and a useless thing to try to measure through.
-  await page.getByTestId('pedal').fill('90');
-  await page.getByTestId('load').fill('300');
-  await expect
-    .poll(() => rpm(page), { timeout: 30_000, message: 'the engine should pick up speed' })
-    .toBeGreaterThan(1_400);
-  await page.waitForTimeout(1_500);
-  const loadRaw = await measureOutput(page);
-
-  // Guard the comparison below: two silences compare equal, and a stalled
-  // engine would otherwise fail as an inscrutable 0 against 0.
-  expect(loadRaw.high, 'the raw stage should have content above 2 kHz to compare').toBeGreaterThan(
-    0.5,
-  );
-
-  await cockpit.click();
-  await expect(cockpit).toHaveAttribute('aria-pressed', 'true');
-  await page.waitForTimeout(500);
-  const loadCockpit = await measureOutput(page);
-
-  // Sitting in a cab takes the sharp edge of blowdown away: glass, insulation
-  // and several metres of air are a low pass, and this is that low pass showing
-  // up in the output rather than in the source.
-  expect(
-    loadCockpit.high,
-    `the cab should roll the top end off (cockpit ${loadCockpit.high.toFixed(1)} vs raw ${loadRaw.high.toFixed(1)})`,
-  ).toBeLessThan(loadRaw.high * 0.75);
-
-  // And it keeps the low end, which is the part of a diesel you feel.
-  expect(loadCockpit.low).toBeGreaterThan(loadRaw.low * 0.75);
-
-  // The seat is a low-frequency listening position, and that is a statement
-  // about the *ratio* rather than about either band alone — the two stages are
-  // level-matched, so "more low" can only mean "more low per unit of high".
-  //
-  // This is the assertion the per-path level trims exist to satisfy: the body
-  // path up, the block down, measured at the output rather than asserted from
-  // the spec. Adding them moved this ratio from 3.7 to 4.4 under load while the
-  // raw stage stayed at 2.4.
-  const cockpitRatio = loadCockpit.low / Math.max(loadCockpit.high, 1e-6);
-  const rawRatio = loadRaw.low / Math.max(loadRaw.high, 1e-6);
-  expect(
-    cockpitRatio,
-    `the cab should weight the low end more heavily than raw does ` +
-      `(cockpit ${cockpitRatio.toFixed(2)}, raw ${rawRatio.toFixed(2)})`,
-  ).toBeGreaterThan(rawRatio * 1.5);
-
-  // Reported rather than only asserted. `CABIN_SPEC.dynamics.makeupGain` and the
-  // per-path level trims are calibrated against this spread, and README quotes
-  // it; a number that only appears when it fails is a number nobody can tune to.
-  console.log(
-    `cab spread: idle ${(idleCockpit.levelDb - idleRaw.levelDb).toFixed(1)} dB, ` +
-      `load ${(loadCockpit.levelDb - loadRaw.levelDb).toFixed(1)} dB ` +
-      `| low idle ${idleCockpit.low.toFixed(1)}/${idleRaw.low.toFixed(1)} ` +
-      `load ${loadCockpit.low.toFixed(1)}/${loadRaw.low.toFixed(1)} ` +
-      `| high load ${loadCockpit.high.toFixed(1)}/${loadRaw.high.toFixed(1)}`,
-  );
-
-  // The switch must not be a volume control in disguise. A post-processing
-  // stage that is merely louder wins any comparison for the wrong reason, so
-  // the two are level-matched and these are the assertions that hold them
-  // there — at both ends of the range.
-  expect(
-    Math.abs(loadCockpit.levelDb - loadRaw.levelDb),
-    `stages should be level-matched under load (cockpit ${loadCockpit.levelDb.toFixed(1)} dBFS, raw ${loadRaw.levelDb.toFixed(1)} dBFS)`,
-  ).toBeLessThan(3);
-  expect(
-    Math.abs(idleCockpit.levelDb - idleRaw.levelDb),
-    `stages should be level-matched at idle (cockpit ${idleCockpit.levelDb.toFixed(1)} dBFS, raw ${idleRaw.levelDb.toFixed(1)} dBFS)`,
-  ).toBeLessThan(3);
-
-  // Sound keeps flowing across the switch, and the generated impulse response
-  // means the cab costs no network request.
-  const received = await numeric(page, 'audio-received');
-  await raw.click();
-  await expect
-    .poll(() => numeric(page, 'audio-received'), { timeout: 10_000 })
-    .toBeGreaterThan(received);
-  expect(external, `unexpected external requests: ${external.join(', ')}`).toEqual([]);
-});
-
-test('each radiating path can be heard on its own', async ({ page }) => {
-  const external = await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect(page.getByTestId('run-state')).toHaveText('running', { timeout: 20_000 });
-
-  await page.getByTestId('enable-audio').click();
-  await expect(page.getByTestId('spectrum')).toBeVisible({ timeout: 20_000 });
-
-  // The raw stage, so this measures the three paths rather than the cab filters
-  // applied to them.
-  await page.getByTestId('audio-stage-raw').click();
-
-  // Deliberately not `pullAway`'s full 1800 N·m, for the reason the cockpit test
-  // gives: this sits at its working point for the best part of half a minute
-  // while it takes four measurements, and an engine held at maximum load that
-  // long with no gear to drop into loses the fight and stalls. Which is truthful
-  // of the model and useless to measure through.
-  await page.getByTestId('pedal').fill('90');
-  await page.getByTestId('load').fill('300');
-  await expect
-    .poll(() => rpm(page), { timeout: 30_000, message: 'the engine should pick up speed' })
-    .toBeGreaterThan(1_400);
-  await page.waitForTimeout(1_500);
-
-  const all = await measureOutput(page);
-  expect(all.low, 'the engine should be making a sound to begin with').toBeGreaterThan(0);
-  expect(all.high, 'and some of it above 2 kHz, to have something to remove').toBeGreaterThan(0.5);
-
-  // Body alone. It is the torque-driven path, so it lives below a few hundred
-  // hertz and has essentially nothing up top: silencing the other two should
-  // take the high band away and leave the low band standing. If the channels
-  // were crossed somewhere between the solver and the graph, this is where it
-  // would show — a path would be muted and the wrong content would vanish.
-  await page.getByTestId('audio-path-exhaust').click();
-  await page.getByTestId('audio-path-block').click();
-  await expect(page.getByTestId('audio-path-exhaust')).toHaveAttribute('aria-pressed', 'false');
-  await page.waitForTimeout(500);
-
-  const bodyOnly = await measureOutput(page);
-  expect(
-    bodyOnly.high,
-    `the body path should have almost nothing above 2 kHz (was ${all.high.toFixed(1)}, now ${bodyOnly.high.toFixed(1)})`,
-  ).toBeLessThan(all.high * 0.5);
-  expect(bodyOnly.low, 'and it should still be carrying the low end').toBeGreaterThan(0);
-
-  // Everything muted is silence, which is the check that these are really the
-  // whole signal between them and not several views of something else.
-  //
-  // The starter is muted too, and it is worth saying why it changes nothing: its
-  // pinion is retracted at any running operating point, so it emits exactly zero
-  // and this assertion would hold whether it were muted or not. Muting it
-  // anyway keeps the claim honest — "every path" has to mean every path, or the
-  // day the starter stops being silent here this test starts lying rather than
-  // failing.
-  await page.getByTestId('audio-path-body').click();
-  await page.getByTestId('audio-path-starter').click();
-  await page.waitForTimeout(700);
-  const muted = await measureOutput(page);
-  expect(muted.levelDb, 'muting every path must leave silence').toBeLessThan(all.levelDb - 20);
-
-  // And it comes back.
-  for (const path of ['exhaust', 'block', 'body', 'starter']) {
-    await page.getByTestId(`audio-path-${path}`).click();
-    await expect(page.getByTestId(`audio-path-${path}`)).toHaveAttribute('aria-pressed', 'true');
-  }
-  await page.waitForTimeout(1_000);
-  const restored = await measureOutput(page);
-  expect(restored.levelDb).toBeGreaterThan(muted.levelDb + 10);
-
-  expect(external, 'no network requests').toEqual([]);
-});
-
-test('a gear and a downhill grade drive the engine, and the brake arrests it', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect.poll(() => rpm(page), { timeout: 30_000 }).toBeGreaterThan(400);
-
-  // Out of gear the driveline contributes nothing at all, whatever the grade.
-  await page.getByTestId('grade').fill('-6');
-  expect(await numeric(page, 'torque-driveline')).toBe(0);
-  await expect(page.getByTestId('driveline-speed')).toHaveText('—');
-
-  // Get some speed up, then take a gear on the descent and lift off.
-  //
-  // Fifth, not top. A forty-tonne truck on a six percent grade in a high gear
-  // runs away from any engine brake ever built — at 2000 rpm in ninth, gravity
-  // is feeding in around 600 kW against the brake's 220 — which is exactly why
-  // a driver descends in a low gear. The same road speed at a lower ratio means
-  // a faster-turning engine absorbing more, and less gravitational power going
-  // in. Choosing a gear where the brake loses would test nothing but arithmetic.
-  await pullAway(page);
-  await page.getByTestId('load').fill('0');
-  await page.getByTestId('gear').fill('5');
-  await page.getByTestId('pedal').fill('0');
-
-  await expect
-    .poll(() => numeric(page, 'reflected-inertia'), {
-      timeout: 20_000,
-      message: 'a laden truck in gear must reflect real inertia onto the crank',
-    })
-    .toBeGreaterThan(1);
-  await expect.poll(() => numeric(page, 'vehicle-speed'), { timeout: 20_000 }).toBeGreaterThan(0);
-  await expect
-    .poll(() => numeric(page, 'torque-driveline'), {
-      timeout: 20_000,
-      message: 'a descent must drive the crank rather than resist it',
-    })
-    .toBeLessThan(0);
-
-  // Unbraked, the hill winds the engine up on its own.
-  await expect
-    .poll(() => rpm(page), {
-      timeout: 30_000,
-      message: 'a descent in gear with no fuel must accelerate the engine',
-    })
-    .toBeGreaterThan(1_500);
-  const runaway = await rpm(page);
-
-  // Now the brake: all six cylinders plus the wastegate.
-  await page.getByTestId('brake-stage-3').click();
-  await expect
-    .poll(() => numeric(page, 'brake-absorbed'), {
-      timeout: 20_000,
-      message: 'the engine brake must report the power it is absorbing',
-    })
-    .toBeGreaterThan(10);
-  await expect(page.getByTestId('brake-stage-active')).toHaveText('III');
-
-  await expect
-    .poll(() => rpm(page), { timeout: 40_000, message: 'the brake must arrest the descent' })
-    .toBeLessThan(runaway);
-});
-
-test('downhill overspeed pauses clearly and resumes after the grade changes', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await awaitIdle(page);
-  await page.getByTestId('pedal').fill('100');
-  await expect.poll(() => rpm(page), { timeout: 20_000 }).toBeGreaterThan(1950);
-  await page.getByTestId('grade').fill('-15');
-  await page.getByTestId('gear').fill('12');
-  await page.getByTestId('pedal').fill('0');
-  await expect(page.getByTestId('speed-limit-banner')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('speed-limit-banner')).toContainText('2400 rpm model limit');
-  await expect(page.getByTestId('error-banner')).toHaveCount(0);
-  await expect(page.getByTestId('run-state')).toHaveText('paused — speed limit');
-  await expect(page.getByTestId('rpm')).toHaveText('2400');
-  await expect(page.getByTestId('start')).toBeDisabled();
-  const pausedSteps = await numeric(page, 'steps');
-  const pausedTime = await numeric(page, 'sim-time');
-  await page.getByTestId('grade').fill('0');
-  expect(await numeric(page, 'steps')).toBe(pausedSteps);
-  await page.getByTestId('resume').click();
-  await expect(page.getByTestId('speed-limit-banner')).toHaveCount(0);
-  await expect.poll(() => rpm(page), { timeout: 15_000 }).toBeLessThan(2380);
-  await expect.poll(() => numeric(page, 'steps')).toBeGreaterThan(pausedSteps);
-  expect(await numeric(page, 'sim-time')).toBeGreaterThan(pausedTime);
-  await expect(page.getByTestId('run-state')).toHaveText('running');
-  await expect(page.getByTestId('error-banner')).toHaveCount(0);
-});
-
-test('the brake reports when it is selected but not permitted to act', async ({ page }) => {
-  await bootstrap(page);
-  await page.getByTestId('start').click();
-  await expect.poll(() => rpm(page), { timeout: 30_000 }).toBeGreaterThan(400);
-
-  // At idle the engine is below the published 1000 rpm floor, so asking for a
-  // stage must not silently appear to have worked.
+  await start(page);
   await page.getByTestId('brake-stage-3').click();
   await expect(page.getByTestId('brake-inhibited')).toBeVisible();
-  await expect(page.getByTestId('brake-stage-active')).toHaveText('off');
-  expect(await numeric(page, 'brake-absorbed')).toBe(0);
+  await page.getByTestId('brake-stage-0').click();
+  await page.getByTestId('pedal').fill('90');
+  await expect.poll(() => numeric(page, 'rpm')).toBeGreaterThan(1400);
+  await page.getByTestId('grade').fill('-6');
+  await page.getByTestId('gear').fill('5');
+  await page.getByTestId('release-pedal').click();
+  await expect.poll(() => numeric(page, 'rpm')).toBeGreaterThan(1500);
+  const unbraked = await numeric(page, 'rpm');
+  await page.getByTestId('brake-stage-3').click();
+  await expect(page.getByTestId('brake-engaged')).toBeVisible();
+  await expect.poll(() => numeric(page, 'rpm'), { timeout: 40_000 }).toBeLessThan(unbraked);
+  await page.getByTestId('nav-details').click();
+  await page.getByTestId('telemetry-brake-driveline').locator('summary').click();
+  await expect.poll(() => numeric(page, 'brake-absorbed')).toBeGreaterThan(10);
+  await expect.poll(() => numeric(page, 'vehicle-speed')).toBeGreaterThan(0);
+});
 
-  // Above the floor, with the pedal released, it engages.
-  await pullAway(page);
-  await page.getByTestId('pedal').fill('0');
-  await expect
-    .poll(() => page.getByTestId('brake-stage-active').innerText(), { timeout: 20_000 })
-    .toBe('III');
-  await expect(page.getByTestId('brake-inhibited')).toBeHidden();
+for (const mobile of [false, true]) {
+test(`overspeed offers one-click grade recovery with preserved time (${mobile ? 'phone' : 'desktop'})`, async ({ page }) => {
+  if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+  await bootstrap(page);
+  await chooseOption(page, 'language-select', 'zh-CN');
+  await start(page);
+  await page.getByTestId('pedal').fill('100');
+  await expect.poll(() => numeric(page, 'rpm')).toBeGreaterThan(1950);
+  await page.getByTestId('grade').fill('-15');
+  await page.getByTestId('gear').fill('12');
+  await page.getByTestId('release-pedal').click();
+  await expect(page.getByTestId('speed-limit-banner')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('speed-limit-banner')).toContainText('发动机转速超限');
+  await expect(page.getByTestId('speed-limit-banner')).toContainText('将道路坡度重置为 0%，然后继续模拟？');
+  await expect(page.getByTestId('start')).toBeDisabled();
+  const pausedTime = await numeric(page, 'sim-time');
+  await expect(page.getByTestId('grade')).toHaveValue('-15');
+  await expect(page.getByTestId('resume')).toHaveText('重置坡度并继续');
+  await page.getByTestId('resume').click();
+  await expect(page.getByTestId('speed-limit-banner')).toHaveCount(0);
+  await expect(page.getByTestId('grade')).toHaveValue('0');
+  await expect(page.getByTestId('gear')).toHaveValue('12');
+  await expect.poll(() => numeric(page, 'rpm')).toBeLessThan(2380);
+  await expect.poll(() => numeric(page, 'sim-time')).toBeGreaterThan(pausedTime);
+});
+}
+
+test('language switching persists and does not restart the engine or sound preferences', async ({ page }) => {
+  await bootstrap(page);
+  await start(page);
+  await page.getByTestId('pedal').fill('35');
+  await page.getByTestId('nav-sound').click();
+  await page.getByTestId('audio-stage-raw').click();
+  await page.getByTestId('audio-volume').fill('42');
+  await chooseOption(page, 'language-select', 'zh-CN');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(page).toHaveTitle('Diesel HiFi');
+  await expect(page.getByTestId('start')).toHaveText('启动发动机');
+  await expect(page.getByTestId('audio-stage-raw')).toContainText('原始发动机混音');
+  await expect(page.getByTestId('pedal')).toHaveValue('35');
+  await expect(page.getByTestId('audio-volume')).toHaveValue('42');
+  await expect(page.getByTestId('run-state')).toHaveAttribute('data-state', 'running');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(page.getByTestId('language-select')).toHaveAttribute('data-value', 'zh-CN');
+  await expect(page.getByTestId('rpm')).toHaveText('0');
+});
+
+test('Chinese browser detection works when local storage is unavailable', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, locale: 'zh-CN' });
+  await context.addInitScript(() => {
+    Storage.prototype.getItem = () => { throw new DOMException('Blocked', 'SecurityError'); };
+    Storage.prototype.setItem = () => { throw new DOMException('Blocked', 'SecurityError'); };
+  });
+  const page = await context.newPage();
+  await bootstrap(page);
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await chooseOption(page, 'language-select', 'en');
+  await expect(page.getByTestId('start')).toHaveText('Start engine');
+  await start(page);
+  await context.close();
+});
+
+test('loading failure gives a localized recovery action', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, locale: 'zh-CN' });
+  const page = await context.newPage();
+  await page.route('**/*.wasm', (route) => route.abort());
+  await page.goto('./');
+  await expect(page.getByTestId('error-banner')).toContainText('无法加载发动机');
+  await expect(page.getByRole('button', { name: '刷新页面' })).toBeVisible();
+  await expect(page.getByTestId('start')).toBeDisabled();
+  await context.close();
+});
+
+for (const locale of ['en', 'zh-CN'] as const) {
+  test(`responsive layout, touch targets and keyboard controls (${locale})`, async ({ page }, testInfo) => {
+    await bootstrap(page);
+    await chooseOption(page, 'language-select', locale);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    for (const width of [360, 390, 768, 1440]) {
+      await page.setViewportSize({ width, height: width > 760 ? 1050 : 844 });
+      for (const view of ['drive', 'sound', 'details']) {
+        await page.getByTestId(`nav-${view}`).click();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${view} at ${width}`).toBe(true);
+        await expect(page.getByTestId(`nav-${view}`)).toHaveAttribute('aria-current', 'page');
+        const box = await page.getByTestId(`nav-${view}`).boundingBox();
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+      }
+      await page.getByTestId('nav-drive').click();
+      await openControls(page);
+      await page.getByTestId('pedal').focus();
+      await page.keyboard.press('ArrowRight');
+      await expect(page.getByTestId('pedal')).not.toHaveValue('0');
+      await page.getByTestId('release-pedal').click();
+      if (width < 768) await page.getByTestId('controls-toggle').click();
+      await page.evaluate(() => scrollTo(0, 0));
+      if (width === 390 || width === 1440) await page.screenshot({ path: testInfo.outputPath(`drive-${locale}-${width}.png`), fullPage: true });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId('nav-sound').click();
+    await page.getByTestId('audio-stage-raw').click();
+    await expect(page.getByTestId('audio-stage-raw')).toHaveAttribute('aria-pressed', 'true');
+    await page.screenshot({ path: testInfo.outputPath(`sound-${locale}-390.png`), fullPage: true });
+  });
+
+  test(`mobile speed stays visible while scrolling without hiding controls (${locale})`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 640 });
+    await bootstrap(page);
+    await chooseOption(page, 'language-select', locale);
+    const bar = page.getByTestId('mobile-speed-bar');
+    await expect(bar).toBeHidden();
+    const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+    await page.getByTestId('rpm').evaluate((readout) => scrollBy(0, readout.getBoundingClientRect().top - 48));
+    await expect(bar).toBeVisible();
+    await expect.poll(async () => Math.round((await bar.boundingBox())?.y ?? -1)).toBe(0);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(pageHeight);
+    const strip = await bar.boundingBox();
+    expect(strip!.y).toBe(0);
+    expect(strip!.height).toBeLessThanOrEqual(80);
+    await start(page);
+    const pedal = page.getByTestId('pedal');
+    await pedal.evaluate((input) => input.scrollIntoView({ block: 'center' }));
+    await pedal.fill('85');
+    await expect.poll(() => numeric(page, 'mobile-rpm')).toBeGreaterThan(1400);
+    await expect(page.getByTestId('mobile-run-state')).toHaveAttribute('data-state', 'running');
+    await page.screenshot({ path: testInfo.outputPath(`mobile-speed-${locale}.png`) });
+    const pedalHit = await pedal.evaluate((input) => {
+      const rect = input.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return { unobstructed: hit === input, coveringElement: hit?.outerHTML.slice(0, 200), top: rect.top, bottom: rect.bottom };
+    });
+    expect(pedalHit.unobstructed, JSON.stringify(pedalHit)).toBe(true);
+    expect(await page.evaluate(() => document.querySelector('[data-testid="mobile-rpm"]')!.textContent
+      === document.querySelector('[data-testid="rpm"]')!.textContent)).toBe(true);
+    for (const view of ['sound', 'details']) {
+      await page.getByTestId(`nav-${view}`).click();
+      await expect(bar).toBeHidden();
+      await openControls(page);
+      await expect(bar).toBeHidden();
+      const panel = (await page.getByTestId('speed-panel').boundingBox())!;
+      await expect.poll(async () => (await page.getByTestId('controls-drawer').boundingBox())!.y).toBeGreaterThan(panel.y + panel.height);
+      await page.getByTestId('rpm').evaluate((readout) => scrollBy(0, readout.getBoundingClientRect().top - 48));
+      await expect(bar).toBeVisible();
+    }
+    await page.getByTestId('reset').click();
+    await expect(page.getByTestId('mobile-rpm')).toHaveText('0');
+    await expect(page.getByTestId('mobile-run-state')).toHaveAttribute('data-state', 'stopped');
+    await page.getByTestId('controls-toggle').click();
+    await page.evaluate(() => scrollTo(0, 0));
+    await expect(bar).toBeHidden();
+    await page.setViewportSize({ width: 740, height: 390 });
+    await openControls(page);
+    await page.getByTestId('grade').scrollIntoViewIfNeeded();
+    await expect(bar).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.setViewportSize({ width: 768, height: 1050 });
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    await expect(bar).toBeHidden();
+  });
+
+  test(`mobile drawer folds, animates and keeps controls reachable (${locale})`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await bootstrap(page);
+    await chooseOption(page, 'language-select', locale);
+    const drawer = page.getByTestId('controls-drawer');
+    const toggle = page.getByTestId('controls-toggle');
+    const body = page.locator('#controls-body');
+    const bar = page.getByTestId('mobile-speed-bar');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(body).toHaveAttribute('inert', '');
+    const collapsed = (await drawer.boundingBox())!;
+    const expandedGaugeHeight = (await page.getByTestId('speed-panel').boundingBox())!.height;
+    const nav = (await page.getByRole('navigation').boundingBox())!;
+    expect(Math.abs(collapsed.y + collapsed.height - nav.y)).toBeLessThan(2);
+    expect(collapsed.height).toBeLessThan(80);
+    const motion = page.evaluate(async () => {
+      const drawer = document.querySelector('[data-testid="controls-drawer"]')!;
+      const gauge = document.querySelector('[data-testid="speed-panel"]')!;
+      const frames: { height: number; gaugeHeight: number }[] = [];
+      const until = performance.now() + 600;
+      do {
+        await new Promise(requestAnimationFrame);
+        frames.push({ height: drawer.getBoundingClientRect().height, gaugeHeight: gauge.getBoundingClientRect().height });
+      } while (performance.now() < until);
+      return frames;
+    });
+    await toggle.click();
+    const frames = await motion;
+    const expanded = (await drawer.boundingBox())!;
+    expect(expanded.height).toBeGreaterThan(collapsed.height + 200);
+    expect(frames.some((frame) => frame.height > collapsed.height + 10 && frame.height < expanded.height - 10)).toBe(true);
+    const compactGaugeHeight = (await page.getByTestId('speed-panel').boundingBox())!.height;
+    expect(compactGaugeHeight).toBeLessThan(120);
+    expect(frames.some((frame) => frame.gaugeHeight > compactGaugeHeight + 10 && frame.gaugeHeight < expandedGaugeHeight - 10)).toBe(true);
+    await expect(bar).toBeHidden();
+    const compactGauge = (await page.getByTestId('speed-panel').boundingBox())!;
+    expect(expanded.y).toBeGreaterThan(compactGauge.y + compactGauge.height);
+    await page.getByTestId('rpm').click({ trial: true });
+    await start(page);
+    await page.getByTestId('pedal').fill('35');
+    await page.screenshot({ path: testInfo.outputPath(`drawer-controls-${locale}.png`) });
+    const pageScroll = await page.evaluate(() => scrollY);
+    await page.getByTestId('controls-scroll').evaluate((scroller) => { scroller.scrollTop = scroller.scrollHeight; });
+    expect(await page.evaluate(() => scrollY)).toBe(pageScroll);
+    await page.getByTestId('grade').fill('-2');
+    await page.getByTestId('load').fill('150');
+    await page.getByTestId('grade').click({ trial: true });
+    await page.screenshot({ path: testInfo.outputPath(`drawer-open-${locale}.png`) });
+    await page.keyboard.press('Escape');
+    await expect(toggle).toBeFocused();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(body).toBeHidden();
+    await expect(bar).toBeHidden();
+    await page.screenshot({ path: testInfo.outputPath(`drawer-folded-${locale}.png`) });
+    await toggle.click();
+    await expect(page.getByTestId('pedal')).toHaveValue('35');
+    await expect(page.getByTestId('grade')).toHaveValue('-2');
+    await expect(page.getByTestId('load')).toHaveValue('150');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await toggle.click();
+    expect(await body.evaluate((element) => element.getAnimations().length)).toBe(0);
+    await expect(body).toBeHidden();
+    await page.setViewportSize({ width: 1440, height: 1050 });
+    await expect(toggle).toBeHidden();
+    await expect(body).not.toHaveAttribute('inert', '');
+    await expect(page.getByTestId('pedal')).toBeVisible();
+    await expect(bar).toBeHidden();
+  });
+}
+
+test('all driving inputs share one panel and rapid accelerator/load updates are preserved', async ({ page }) => {
+  await bootstrap(page);
+  const controls = page.locator('#controls');
+  for (const id of ['pedal', 'gear', 'brake-stage-3', 'load', 'grade']) {
+    await expect(controls.getByTestId(id)).toBeVisible();
+  }
+  await start(page);
+  await page.getByTestId('pedal').fill('90');
+  await page.getByTestId('load').fill('500');
+  await expect(page.getByTestId('pedal')).toHaveValue('90');
+  await expect(page.getByTestId('load')).toHaveValue('500');
+  await expect.poll(() => numeric(page, 'rpm')).toBeGreaterThan(1100);
+  await page.getByTestId('nav-details').click();
+  await expect(controls.getByTestId('load')).toBeVisible();
+  await expect(page.getByTestId('load')).toHaveValue('500');
+  await page.getByTestId('reset').click();
+  await expect(page.getByTestId('load')).toHaveValue('0');
+  await expect(page.getByTestId('gear')).toHaveValue('0');
+});
+
+test('a touch phone can start, accelerate, shift and select the engine brake', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, locale: 'zh-CN' });
+  const page = await context.newPage();
+  await bootstrap(page);
+  await page.getByTestId('controls-toggle').tap();
+  await page.getByTestId('start').tap();
+  await expect.poll(() => numeric(page, 'rpm')).toBeGreaterThan(500);
+  const pedal = page.getByTestId('pedal');
+  await pedal.scrollIntoViewIfNeeded();
+  const box = await pedal.boundingBox();
+  await pedal.tap({ position: { x: box!.width * .6, y: box!.height / 2 } });
+  await expect.poll(async () => Number(await pedal.inputValue())).toBeGreaterThan(40);
+  await page.getByRole('button', { name: '升挡' }).tap();
+  await expect(page.getByTestId('gear')).toHaveValue('1');
+  await page.getByTestId('brake-stage-2').tap();
+  await expect(page.getByTestId('brake-stage-2')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('brake-inhibited')).toBeVisible();
+  await page.getByTestId('nav-sound').tap();
+  await expect(page.getByTestId('audio-volume')).toBeVisible();
+  await expect(page.getByTestId('enable-audio')).toHaveCount(0);
+  await context.close();
 });

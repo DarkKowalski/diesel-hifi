@@ -1,6 +1,6 @@
-import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+import { vitePreprocess } from '@astrojs/svelte';
 
-// Plain Svelte with Vite. SvelteKit, SSR, and any server runtime are out of scope.
+// Svelte runs the interactive simulator inside Astro's static page.
 export default {
   preprocess: vitePreprocess(),
 };

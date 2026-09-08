@@ -1,8 +1,9 @@
-# Diesel Truck Engine Simulator
+# Diesel HiFi
 
 A browser-based, real-time **diesel truck** engine simulator. The deterministic
 simulation core is Rust, compiled both natively and to WebAssembly, presented
-through a static Svelte application with no backend.
+through a static Astro application with an interactive Svelte simulator and
+Tailwind CSS. There is no backend.
 
 The built-in engine is a public-data reference model of the 2011 Mercedes-Benz
 OM 471.9 M3D.
@@ -11,7 +12,8 @@ OM 471.9 M3D.
 > from published service literature. Mercedes-Benz and OM 471 are factual
 > references only; no endorsement is implied and no OEM logos or assets are used.
 > Every configuration value is labelled `published`, `derived`, or `calibrated`
-> and the UI shows those labels. An estimate is never presented as OEM data.
+> in the configuration. Displayed specifications retain their labels; full
+> provenance is documented here and in the configuration. Estimates are never OEM data.
 
 This file is the whole specification and the whole documentation: requirements,
 acceptance criteria, results, and every assumption the model makes.
@@ -24,9 +26,9 @@ cylinder pressure, crank dynamics, friction, load, idle control; a wastegate
 turbocharger and cooled EGR; the staged decompression engine brake; a rigid truck
 driveline; a series-wound starter motor geared to the flywheel; four-path engine
 audio; a tested metric library, named reproducible
-listening scenarios and WAV capture; native deterministic tests; a static Svelte
-UI with the simulation off the UI thread and a level-matched A/B against local
-recordings.
+listening scenarios and WAV capture; native deterministic tests; a responsive
+Astro/Svelte UI with English and Simplified Chinese, driver controls, cockpit/raw
+listening, and engine telemetry.
 
 **Out.** Gasoline engines or any multi-fuel abstraction. Engineering
 certification, emissions prediction, ECU reproduction, OEM map reverse
@@ -44,16 +46,18 @@ kinetics, aftertreatment chemistry.
 | `crates/sim-core/src/scenario.rs` | Named, reproducible listening scenarios: a seed, initial conditions and a script of control phases, returning audio plus the conditions the engine actually reached. A measurement harness like `dyno.rs`, and like it it touches nothing outside the simulation. |
 | `crates/sim-wasm` | `wasm-bindgen` adapter. Serialization and boundary only; no physics. |
 | `web/src/worker` | WASM lifecycle, fixed-step scheduling, batching, message protocol. |
-| `web/src` | Svelte UI, input, telemetry rendering, Web Audio orchestration. |
+| `web/src/pages/index.astro` | Static document, metadata, build-time drawing geometry, local stylesheet and client-only simulator island. |
+| `web/src` | Svelte controls, engine telemetry, local English/zh-CN messages, Tailwind styles and Web Audio orchestration. |
 | `web/src/audio` | `AudioWorklet` processor: ring of interleaved frames, resampler, underrun accounting. Dependency-free plain JavaScript. |
 | `web/src/lib/cabin.ts` | Cockpit listening stage as data: per-path transfers, shared filter table, reflection taps, seeded impulse response. Pure and Web-Audio-free, unit-tested under Node. |
-| `web/src/lib/compare.ts` | Level-matching arithmetic for the A/B against local recordings. Pure and Web-Audio-free. |
+| `web/src/lib/compare.ts` | Development comparison arithmetic, retained for audio tooling and unit tests. Pure and Web-Audio-free; no production comparison UI. |
 | `scripts/verify-dist.mjs` | Static-build verification. |
 
 The production artifact is `web/dist` and must run from a domain root or a
-configurable subpath on ordinary static hosting. Use pnpm, TypeScript, Svelte and
-Vite; not SvelteKit. All runtime code, WASM, configuration, fonts and assets are
-local to the build.
+configurable subpath on ordinary static hosting. Use pnpm, TypeScript, Astro,
+Svelte and Tailwind CSS. Astro uses Vite and emits static output; no server adapter,
+SSR at deployment, SvelteKit or Node runtime ships. All code, WASM, configuration,
+fonts and assets are local to the build. Node.js 22.12+ is required for development.
 
 ## Configuration and provenance
 
@@ -119,22 +123,106 @@ deceleration from the preserved state; renewed acceleration above the ceiling
 pauses again. Reset speeds above the configured ceiling are rejected before
 state changes. Numerical and pressure faults still require a reset.
 
-The browser shows **Engine overspeed** and **Resume simulation**. For the reported
-gear-12 descent, set road grade to 0% and stay in gear, then resume. Neutral can
-pause again as compressed cylinders expand without the truck's reflected inertia.
-Start remains disabled while paused;
-resuming neither engages the starter nor resets the engine. Unplayed samples
+The browser shows **Engine overspeed** and asks whether to reset road grade to
+0% and resume. **Reset grade & resume** applies that change and continues in one
+click, preserving the selected gear, other controls and elapsed simulation time.
+The grade stays unchanged until the user confirms. Neutral can pause again as
+compressed cylinders expand without the truck's reflected inertia. Start remains
+disabled while paused; resuming neither engages the starter nor resets the engine. Unplayed samples
 from the interrupted batch are discarded before playback resumes.
 
-The UI provides an engine selector populated through the real catalog API,
-start/stop and reset, pedal and load controls, RPM with pressure/torque/state
-telemetry, starter current, terminal volts and pinion engagement, visible error
-and worker lifecycle states, a solo toggle per radiating path, a level-matched
-A/B against local audio files, and **an explicit user action before Web Audio
-starts**.
+## Frontend workflow
 
-`audioPathCount()` is 4. The playback graph and solo controls use the shared
-path descriptor list: exhaust, block, body, starter.
+The application title is **Diesel HiFi** in both languages. A compact toolbar
+contains the app name, Drive/Sound/Telemetry navigation, status and language;
+there are no promotional headings. Numeric readouts update at 10 Hz, using a
+100 ms average for RPM, speed, torque, power and other fluctuating readings. RPM
+is rounded to 10 rpm. Pressure peaks retain their actual values; cylinder bars
+show the latest sampled pressure. Faults, stops and resets bypass averaging.
+Display smoothing never changes the solver state, audio or control decisions. The default **Drive**
+view puts RPM, road speed, whole-cycle torque/power, start/stop, accelerator,
+release and reset first. One control panel groups the accelerator, gearshift,
+engine brake, external resisting load (0–5000 N·m), and road grade. Gear selection
+connects the engine to the truck. Controls report when
+engine braking is inhibited. The catalog API supplies engine choices and summary
+specifications, including the initial ID `mercedes-benz-om471-9-m3d-375kw`.
+Selecting any engine resets the session and flushes buffered sound.
+
+A diesel-engine cutaway sits directly below the Drive dial. Pistons, connecting
+rods, crank throws and valve movement have a **Slow motion** switch: on (the
+default) shows one tenth of engine speed; off shows full engine speed. Switching
+preserves animation phase and affects only the drawing. The setting persists
+across views, languages and session resets until page reload. Reduced-motion
+preferences freeze the drawing and disable the switch. Full-speed stroke
+visibility depends on the display refresh rate. Cylinder
+count, firing order and rod/stroke ratio come from the engine configuration,
+projected by Astro at build time. The illustration is schematic, with simplified
+valve timing and power-stroke shading rather than measured geometry or pressure.
+It follows live RPM independently of numeric sampling and freezes at rest, on a
+fault, offscreen, in a background tab or when reduced motion is requested. The
+dial marker and illuminated ticks follow every incoming snapshot without added
+smoothing or transition delay. The marker rotates at a fixed radius around the
+dial center, remaining on the rail through acceleration, deceleration and reset.
+
+**Sound** exclusively contains the cockpit/raw listening position and volume.
+Drive contains no sound panel. Sound is enabled by default: **Start engine** opens the audio
+context before cranking, using that button gesture to meet browser playback rules.
+There is no separate enable switch; volume zero silences output. Audio does not
+autoplay on page load. Listening settings and simulation state persist across
+views and languages. Failed startup or device suspension shows **Resume sound**;
+failed contexts are closed before retrying. Engine stop retains the audible coast-down.
+
+**Telemetry** contains engine telemetry only: cycle averages, air path, starter
+current/voltage/engagement, driveline/brake values, cylinder pressure and elapsed
+time. Groups expand on demand. Production contains no sweep, provenance browser,
+spectrum, source-isolation, file-comparison or EGR test controls.
+The core, WASM APIs, measurement examples and development audio libraries retain
+those capabilities for testing. `audioPathCount()` remains four; all source paths
+remain enabled in production playback.
+
+Layouts support phone and desktop browsers, with bottom navigation on narrow
+screens, touch controls at least 44 CSS pixels high, visible keyboard focus and
+reduced-motion support. Phone engine specifications expand on demand. The RPM
+readout stays visible below 768 CSS pixels: a compact strip with RPM and engine
+status docks to the top as the original number reaches it while scrolling.
+The strip is 64 CSS pixels high plus the device's top safe area. It shares the
+same live values, works in all three views, and disappears when the original
+readout returns or the layout switches to desktop. Docking does not shift page
+content. On phones, driving controls live in a bottom drawer above the 80-pixel
+navigation bar. It starts folded; tapping its heading opens or folds it, and
+Escape folds it and returns focus to the heading. The contents scroll within
+the drawer. Opening compacts the main speed panel and sizes the drawer to keep
+that readout visible above it. The top strip appears only after scrolling the
+original number out of view, so opening controls does not duplicate the speed
+panel. Short landscape screens scroll to this handoff when the available control
+space would be less than 160 pixels. Switching views folds the drawer while
+retaining inputs; desktop keeps the full control panel. A contrasting drawer
+heading and solid neutral disabled buttons keep labels readable.
+The drawer expands/folds over 300 ms and the speed strip slides/fades over
+200 ms. The main speed panel also animates between its dial and compact layout
+over 300 ms when opening the mobile drawer or switching views. The phone dial
+is capped at 260 CSS pixels wide; desktop uses up to 480 pixels. Reduced-motion
+preferences disable these transitions. Closed controls
+are excluded from keyboard interaction. Device safe areas and page padding
+keep the folded drawer and navigation clear of the content. The RPM
+dial uses a presentation scale of 0–2500 rpm; it does not redefine the solver's
+2400 rpm limit. The current UI offers neutral plus 12 gears and ±15% grade,
+because the catalog summary does not expose gearbox/control limits.
+
+English and Simplified Chinese (`zh-CN`) messages ship locally. A saved language
+wins; otherwise browser preferences select English or Simplified Chinese
+(`zh`, `zh-CN`, `zh-SG`, `zh-Hans`), with English fallback. Selection updates
+document language and saves only the locale in local storage; blocked storage
+falls back without breaking the simulator. The phone Specs button shares the
+engine selector's row and height. Language and engine choices use
+styled listboxes with selection marks, arrow/Home/End navigation, Enter/Space
+selection, Escape cancellation and outside dismissal. Model identifiers and SI
+unit symbols remain unchanged; the engine menu presents the English `Reference`
+suffix as a separate localized model description. Reload resets the simulation;
+it is not a saved session.
+
+Responsive behavior is tested in Chromium. Real iOS/Android audio interruptions,
+headphone routing and sustained device throughput still require hardware testing.
 
 ## Results
 
@@ -420,11 +508,10 @@ tested band, fades around underruns, whole-frame overruns, malformed-block
 rejection, flush and drift correction bounded to ±1%. Underruns output silence
 and are counted. This is not a sustained real-time throughput test.
 
-The sound panel switches among the live engine and local Reference/Candidate
-clips. File loading and analysis stay in the browser. Clips join **after** the
-cockpit graph and before volume, so an interior recording is not filtered twice.
-Matching uses RMS, with ±24 dB trim and a peak-based full-scale limit; a clipped
-match target is reported. Rematching is explicit after changing operating point.
+Production provides listening position and volume only. Developer comparison
+arithmetic and the audio graph retain RMS matching with ±24 dB trim and a
+peak-based full-scale limit; unit tests cover clipping and unreachable matches.
+Files exported by the capture/render commands can be compared outside the app.
 RMS matching is not a perceptual loudness guarantee for different spectra.
 
 ### Where you are listening from
@@ -460,7 +547,7 @@ and has no room send. The browser suite requires cockpit/raw levels within
 ±3 dB at its idle and loaded points and stronger low/high weighting in the cab.
 The ±3 dB requirement applies to those browser test points, not every possible
 RPM/load combination. Export metadata records the actual level difference;
-use the comparison panel's RMS match when judging different recordings.
+compare exported recordings at matched RMS when judging different recordings.
 The final browser measurements are +2.6 dB at idle and −2.4 dB at the loaded
 test point on both root and subpath builds. Some held scenarios differ more:
 the full-1400 cockpit export is 4.4 dB above raw at 48 kHz and 4.8 dB at 44.1 kHz.
@@ -570,7 +657,7 @@ mixed into this configuration.
 ## Assumptions not supported by the manual
 
 The configuration contains parameter-level purpose, safe range and provenance;
-the UI exposes them. Unless identified as published in **Reference engine and
+this document and the configuration expose them. Unless identified as published in **Reference engine and
 sources**, these quantities are calibrated or derived. Acoustic and cockpit
 assumptions are specified above and below.
 
@@ -673,10 +760,12 @@ These requirements remain in force. Known failures and gaps are listed under
   visible in metadata and this document. Nominal pressure stays below 23 MPa.
 - Catalog list, active/unknown ID, selection and deterministic reset work.
 - Gear 12 on a −15% descent pauses at the model speed ceiling with a specific
-  overspeed notice. Changing the grade to level road and resuming preserves elapsed
-  simulation time and permits deceleration. Unchanged inputs keep the pause latched.
+  overspeed notice. Confirming **Reset grade & resume** levels the road, preserves
+  gear and elapsed time, and permits deceleration. The core keeps the pause latched
+  when controls are unchanged.
 - WASM loads and advances through a worker; UI stays responsive and selection is
-  populated from the catalog. Complete static output loads at root and subpath
+  populated from the catalog. Drive, Sound and Telemetry work at phone
+  and desktop sizes in English and zh-CN; language changes preserve a live session. Complete static output loads at root and subpath
   without external runtime requests.
 - Exactly one four-path frame per step; finite samples within ±1; summed output and each path
   within the limiter knee; batch invariance in every path; reset silence and no
@@ -746,8 +835,24 @@ pnpm preview
 `pnpm test` builds WASM and runs WASM, unit and browser tests. Install Chromium
 once with `pnpm --filter web exec playwright install chromium`.
 Generated WASM is under `web/src/wasm/`; static output is `web/dist`.
-Vite defaults to a relative base; `VITE_BASE` or Vite's `--base` selects an
-absolute prefix. The subpath build verifies `/diesel-hifi/`.
+Astro builds for `/` by default; `VITE_BASE` (retained for compatibility) or
+Astro's `--base` selects an absolute deployment prefix. The subpath build verifies
+`/diesel-hifi/`. Rebuild with the matching base when changing the hosting prefix.
+The browser test servers use Astro's programmatic API so Playwright owns their
+lifetime even in environments where the Astro CLI starts a background process.
+
+GitHub Pages publishes through the manually dispatched **Pages** workflow on
+`main`. It uses Node.js 22, runs frontend checks, and builds with the Pages base
+path before uploading `web/dist`. Pages must use GitHub Actions as its source;
+private repositories need an account plan that supports GitHub Pages.
+After pushing the intended commit, run `gh workflow run pages.yml --ref main`
+and inspect its result with `gh run view`.
+
+Focused selection, mobile drawer, scrolling and overspeed browser checks:
+
+```text
+pnpm --filter web exec playwright test e2e/slice.spec.ts --grep "selection menus|mobile speed|mobile drawer|overspeed"
+```
 
 ```text
 cargo run --release -p sim-core --example sweep
@@ -778,8 +883,11 @@ analysis windows. Record these options with any reference measurement.
 | `cargo test -p sim-core --test restart --quiet` | Exit 0; all 6 restart regression tests passed |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Exit 0 |
 | `cargo fmt --all -- --check` | Exit 0 |
+| `pnpm install --frozen-lockfile` | Exit 0; lockfile current |
 | `pnpm check` | Exit 0; 0 errors, 0 warnings |
-| `pnpm test` | Exit 0; 18 WASM, 86 unit and 36 browser tests passed, including downhill overspeed recovery at root and subpath |
+| `pnpm test:unit` | Exit 0; 93 passed |
+| Focused frontend browser command above | Exit 0; 14 passed at root and subpath, including localized selection menus, Specs alignment, mobile RPM docking, drawer animation, a single unobstructed speed readout, and one-click overspeed recovery on phone and desktop |
+| `pnpm test` | Exit 0; 18 WASM, 93 unit and 52 browser tests passed; root/subpath coverage includes touch, zh-CN, automatic audio, grade-reset recovery, engine animation, pointer tracking, menus, mobile drawer and reduced motion |
 | `pnpm build` and `pnpm build:subpath` | Both exit 0; each static output verified |
 | `cargo run --release -p sim-core --example sweep` | Exit 0; 376.9 kW, 2545.1 N·m peaks; maximum pressure 20.18 MPa |
 | `cargo run --release -p sim-core --example brake_sweep` | Exit 0; 108.6/274.3 kW stage III at 1300/2300 rpm |

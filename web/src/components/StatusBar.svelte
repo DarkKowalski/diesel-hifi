@@ -1,85 +1,18 @@
 <script lang="ts">
+  import { language as l } from '../lib/i18n.svelte';
   import { sim } from '../lib/state.svelte';
-
-  const lifecycle = $derived(sim.lifecycle);
-  const ready = $derived(sim.ready);
-  const hasError = $derived(sim.errorMessage.length > 0);
 </script>
 
-<div class="status" data-testid="status-bar" data-lifecycle={lifecycle}>
-  <span class="dot" data-state={lifecycle} aria-hidden="true"></span>
-  <span data-testid="lifecycle">{lifecycle}</span>
+<div class="hidden shrink-0 items-center gap-2 text-xs text-stone-300 xl:inline-flex" data-testid="status-bar" data-lifecycle={sim.lifecycle} role="status"><span class="size-1.5 rounded-full {sim.lifecycle === 'ready' ? 'bg-emerald-600' : 'bg-amber-500'}" aria-hidden="true"></span><span data-testid="lifecycle">{l.t(sim.lifecycle !== 'ready' ? sim.lifecycle : sim.speedLimitPaused ? 'paused' : sim.snapshot?.state ?? 'stopped')}</span></div>
 
-  {#if ready}
-    <span class="muted small">
-      api v{ready.apiVersion} · snapshot v{ready.snapshotVersion} · protocol v{ready.protocolVersion}
-      · step {(ready.fixedStepS * 1e6).toFixed(0)} µs
-    </span>
-    <span class="muted small worker-note">simulation runs in a Web Worker</span>
-  {/if}
-</div>
-
-{#if sim.speedLimitPaused}
-  <div class="error speed-limit" role="status" data-testid="speed-limit-banner">
-    <strong>Engine overspeed</strong>
-    <span>{sim.errorMessage || sim.snapshot?.fault?.message}</span>
-    <button data-testid="resume" onclick={() => sim.resumeSimulation()}>Resume simulation</button>
-  </div>
-{:else if hasError}
-  <div class="error" role="alert" data-testid="error-banner">
-    <strong data-testid="error-code">{sim.errorCode}</strong>
-    <span data-testid="error-message">{sim.errorMessage}</span>
-    <button onclick={() => sim.clearError()}>Dismiss</button>
+{#if sim.speedLimitPaused || sim.errorCode || sim.audioError || (sim.audioRequested && !sim.audioRunning && !sim.audioStarting && sim.running)}
+  <div class="fixed inset-x-4 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-40 mx-auto max-w-xl rounded-2xl border border-orange-200 bg-white p-5 text-stone-900 shadow-xl md:bottom-6" role="alert" data-testid={sim.speedLimitPaused ? 'speed-limit-banner' : sim.errorCode ? 'error-banner' : 'audio-error'}>
+    {#if sim.speedLimitPaused}
+      <strong class="text-sm text-brand-700">{l.t('overspeed')}</strong><p class="mt-2 mb-4 text-sm leading-relaxed text-stone-600">{l.t('overspeedHint')}</p>
+      <button class="btn-primary" data-testid="resume" disabled={sim.busy} onclick={() => sim.resumeSimulation()}>{l.t('resume')}</button>
+    {:else if sim.errorCode}
+      <strong class="text-sm text-brand-700">{l.t('errorTitle')}</strong><p class="mt-2 mb-4 text-sm leading-relaxed text-stone-600">{l.t(sim.lifecycle === 'error' ? 'loadError' : 'errorHint')}</p>
+      {#if sim.lifecycle === 'error'}<button class="btn-primary" onclick={() => location.reload()}>{l.t('reload')}</button>{:else}<button class="btn-primary" disabled={sim.busy} onclick={() => sim.resetSimulation()}>{l.t('reset')}</button>{/if}
+    {:else}<p class="small text-stone-600">{l.t(sim.audioError ? 'audioError' : 'audioInterrupted')}</p><button class="btn mt-3" data-testid="resume-sound" disabled={sim.audioStarting} onclick={() => sim.enableAudio()}>{l.t('resumeSound')}</button>{/if}
   </div>
 {/if}
-
-<style>
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    padding: 0.5rem 0.9rem;
-    border: 1px solid var(--rule);
-    border-radius: 8px;
-    background: var(--panel);
-    font-size: 0.8rem;
-  }
-  .dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 50%;
-    background: var(--muted);
-  }
-  .dot[data-state='ready'] {
-    background: var(--ok);
-  }
-  .dot[data-state='loading'] {
-    background: var(--warn);
-  }
-  .dot[data-state='error'] {
-    background: var(--bad);
-  }
-  .worker-note {
-    margin-left: auto;
-  }
-  .error {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    margin-top: 0.6rem;
-    padding: 0.6rem 0.9rem;
-    border: 1px solid var(--bad);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--bad) 12%, transparent);
-    font-size: 0.85rem;
-  }
-  .error button {
-    margin-left: auto;
-  }
-  .speed-limit {
-    border-color: var(--warn);
-    background: color-mix(in srgb, var(--warn) 12%, transparent);
-  }
-</style>

@@ -1,105 +1,68 @@
 <script lang="ts">
   import AudioPanel from './components/AudioPanel.svelte';
   import Controls from './components/Controls.svelte';
-  import DrivelinePanel from './components/DrivelinePanel.svelte';
-  import DynoPanel from './components/DynoPanel.svelte';
   import EngineSelector from './components/EngineSelector.svelte';
-  import ProvenancePanel from './components/ProvenancePanel.svelte';
+  import EngineView from './components/EngineView.svelte';
+  import Gauge from './components/Gauge.svelte';
+  import Icon from './components/Icon.svelte';
   import StatusBar from './components/StatusBar.svelte';
+  import SelectMenu from './components/SelectMenu.svelte';
   import Telemetry from './components/Telemetry.svelte';
+  import { language as l } from './lib/i18n.svelte';
   import { sim } from './lib/state.svelte';
+  import type { EngineGeometries } from './lib/engineGeometry';
 
-  $effect(() => {
-    void sim.start();
-    return () => sim.destroy();
-  });
+  let { geometries }: { geometries: EngineGeometries } = $props();
 
-  // Let go of the key once the engine sustains itself.
-  //
-  // This used to be the *only* thing that disengaged the starter, which is why
-  // it lived here at all: the model had no relay, so a driver who held the key
-  // kept the pinion in mesh for ever. The relay is in `sim::starter` now and
-  // drops out on its own, so what is left here is only releasing the key —
-  // cosmetic, and no longer load-bearing.
+  let view = $state<'drive' | 'sound' | 'details'>('drive');
+  let engineSlowMotion = $state(true);
+  let controlsExpanded = $state(false);
+  let speedPanelHeader = $state<HTMLDivElement>();
+  const views = ['drive', 'sound', 'details'] as const;
+  function navigate(next: typeof view) { view = next; controlsExpanded = false; window.scrollTo(0, 0); }
+  $effect(() => { void sim.start(); return () => sim.destroy(); });
   $effect(() => {
-    if (sim.snapshot?.state === 'running') {
-      void sim.releaseStarterIfRunning();
-    }
+    if (sim.snapshot?.state === 'running') void sim.releaseStarterIfRunning();
   });
+  $effect(() => { document.documentElement.lang = l.locale; document.title = l.t('appTitle'); });
 </script>
 
-<main>
-  <header>
-    <h1>Diesel Truck Engine Simulator</h1>
-    <p class="muted">
-      Deterministic Rust simulation core compiled to WebAssembly, stepped in a Web Worker, rendered
-      by a static Svelte build. Public-spec reference model, not an OEM calibration.
-    </p>
-  </header>
-
-  <StatusBar />
-
-  <div class="layout">
-    <div class="column">
-      <EngineSelector />
-      <Controls />
-      <DrivelinePanel />
-      <AudioPanel />
-    </div>
-    <div class="column">
-      <Telemetry />
-      <DynoPanel />
+<a class="sr-only z-50 bg-brand-600 p-4 text-white focus:not-sr-only focus:fixed focus:top-2 focus:left-2" href="#controls" onclick={() => { controlsExpanded = true; }}>{l.t('skip')}</a>
+<header class="border-b border-stone-800 bg-[#202320] text-white">
+  <div class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-5 md:h-18 md:px-8">
+    <a class="flex shrink-0 items-center gap-3 no-underline" href="#main" onclick={(event) => { event.preventDefault(); navigate('drive'); }} aria-label="Diesel HiFi">
+      <span class="grid size-9 place-items-center rounded-lg border border-white/15 text-brand-500"><Icon name="engine" size={22} /></span>
+      <span class="text-base font-semibold tracking-tight">Diesel <span class="font-normal text-stone-300">HiFi</span></span>
+    </a>
+    <nav class="fixed inset-x-0 bottom-0 z-30 flex h-[calc(5rem+env(safe-area-inset-bottom))] justify-around gap-1 border-t border-stone-200 bg-white p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:static md:ml-5 md:mr-auto md:h-auto md:border-0 md:bg-transparent md:p-0" aria-label={l.t('navigation')}>
+      {#each views as item}
+        <button data-testid={`nav-${item}`} class="flex-1 flex-col gap-1 rounded-lg px-5 text-xs md:flex-row md:gap-2 md:px-4 md:text-sm {view === item ? 'bg-brand-50 text-brand-700 md:bg-white/10 md:text-orange-300' : 'text-stone-500 hover:bg-stone-100 md:text-stone-300 md:hover:bg-white/5'}" aria-current={view === item ? 'page' : undefined} onclick={() => navigate(item)}>
+          <Icon name={item} size={17} /><span>{l.t(item)}</span>
+        </button>
+      {/each}
+    </nav>
+    <StatusBar />
+    <div class="flex min-w-0 items-center gap-2 text-stone-300"><span class="hidden sm:block"><Icon name="globe" size={16} /></span>
+      <SelectMenu id="language-select" label={l.t('language')} value={l.locale} options={[{ value: 'en', label: 'English' }, { value: 'zh-CN', label: '简体中文' }]} dark align="right" onchange={(value) => l.set(value === 'zh-CN' ? 'zh-CN' : 'en')} />
     </div>
   </div>
+</header>
 
-  <ProvenancePanel />
-
-  <footer class="muted small">
-    Mercedes-Benz and OM 471 are used as factual references only. No OEM endorsement is implied.
-    Milestone 4 adds the staged decompression engine brake and a rigid truck driveline. Braking
-    torque comes out of cylinder pressure, exactly as firing torque does, and is validated against
-    the published M5U anchors of 100 kW at 1300 rpm and 300 kW at 2300 rpm. Aftertreatment
-    chemistry, clutch slip and gear-change behaviour are not modelled.
-  </footer>
+<main id="main" class="mx-auto max-w-7xl px-4 pt-5 pb-[calc(10rem+env(safe-area-inset-bottom))] md:px-8 md:pt-7 md:pb-8">
+  <h1 class="sr-only">{l.t(view)}</h1>
+  <EngineSelector />
+  <div class="mt-5 grid items-start gap-5 md:grid-cols-[minmax(0,1fr)_300px] lg:grid-cols-[minmax(0,1fr)_340px]">
+    <div class="contents min-w-0 md:grid md:gap-5">
+      <Gauge compact={view !== 'drive'} {controlsExpanded} onHeader={(element) => { speedPanelHeader = element; }} />
+      {#if view === 'drive' && geometries[sim.activeId]}
+        <EngineView geometry={geometries[sim.activeId]!} bind:slowMotion={engineSlowMotion} />
+      {/if}
+      {#if view === 'sound'}<AudioPanel />{/if}
+      <div hidden={view !== 'details'}><Telemetry /></div>
+    </div>
+    <aside class="contents md:sticky md:top-5 md:block">
+      <Controls bind:expanded={controlsExpanded} {speedPanelHeader} />
+    </aside>
+  </div>
+  <footer class="mt-9 flex flex-col justify-between gap-2 border-t border-stone-200 pt-5 text-[11px] text-stone-500 md:flex-row"><span>{l.t('disclaimer')}</span></footer>
 </main>
-
-<style>
-  main {
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 1.5rem 1.25rem 3rem;
-    display: grid;
-    gap: 1rem;
-  }
-  header h1 {
-    margin: 0 0 0.35rem;
-    font-size: 1.35rem;
-  }
-  header p {
-    margin: 0;
-    max-width: 70ch;
-    font-size: 0.85rem;
-    line-height: 1.5;
-  }
-  .layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
-    gap: 1rem;
-    align-items: start;
-  }
-  .column {
-    display: grid;
-    gap: 1rem;
-    align-content: start;
-  }
-  footer {
-    border-top: 1px solid var(--rule);
-    padding-top: 0.9rem;
-    line-height: 1.5;
-  }
-  @media (max-width: 900px) {
-    .layout {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-</style>

@@ -4,17 +4,8 @@
 # to the default branch publishes nothing: the site goes out when someone runs
 # this workflow and not before. Add a `push:` block here if that is ever wanted.
 #
-# GitHub Pages also has to be enabled for the repository (Settings -> Pages ->
-# Source: GitHub Actions) before the deploy step can succeed. On a **private**
-# repository that requires a paid plan — Pages for private repositories is a
-# Pro, Team or Enterprise feature, and on a free account the repository has to
-# be public first. Until then this workflow builds and uploads fine and only
-# the final deploy step would fail.
-#
-# The build is `pnpm build`, not `build:subpath`. `web/vite.config.ts` uses a
-# relative base, so one artifact works at a domain root and under any subpath —
-# including `https://<owner>.github.io/diesel-hifi/`. `build:subpath` exists for
-# hosts that need an absolute prefix, which Pages does not.
+# Enable GitHub Pages with GitHub Actions as its source before dispatching.
+# Astro receives the site's configured base path, including custom domains.
 name: Pages
 
 on:
@@ -36,6 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - id: pages
+        uses: actions/configure-pages@v5
+
       # No toolchain action needed: `rust-toolchain.toml` pins the channel, the
       # components and the wasm32 target, and the runner's rustup honours it on
       # the first cargo invocation.
@@ -51,7 +45,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -60,6 +54,10 @@ jobs:
       # is what checks the artifact is genuinely self-contained: no runtime
       # external requests, wasm and worker chunks present.
       - run: pnpm build
+        env:
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+
+      - run: pnpm check
 
       - uses: actions/upload-pages-artifact@v3
         with:

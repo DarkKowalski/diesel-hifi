@@ -1,0 +1,32 @@
+---
+import Simulator from '../App.svelte';
+import type { EngineGeometry } from '../lib/engineGeometry';
+import '../app.css';
+
+// Astro evaluates this at build time; only drawing geometry reaches the client.
+const configs = import.meta.glob<{ identity: { id: string }; geometry: EngineGeometry }>(
+  '../../../crates/sim-core/data/*.json', { eager: true, import: 'default' },
+);
+const geometries = Object.fromEntries(Object.values(configs).map(({ identity, geometry }) => [
+  identity.id,
+  { cylinders: geometry.cylinders, stroke_m: geometry.stroke_m,
+    connecting_rod_m: geometry.connecting_rod_m, firing_order: geometry.firing_order },
+]));
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f5f4f0" />
+    <meta name="description" content="Diesel HiFi. Start a diesel truck engine, take the controls, and find your listening position." />
+    <title>Diesel HiFi</title>
+  </head>
+  <body>
+    <Simulator client:only="svelte" {geometries}>
+      <div slot="fallback" class="grid min-h-screen place-items-center text-sm text-stone-500" role="status">Diesel HiFi · Loading / 正在加载…</div>
+    </Simulator>
+    <noscript>Diesel HiFi needs JavaScript to run the engine. / 请启用 JavaScript 以运行发动机。</noscript>
+  </body>
+</html>

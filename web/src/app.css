@@ -1,100 +1,42 @@
-/*
- * Local styles only. No web fonts, no CDN, no external stylesheet: the build in
- * `web/dist` must make zero network requests at runtime.
- */
+@import 'tailwindcss';
 
-:root {
-  --bg: #0e1116;
-  --panel: #161b22;
-  --ink: #e6edf3;
-  --muted: #8b949e;
-  --rule: #2a313a;
-  --accent: #58a6ff;
-  --ok: #3fb950;
-  --warn: #d29922;
-  --bad: #f85149;
-
-  color-scheme: dark;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    Roboto,
-    Helvetica,
-    Arial,
-    sans-serif;
+@theme {
+  --font-sans: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --color-brand-50: #fff3eb;
+  --color-brand-100: #ffe3d0;
+  --color-brand-500: #f07843;
+  --color-brand-600: #c94c21;
+  --color-brand-700: #a43e1c;
 }
 
-* {
-  box-sizing: border-box;
+@layer base {
+  html { @apply scroll-pt-[calc(4rem+env(safe-area-inset-top))] scroll-pb-[calc(9rem+env(safe-area-inset-bottom))] md:scroll-py-0; }
+  body { @apply m-0 bg-[#f5f4f0] font-sans text-stone-900 antialiased; }
+  button, select, input { @apply font-[inherit]; }
+  button { @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors; }
+  button:disabled, input:disabled, select:disabled { @apply cursor-not-allowed opacity-40; }
+  :focus-visible { @apply outline-2 outline-offset-4 outline-brand-600; }
+  select { @apply min-h-11 max-w-full cursor-pointer rounded-lg px-3 py-2 text-sm; }
+  input[type='range'] { @apply m-0 h-11 w-full cursor-pointer accent-brand-600; }
+  summary { @apply min-h-12 cursor-pointer py-4 text-sm font-medium text-stone-600; }
+  summary:hover { @apply text-stone-900; }
+  details[open] > summary { @apply text-stone-900; }
+  [hidden] { display: none !important; }
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
-  font-size: 15px;
-  line-height: 1.4;
+@layer components {
+  .panel { @apply rounded-2xl border border-stone-200 bg-white p-5 lg:p-6; }
+  .btn { @apply border border-stone-200 bg-white text-stone-700 hover:enabled:border-stone-400 hover:enabled:bg-stone-50; }
+  .btn-primary { @apply border border-brand-600 bg-brand-600 text-white hover:enabled:border-brand-700 hover:enabled:bg-brand-700; }
+  .btn:disabled, .btn-primary:disabled { @apply border-stone-200 bg-stone-100 text-stone-500 opacity-100; }
+  .btn-quiet { @apply text-stone-500 hover:enabled:bg-stone-100 hover:enabled:text-stone-900; }
+  .eyebrow { @apply text-[10px] font-semibold uppercase tracking-[0.16em] text-stone-500; }
+  .muted { @apply text-stone-500; }
+  .small { @apply text-xs leading-relaxed; }
+  .field { @apply grid gap-2 text-sm; }
+  .field > span { @apply flex items-baseline justify-between gap-3; }
 }
 
-code,
-.mono {
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-}
-
-:global(.panel) {
-  background: var(--panel);
-  border: 1px solid var(--rule);
-  border-radius: 10px;
-  padding: 1rem 1.1rem 1.15rem;
-}
-
-:global(.panel h2) {
-  margin: 0 0 0.75rem;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--muted);
-}
-
-:global(.field) {
-  display: grid;
-  gap: 0.3rem;
-  margin-bottom: 0.85rem;
-  font-size: 0.85rem;
-}
-
-:global(.muted) {
-  color: var(--muted);
-}
-
-:global(.small) {
-  font-size: 0.78rem;
-  line-height: 1.5;
-}
-
-button,
-select {
-  font: inherit;
-  color: var(--ink);
-  background: #1f262f;
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  padding: 0.4rem 0.7rem;
-  cursor: pointer;
-}
-
-button:hover:not(:disabled),
-select:hover {
-  border-color: var(--accent);
-}
-
-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-input[type='range'] {
-  accent-color: var(--accent);
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
 }

@@ -38,7 +38,9 @@ const LOAD_CONSTRUCTS = [
 ];
 
 /** Absolute URLs that are known to be inert strings, not loads. */
-const INERT_HOSTS = new Set(['svelte.dev', 'www.svelte.dev']);
+// Framework error links, SVG/MathML namespace identifiers, and Tailwind's license banner.
+// Load-position checks above still reject requests to any of these hosts.
+const INERT_HOSTS = new Set(['svelte.dev', 'www.svelte.dev', 'www.w3.org', 'tailwindcss.com']);
 
 const TEXT_EXTENSIONS = new Set(['.html', '.js', '.mjs', '.css', '.json', '.map', '.svg']);
 

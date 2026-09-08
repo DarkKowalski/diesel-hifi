@@ -13,6 +13,7 @@ node_modules/
 # Build output
 /web/dist/
 /web/dist-subpath/
+/web/.astro/
 
 # Test artifacts
 /web/test-results/

@@ -412,7 +412,13 @@ export class AudioEngine {
     }
 
     const context = new AudioContext();
-    await context.audioWorklet.addModule(processorUrl);
+    // Retain ownership immediately so failed worklet loading can close the context.
+    this.context = context;
+    context.onstatechange = () => {
+      if (this.context === context) this.update({ running: context.state === 'running' });
+    };
+    // Resume during the user's gesture, before any asynchronous module loading.
+    await Promise.all([context.resume(), context.audioWorklet.addModule(processorUrl)]);
 
     // One output carrying the three radiating paths as discrete channels. The
     // splitter downstream separates them; they are three mono signals rather
