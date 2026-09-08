@@ -156,6 +156,17 @@ until now nothing could see the traces. It can now, and there is something in
 them — see **What the traces contain**. Every source experiment the plan lists
 next would have amplified it.
 
+| 13 | **The seat gets a balance, and finds out why it cannot have much of one**: each radiating path gets a level of its own in the cab, applied cab-side so the raw stage stays the solver's own output. Acting on a listening report — body up, the others down — the body goes up 1.5 dB and the block down 3, taking about 2 dB more of the top end out on the way to the driver. The request could not be met in full, and the measurement that stopped it is the result: the body path sits **1.1 dB behind the exhaust at idle and 12.8 dB behind at full load**, so no constant trim describes both ends. No physics or calibration changed. |
+
+Milestone 13 is a listening-stage change and the first thing in this document
+driven by someone hearing it rather than by an instrument. It is also the first
+time a listening request has been **partly refused by a measurement**: the level
+match between the cockpit and raw stages is what stopped the body trim at 1.5 dB
+rather than the 6 dB that was tried first, and chasing why turned up a source
+deficit nobody had looked for. What the ear asked for and what the cab could give
+are recorded separately, under **Where you are listening from** and **Known
+deficits**, because they are not the same size.
+
 Milestone 12 is the first change to the acoustic *source* since milestone 6, and
 it is the fix milestone 11 blocked the rest of phase 4 on. It is also the first
 change since milestone 9 to move a figure in **Results → Calibration** as well as
@@ -677,7 +688,43 @@ more than the fix:
   it. It did not have to. Both manifolds are still mean-value, which is what the
   exhaust side had always done — see **Modelling simplifications**.
 
-**Newly measured, and not caused by milestone 12:**
+**Newly measured, in milestone 13, and the reason a listening request could only
+be half delivered:**
+
+- **The body path's level relative to the exhaust swings 12 dB across the
+  operating range.** It sits 1.1 dB behind the exhaust at governed idle, 2.8 dB
+  behind at cruise, and **12.8 dB** behind at full load. So the roar recedes as
+  the engine works harder, which is the wrong way round: a truck's cab gets more
+  boomy under load, not less.
+
+  | Exhaust leads the body by | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` |
+  |---|---:|---:|---:|---:|---:|
+  | | 1.1 dB | 6.8 dB | 2.8 dB | 12.8 dB | 9.8 dB |
+
+  The mechanism is not mysterious. The exhaust source is port mass flow, which
+  grows steeply with fuelling and boost. The body source is gas plus pumping
+  torque **normalised by rated torque**, which is bounded above by construction —
+  it cannot exceed about one however hard the engine is worked. One source has a
+  ceiling and the other does not, so their ratio has to move with load.
+
+  **This was found by trying to fix something else.** A listener asked for the
+  body path to come up; the obvious answer is a cab trim; and a trim large enough
+  to satisfy the request at *load* makes the cab 6 dB louder than the raw stage at
+  *idle*, because the same path is 43% of the idle mix and 5% of the loaded one.
+  The level-match assertion caught it. What the cab ships is the part that fits
+  inside that constraint, and it is modest.
+
+  **The fix is a source change and it is not a gain.** Raising `audio.body_gain`
+  moves both ends together and would break the idle end first — it is the same
+  constant meeting the same problem one stage earlier. What is wrong is the
+  *scaling*, so the candidates are a body forcing that is not normalised by a
+  fixed rated torque, or one driven by torque fluctuation rather than torque
+  level. Either changes a radiating source, so it moves the band shares, the
+  crest factors and the `<80 Hz` figure above — and that last one is already
+  failing its criterion in the direction this would push it. Which is why it is
+  recorded here and not attempted in the same milestone as the measurement.
+
+**Newly measured in milestone 12, and not caused by it:**
 
 - **The air path limit-cycles at high speed under load.** At full pedal against
   1500 N·m the engine settles near 1900 rpm, and there the wastegate loop does not
@@ -1151,17 +1198,18 @@ stage builds nothing that can produce sound on its own.
 alone the cab sat level under load and 6.3 dB louder at idle, because the
 compressor works at the loud end and does nothing at the quiet end. Trimming
 ahead of the compressor moves the quiet end nearly decibel for decibel and the
-compressed loud end far less, so trim-then-make-up (0.42 in, 1.41 out) brings
+compressed loud end far less, so trim-then-make-up (0.42 in, 1.39 out) brings
 both together:
 
 | Measured at the output | Idle | 90% pedal, 300 N·m |
 |---|---:|---:|
-| Cockpit level relative to raw | +1.70 dB | −1.64 dB |
-| 2–8 kHz band | — | −40% |
-| 60–400 Hz band | — | 0% |
+| Cockpit level relative to raw | +2.6 dB | −2.6 dB |
+| Low-band over high-band ratio | — | 4.2 against raw's 2.4 |
+| 2 kHz and above | — | −45% |
 
 Both ends are asserted within 3 dB by the browser suite through the same analyser
-the spectrum view uses.
+the spectrum view uses, and the suite now *prints* them: a number that appears
+only when it fails is a number nobody can calibrate against.
 
 That spread was ±0.8 dB before the paths were split, and it widened for a real
 reason rather than through carelessness. Each path now has its own filters, and
@@ -1170,6 +1218,25 @@ sits in 80–300 Hz against 66% at idle — so the cab removes different amounts
 the two ends, and no pair of gains can zero both. The pair is centred on the
 spread instead: zeroing idle put load at −3.3 dB, and chasing one end is the
 exact mistake the input trim was introduced to stop.
+
+**Each path also has a level of its own now, and it is the smallest part of this
+document with the largest story behind it.** A listener in the seat reported that
+the body path wanted bringing up and the other two down. The body is 1.5 dB up,
+the block 3 dB down and the exhaust untouched — and those numbers are small
+because the measurement refused to let them be large.
+
+The first attempt was +6 dB on the body, which is what the request sounds like.
+It put the cab **+6.0 dB over raw at idle** against −1.9 dB under load, failing
+the level match at one end, and every intermediate value traded one end against
+the other. The cause is not in this stage: the body path sits 1.1 dB behind the
+exhaust at governed idle and **12.8 dB** behind it at full load, so a constant
+trim is a large change to the idle mix and nearly nothing to the loaded one. The
+window is 6 dB wide and a rebalance opens the spread to about 5 on its own.
+
+What the cab could honestly deliver is above: the low-to-high ratio at the
+driver's ear went from 3.7 to 4.2 against a raw stage sitting at 2.4, and about
+2 dB more of the top end is now taken out on the way in. The rest of that request
+is a **source** change and is recorded under **Known deficits**.
 
 None of this is published. The manual says nothing about how the engine sounds
 and less about how its cab sounds; these are listening choices and the UI says so
@@ -1201,7 +1268,20 @@ thing:
   independent sources now say the model wants more low end and one convention says
   less. See **Known deficits**.
 
-What this is not: a validation. Phase 7 of the acoustic plan asks for blinded,
+**Milestone 13, from the driver's seat.** The second report: **the body path
+should be brought up and the other two down**, heard from the seat. Same listener,
+same unrecorded conditions, so the same weight — but it is a sharper statement
+than the first, because it names a path rather than a band, and the two reports
+are consistent: the body path is where the low end lives, carrying 84% of its
+energy below 80 Hz.
+
+It also survived contact with a measurement, which is the part worth recording.
+Acting on it directly — a large boost on the body path in the cab — broke the
+level match between the cockpit and raw stages, and *why* it broke is a finding
+about the model rather than about the request. See **Where you are listening
+from** for what the cab could deliver and **Known deficits** for the rest.
+
+What none of this is: a validation. Phase 7 of the acoustic plan asks for blinded,
 level-matched comparisons across operating conditions with the playback equipment
 recorded, and none of that has happened. A listening report that happens to
 confirm the instruments is worth exactly as much as one that contradicts them, and
@@ -1519,7 +1599,7 @@ none of it supplies these numbers.
 | **Combustion noise** | The weights still *ascend* with frequency, which is the opposite of the radiating physics. This was re-examined and kept: descending weights were tried, on the argument that a big engine should ring low, and they starved the top end to under 1% above 2 kHz because the drive genuinely falls that steeply — the premixed Wiebe rise starts with zero slope, so the model's burn onset drives the upper modes far more weakly than a real one would. The weights compensate for a shortfall in the drive rather than claiming an engine radiates more at 3.6 kHz than at 750 Hz. What changed instead is where the bank *starts* and how sharp it is |
 | **Cylinder build scatter** | ±2% exhaust port area, ±1.5% injector delivery, drawn once per cylinder at reset from the reset seed and never per step. Six bit-identical cylinders sum to a pure harmonic comb the ear hears as synthesised. Far too small to move any calibration result, and a test asserts peak power and torque are unchanged by it |
 | **Cycle-to-cycle scatter** | ±2% delivered fuel, drawn once per cylinder *per cycle* at intake valve closing from the same seeded stream. Build scatter makes the cylinders differ from each other; this was the only thing making a cylinder differ from its own last cycle until milestone 12, and is now the smaller of two such things — trapping through a real port carries the residual forward, which does the same job at roughly twice the size. Its effect is honestly modest, it is kept because it is still a working lever, and see **Modelling simplifications** for the measurement |
-| **Cockpit listening stage** | Per path: exhaust low-passed at 1.6 kHz with −3 dB at 400 Hz, delayed 12 ms, full room send; block low-passed at 3.2 kHz with +2 dB at 1 kHz, delayed 2 ms, 0.4 room send; body low-passed at 250 Hz with +1 dB at 120 Hz, no delay and **no room send at all**. Then shared: 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.41 out. No shared low pass: one figure could not describe a tailpipe metres away and an engine through the bulkhead at once. Presentation only — downstream of everything, changes no state, bypassable |
+| **Cockpit listening stage** | Per path: exhaust at 0 dB, low-passed at 1.6 kHz with −3 dB at 400 Hz, delayed 12 ms, full room send; block at −3 dB, low-passed at 3.2 kHz with +2 dB at 1 kHz, delayed 2 ms, 0.4 room send; body at **+1.5 dB**, low-passed at 250 Hz with +1 dB at 120 Hz, no delay and **no room send at all**. The three path levels say where the driver is sitting and are applied inside the cab chain only, so the raw stage stays exactly the sum the solver emitted. Then shared: 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.39 out. No shared low pass: one figure could not describe a tailpipe metres away and an engine through the bulkhead at once. Presentation only — downstream of everything, changes no state, bypassable |
 | **Body and mount response** | Four modes at 60, 95, 150 and 220 Hz at Q 4.0, 4.0, 4.5 and 5.0, weighted 1.0, 1.0, 0.8 and 0.5, driven by gas plus pumping torque normalised by rated torque. Q in the single figures because a trimmed cab panel is heavily damped and a sharp bank here jumps in level as the firing frequency sweeps past each mode. This is a *vehicle* response excited by the engine, not an engine property; the source is an engine manual and publishes nothing about either |
 
 ## Modelling simplifications
@@ -1913,6 +1993,47 @@ checked against a real fix, it turned out to predict one to within half a
 percentage point.
 
 [`analysis::jumps`]: crates/sim-core/src/analysis.rs
+
+### Verification, milestone 13
+
+Run on Windows 11. A listening-stage change: no Rust source, no configuration and
+no acoustic source was touched, so the native suite and the probes are unchanged
+from milestone 12 and were not re-run. The checks that apply are the web ones.
+
+| Command | Result |
+|---|---|
+| `pnpm check` | 0 errors, 0 warnings |
+| `pnpm test` | 84 unit passed, 34 browser passed at root and subpath, 0 failed |
+
+Two unit tests changed and one is new. The changed pair walk each path's chain and
+now step over the level trim between the solo gain and the filters. The new one
+asserts the invariant the whole design turns on: **a cab trim must not reach the
+raw stage.** The raw stage is the sum the solver emitted and is what every figure
+under **Results → Sound** is measured from, so a trim leaking into it would move
+the numbers this project validates against while looking like a listening choice.
+
+The browser test gained an assertion and a print. The assertion is the measurable
+form of the request — the cab must weight low over high at least 1.5 times as
+heavily as the raw stage does, which is what "the seat is a low-frequency
+listening position" means when both stages are level-matched. The print is the
+cab spread at both ends, because it is the number `makeupGain` and the path levels
+are calibrated against and it previously existed only inside a failure message.
+
+Calibration ran to seven measured iterations, and the record of what failed is
+more useful than the value that passed:
+
+| Body trim | Other trims | Idle vs raw | Load vs raw |
+|---:|---|---:|---:|
+| +6 dB | exhaust −2, block −3 | **+6.0 dB** | −1.9 dB |
+| +3 dB | exhaust −1.5, block −3 | **+3.4 dB** | −2.7 dB |
+| +4 dB | exhaust −1.5, block −3, shelf 5→2.5 | +2.0 dB | **−3.5 dB** |
+| +3 dB | exhaust −1, block −3 | **+3.6 dB** | −2.6 dB |
+| **+1.5 dB** | **block −3, makeup 1.41→1.39** | **+2.6 dB** | **−2.6 dB** |
+
+Every row above the last fails the ±3 dB level match at one end or the other, and
+moving weight out of the shared low shelf into the body path — the physically
+better description — failed at the *loud* end instead. The window is 6 dB wide and
+a rebalance opens the spread to about 5 on its own.
 
 ### Verification, milestone 12
 

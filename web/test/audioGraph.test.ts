@@ -208,6 +208,36 @@ describe('the post-processing graph', () => {
     expect(dry.outgoing).toEqual([output]);
   });
 
+  it('keeps the cab level trims out of the raw stage', () => {
+    // The trims say where the listener is sitting. The raw stage says what the
+    // solver produced, and every figure in `README.md` under Results -> Sound is
+    // measured from it — so a trim that reached it would silently move the
+    // numbers this project validates against, and the A/B between the two stages
+    // would stop being a comparison of listening positions.
+    const { graph } = build();
+    const dry = graph.dryGain as unknown as FakeNode;
+
+    for (const path of AUDIO_PATHS) {
+      const { levelDb } = CABIN_SPEC.paths[path];
+      if (levelDb === 0) continue;
+
+      const solo = graph.pathGains[path] as unknown as FakeNode;
+      const expected = 10 ** (levelDb / 20);
+      const trim = solo.outgoing.find(
+        (node): node is FakeGain =>
+          node.kind === 'gain' && Math.abs((node as FakeGain).gain.value - expected) < 1e-9,
+      )!;
+
+      expect(trim, `${path} should have a trim to check`).toBeDefined();
+      expect(
+        trim.outgoing,
+        `${path}'s cab trim must not feed the raw sum`,
+      ).not.toContain(dry);
+      // The solo gain still reaches the dry sum without passing through it.
+      expect(solo.outgoing).toContain(dry);
+    }
+  });
+
   it('takes each path from its own splitter output', () => {
     // The failure this catches is silent and nasty: crossing two outputs gives
     // each path the other's cab transfer, which is neither an error nor
@@ -284,8 +314,21 @@ describe('the post-processing graph', () => {
   it('runs each path chain in series and keeps the chains apart', () => {
     const { graph } = build();
     for (const path of AUDIO_PATHS) {
-      const stages = CABIN_SPEC.paths[path].filters;
+      const { filters: stages, levelDb } = CABIN_SPEC.paths[path];
       let tail = graph.pathGains[path] as unknown as FakeNode;
+
+      // Step over the cab's level trim, which sits between the solo gain and
+      // this path's own filters. A zero trim is built as no node at all.
+      if (levelDb !== 0) {
+        const expected = 10 ** (levelDb / 20);
+        const trim = tail.outgoing.find(
+          (node): node is FakeGain =>
+            node.kind === 'gain' && Math.abs((node as FakeGain).gain.value - expected) < 1e-9,
+        );
+        expect(trim, `${path} should carry its ${levelDb} dB cab trim`).toBeDefined();
+        tail = trim!;
+      }
+
       for (const stage of stages) {
         const next = tail.outgoing.find(
           (node): node is FakeBiquad =>

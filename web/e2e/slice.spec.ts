@@ -543,6 +543,33 @@ test('the cockpit stage muffles the top end without simply being louder', async 
   // And it keeps the low end, which is the part of a diesel you feel.
   expect(loadCockpit.low).toBeGreaterThan(loadRaw.low * 0.75);
 
+  // The seat is a low-frequency listening position, and that is a statement
+  // about the *ratio* rather than about either band alone — the two stages are
+  // level-matched, so "more low" can only mean "more low per unit of high".
+  //
+  // This is the assertion the per-path level trims exist to satisfy: the body
+  // path up, the block down, measured at the output rather than asserted from
+  // the spec. Adding them moved this ratio from 3.7 to 4.4 under load while the
+  // raw stage stayed at 2.4.
+  const cockpitRatio = loadCockpit.low / Math.max(loadCockpit.high, 1e-6);
+  const rawRatio = loadRaw.low / Math.max(loadRaw.high, 1e-6);
+  expect(
+    cockpitRatio,
+    `the cab should weight the low end more heavily than raw does ` +
+      `(cockpit ${cockpitRatio.toFixed(2)}, raw ${rawRatio.toFixed(2)})`,
+  ).toBeGreaterThan(rawRatio * 1.5);
+
+  // Reported rather than only asserted. `CABIN_SPEC.dynamics.makeupGain` and the
+  // per-path level trims are calibrated against this spread, and README quotes
+  // it; a number that only appears when it fails is a number nobody can tune to.
+  console.log(
+    `cab spread: idle ${(idleCockpit.levelDb - idleRaw.levelDb).toFixed(1)} dB, ` +
+      `load ${(loadCockpit.levelDb - loadRaw.levelDb).toFixed(1)} dB ` +
+      `| low idle ${idleCockpit.low.toFixed(1)}/${idleRaw.low.toFixed(1)} ` +
+      `load ${loadCockpit.low.toFixed(1)}/${loadRaw.low.toFixed(1)} ` +
+      `| high load ${loadCockpit.high.toFixed(1)}/${loadRaw.high.toFixed(1)}`,
+  );
+
   // The switch must not be a volume control in disguise. A post-processing
   // stage that is merely louder wins any comparison for the wrong reason, so
   // the two are level-matched and these are the assertions that hold them

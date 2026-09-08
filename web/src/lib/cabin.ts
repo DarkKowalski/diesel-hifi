@@ -108,6 +108,22 @@ export type AudioPath = (typeof AUDIO_PATHS)[number];
  * where the driver is sitting relative to three sources.
  */
 export interface PathStage {
+  /**
+   * How loud this path is *at the driver*, relative to how loud it left.
+   *
+   * The three sources are at three different distances behind three different
+   * amounts of steel, glass and rubber, so where a listener sits changes their
+   * balance and not only their tone. This is that, and it is deliberately
+   * separate from the filters: a shelf that lowers a path also colours it, and
+   * the statement being made here is about level.
+   *
+   * **Cab-only, by construction.** It is applied inside the wet chain, after the
+   * per-path solo gains and downstream of the split, so the raw stage stays
+   * exactly the sum the solver emitted. A trim that moved the raw stage would be
+   * a second balance control masquerading as a listening position, and the raw
+   * stage is what every measurement in `README.md` is taken from.
+   */
+  levelDb: number;
   /** This path's own transfer, before anything shared. */
   filters: FilterStage[];
   /** Propagation delay from the source to the driver's ear. */
@@ -219,9 +235,58 @@ export const CABIN_SPEC: CabinSpec = {
    *     diffuse tail, and reverberating it would be inventing an acoustic route
    *     it does not take. Its low pass is well below anything it produces, and
    *     is there to say that rather than to shape it.
+   *
+   * ## Why the levels are not all zero
+   *
+   * They were, until a listener sat in the seat and said the body path wanted
+   * bringing up and the other two down. That is the second listening report this
+   * project has, and it agrees with the first — *not enough low frequency* — and
+   * with the measured reference, which reads 89 to 92% below 80 Hz at idle where
+   * the model's raw mix reads 39%.
+   *
+   * It also agrees with the physics of sitting there rather than beside the
+   * truck. A structure-borne path into the seat and floor does not attenuate the
+   * way an airborne one does: the exhaust leaves a stack several metres back and
+   * has to get in through the cab shell, the block is behind a bulkhead built to
+   * keep it out, and the frame is *bolted to the thing the driver is sitting on*.
+   * Outside the cab that ordering reverses, which is why this belongs to the
+   * listening position and not to the source gains.
+   *
+   * The split across the three is not arbitrary. The block comes down furthest
+   * because it is the clatter path — 68% of it sits in 300 Hz–2 kHz — and the
+   * first listening report was that there was too much high frequency. The
+   * exhaust is not cut at all, because it carries the firing orders and an
+   * exhaust behind the block is how an engine stops sounding like a truck; it is
+   * reduced *relative* to the body, which is what was asked for.
+   *
+   * ## Why these numbers are small, which is the more useful half of the note
+   *
+   * They are small because they were measured rather than chosen, and the
+   * measurement said no. The browser suite holds the cab within 3 dB of the raw
+   * stage at **both** idle and load, so that switching stages cannot win a
+   * comparison by being louder. A body trim of +6 dB — the first attempt, and
+   * the one that sounds like the request — put the cab **+6.0 dB** over raw at
+   * idle against −1.9 dB under load, and every intermediate value traded one end
+   * for the other. The window is 6 dB wide and any real rebalance opens the
+   * spread to about 6 dB on its own.
+   *
+   * The reason is a property of the *source*, not of this file. The body path
+   * sits 1.1 dB behind the exhaust at governed idle and **12.8 dB** behind it at
+   * full load, so the same trim is a large change to the mix at one end and
+   * almost nothing at the other. A listening-stage gain cannot correct a
+   * source-side scaling, which is the lesson already written down in `README.md`
+   * as *a path driven by the wrong quantity cannot be fixed with gain* — here in
+   * the milder form that a path with the wrong load dependence cannot be fixed
+   * with a constant.
+   *
+   * So what is here is what the cab can honestly contribute: about 2 dB less
+   * content above 2 kHz reaching the driver, and the body path 1.5 dB up against
+   * an unchanged exhaust and a block 3 dB down. Going further is a source
+   * change, and `README.md` records it under **Known deficits**.
    */
   paths: {
     exhaust: {
+      levelDb: 0,
       filters: [
         { type: 'lowpass', frequencyHz: 1600, q: 0.7, gainDb: 0 },
         { type: 'peaking', frequencyHz: 400, q: 0.9, gainDb: -3 },
@@ -230,6 +295,7 @@ export const CABIN_SPEC: CabinSpec = {
       roomSend: 1.0,
     },
     block: {
+      levelDb: -3,
       filters: [
         { type: 'lowpass', frequencyHz: 3200, q: 0.7, gainDb: 0 },
         { type: 'peaking', frequencyHz: 1000, q: 0.9, gainDb: 2 },
@@ -238,6 +304,7 @@ export const CABIN_SPEC: CabinSpec = {
       roomSend: 0.4,
     },
     body: {
+      levelDb: 1.5,
       filters: [
         { type: 'lowpass', frequencyHz: 250, q: 0.7, gainDb: 0 },
         { type: 'peaking', frequencyHz: 120, q: 0.9, gainDb: 1 },
@@ -281,10 +348,16 @@ export const CABIN_SPEC: CabinSpec = {
     ratio: 2,
     attackS: 0.025,
     releaseS: 0.18,
-    // Measured through the output analyser, landing +1.7 dB against raw at idle
-    // and −1.6 dB under load. A measurement rather than a derivation: it depends
+    // Measured through the output analyser, landing +2.5 dB against raw at idle
+    // and −2.6 dB under load. A measurement rather than a derivation: it depends
     // on the source spectrum, so the browser suite measures both ends rather
-    // than trusting the pair.
+    // than trusting the pair, and now prints them.
+    //
+    // It was 1.41, landing +1.7 and −1.6, and it came down to re-centre a spread
+    // the per-path level trims widened from 3.3 dB to 5.1 dB. That widening is
+    // not sloppiness and cannot be tuned out here: a trim on the body path moves
+    // idle much further than load because the body is 43% of the idle mix and 5%
+    // of the loaded one. See the note on the path levels above.
     //
     // That spread was ±0.8 dB before the paths were split, and it widened for a
     // real reason rather than through sloppiness. Each path now has its own
@@ -293,7 +366,7 @@ export const CABIN_SPEC: CabinSpec = {
     // removes different amounts at the two ends. The pair is centred on the
     // spread rather than zeroed at one end, because zeroing idle put load at
     // −3.3 dB: chasing one end is what the input trim was introduced to stop.
-    makeupGain: 1.41,
+    makeupGain: 1.39,
   },
   crossfadeS: 0.04,
 };

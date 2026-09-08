@@ -504,12 +504,50 @@ the same tests, and the native pull-away margin actually improved from a 256 rpm
 dip to 269. The test helper had been loading the engine while it was still on the
 starter. Recorded in `README.md` under **Verification, milestone 12**.
 
+## Sixth Implementation Package
+
+The driver's-seat balance, delivered as milestone 13, and the first thing in this
+plan driven by a listening report rather than by an instrument. Each radiating
+path gets a level of its own in the cab, applied cab-side so the raw stage stays
+the solver's own output; the body goes up 1.5 dB, the block down 3, and about
+2 dB more of the top end is taken out on the way to the driver.
+
+**The request was for more than that, and a measurement refused it.** A +6 dB
+body trim — which is what the report sounds like — put the cab 6 dB louder than
+the raw stage at idle against −1.9 dB under load. Seven measured iterations are
+recorded in `README.md`; every one of them failed at one end or the other, and
+the physically better idea, moving weight out of the shared low shelf into the
+path that actually carries it, failed at the loud end.
+
+What that turned up is the finding, and it is a source deficit rather than a
+listening one:
+
+| Question | Outcome |
+|---|---|
+| Why can a cab trim not do this? | The body path is **43% of the idle mix and 5% of the loaded one**, so a constant trim is a large change at one end and nothing at the other |
+| Why is it 5% under load? | The exhaust source is port mass flow, which grows with fuelling and boost. The body source is torque **normalised by rated torque**, which is bounded above by construction. One has a ceiling and the other does not |
+| Is it the wrong way round? | Yes. Exhaust leads the body by 1.1 dB at idle and 12.8 dB at full load, so the roar recedes as the engine works harder |
+
+This is phase 5's *"tune source-to-ear balance"* running into phase 4's
+territory: the balance cannot be tuned at the ear because the deficit is in how
+one source scales. The candidates — a body forcing not normalised by a fixed
+rated torque, or one driven by torque *fluctuation* rather than torque level —
+are source changes that move band shares, crest factors and the `<80 Hz` figure
+that is already failing its criterion in the same direction. Recorded in
+`README.md` under **Known deficits**, not attempted in the milestone that
+measured it, for the reason this plan gives every time.
+
 The next package is a choice between three, and the plan no longer dictates it:
 
-- **The idle low-band criterion.** Two pieces of evidence against it, none for it,
-  and it is the only thing standing between the measurements and the one listening
-  report received so far. Cheapest, and a criterion decision rather than a model
-  change.
+- **The body path's load scaling**, newly measured in milestone 13 and the one
+  with a listening report pointing straight at it. It is a source change and it
+  collides with the criterion below, which is an argument for taking the two
+  together rather than for avoiding either.
+- **The idle low-band criterion.** Now three pieces of evidence against it and
+  none for it: the measured reference, and two listening reports. Cheapest, and a
+  criterion decision rather than a model change — but the item above will push
+  `<80 Hz` further past it, so deciding this first is what makes that one
+  measurable.
 - **A real listening comparison**, which is phase 7 and has never been done. The
   comparison tooling has existed since milestone 8 and nothing has been heard
   through it at matched loudness. Every figure in this document is a signal

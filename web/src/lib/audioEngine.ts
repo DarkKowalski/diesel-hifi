@@ -191,7 +191,23 @@ export function buildStageGraph(
 
   for (const path of AUDIO_PATHS) {
     const stage = spec.paths[path];
-    let tail: AudioNode = chain(pathGains[path], stage.filters);
+
+    // How loud this path is at the driver, before its transfer colours it.
+    //
+    // Inside the wet chain on purpose: `pathGains` is the solo control and feeds
+    // the dry sum as well, so trimming there would move the raw stage — and the
+    // raw stage is the solver's own output, which is what every figure in the
+    // README is measured from. This says where the listener is sitting; it does
+    // not say what the engine did.
+    let source: AudioNode = pathGains[path];
+    if (stage.levelDb !== 0) {
+      const trim = keep(context.createGain());
+      trim.gain.value = 10 ** (stage.levelDb / 20);
+      source.connect(trim);
+      source = trim;
+    }
+
+    let tail: AudioNode = chain(source, stage.filters);
 
     if (stage.delayS > 0) {
       const delay = keep(context.createDelay(Math.max(stage.delayS, 0.001) * 2));
