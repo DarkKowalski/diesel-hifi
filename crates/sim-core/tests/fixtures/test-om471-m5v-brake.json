@@ -1801,8 +1801,8 @@
     {
       "path": "limits.max_rpm",
       "status": "calibrated",
-      "value_note": "2400 rpm hard numerical guard, above the governed cut-out.",
-      "purpose": "Rejects a diverged solution rather than letting crank speed run away.",
+      "value_note": "2400 rpm modelled speed ceiling, above the governed fuel cutoff.",
+      "purpose": "Pause an accelerating overspeed while preserving finite engine state for recovery after a control change.",
       "safe_range": [
         1200.0,
         3000.0

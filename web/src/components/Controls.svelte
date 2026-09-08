@@ -41,7 +41,7 @@
   <h2 id="controls-heading">Controls</h2>
 
   <div class="buttons">
-    <button data-testid="start" onclick={() => sim.startEngine()} disabled={state === 'running'}>
+    <button data-testid="start" onclick={() => sim.startEngine()} disabled={state === 'running' || sim.speedLimitPaused}>
       Start
     </button>
     <button data-testid="stop" onclick={() => sim.stopEngine()} disabled={state === 'stopped'}>

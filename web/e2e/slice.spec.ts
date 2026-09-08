@@ -726,6 +726,34 @@ test('a gear and a downhill grade drive the engine, and the brake arrests it', a
     .toBeLessThan(runaway);
 });
 
+test('downhill overspeed pauses clearly and resumes after the grade changes', async ({ page }) => {
+  await bootstrap(page);
+  await page.getByTestId('start').click();
+  await awaitIdle(page);
+  await page.getByTestId('pedal').fill('100');
+  await expect.poll(() => rpm(page), { timeout: 20_000 }).toBeGreaterThan(1950);
+  await page.getByTestId('grade').fill('-15');
+  await page.getByTestId('gear').fill('12');
+  await page.getByTestId('pedal').fill('0');
+  await expect(page.getByTestId('speed-limit-banner')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('speed-limit-banner')).toContainText('2400 rpm model limit');
+  await expect(page.getByTestId('error-banner')).toHaveCount(0);
+  await expect(page.getByTestId('run-state')).toHaveText('paused — speed limit');
+  await expect(page.getByTestId('rpm')).toHaveText('2400');
+  await expect(page.getByTestId('start')).toBeDisabled();
+  const pausedSteps = await numeric(page, 'steps');
+  const pausedTime = await numeric(page, 'sim-time');
+  await page.getByTestId('grade').fill('0');
+  expect(await numeric(page, 'steps')).toBe(pausedSteps);
+  await page.getByTestId('resume').click();
+  await expect(page.getByTestId('speed-limit-banner')).toHaveCount(0);
+  await expect.poll(() => rpm(page), { timeout: 15_000 }).toBeLessThan(2380);
+  await expect.poll(() => numeric(page, 'steps')).toBeGreaterThan(pausedSteps);
+  expect(await numeric(page, 'sim-time')).toBeGreaterThan(pausedTime);
+  await expect(page.getByTestId('run-state')).toHaveText('running');
+  await expect(page.getByTestId('error-banner')).toHaveCount(0);
+});
+
 test('the brake reports when it is selected but not permitted to act', async ({ page }) => {
   await bootstrap(page);
   await page.getByTestId('start').click();

@@ -25,6 +25,10 @@ pub enum ErrorCode {
     /// Integration produced a non-finite value; the simulation is latched into a fault.
     #[serde(rename = "NON_FINITE_STATE")]
     NonFiniteState,
+    /// A finite crank speed crossed the modelled speed ceiling while accelerating.
+    /// Changing valid controls permits a recovery attempt; other faults stay latched.
+    #[serde(rename = "SPEED_LIMIT_EXCEEDED")]
+    SpeedLimitExceeded,
     /// Cylinder pressure exceeded the configured validation envelope.
     #[serde(rename = "PRESSURE_ENVELOPE_EXCEEDED")]
     PressureEnvelopeExceeded,
@@ -44,6 +48,7 @@ impl ErrorCode {
             ErrorCode::InvalidConfig => "INVALID_CONFIG",
             ErrorCode::InvalidControl => "INVALID_CONTROL",
             ErrorCode::NonFiniteState => "NON_FINITE_STATE",
+            ErrorCode::SpeedLimitExceeded => "SPEED_LIMIT_EXCEEDED",
             ErrorCode::PressureEnvelopeExceeded => "PRESSURE_ENVELOPE_EXCEEDED",
             ErrorCode::StepLimitExceeded => "STEP_LIMIT_EXCEEDED",
             ErrorCode::NotInitialized => "NOT_INITIALIZED",

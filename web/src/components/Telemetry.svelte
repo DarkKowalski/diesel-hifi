@@ -15,7 +15,7 @@
     <div class="rpm" data-testid="rpm-block">
       <span class="value" data-testid="rpm">{rpm(snapshot.rpm)}</span>
       <span class="unit">rpm</span>
-      <span class="state" data-testid="run-state">{snapshot.state}</span>
+      <span class="state" data-testid="run-state">{sim.speedLimitPaused ? 'paused — speed limit' : snapshot.state}</span>
     </div>
 
     <dl class="grid">

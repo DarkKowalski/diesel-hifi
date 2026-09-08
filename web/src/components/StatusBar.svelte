@@ -19,7 +19,13 @@
   {/if}
 </div>
 
-{#if hasError}
+{#if sim.speedLimitPaused}
+  <div class="error speed-limit" role="status" data-testid="speed-limit-banner">
+    <strong>Engine overspeed</strong>
+    <span>{sim.errorMessage || sim.snapshot?.fault?.message}</span>
+    <button data-testid="resume" onclick={() => sim.resumeSimulation()}>Resume simulation</button>
+  </div>
+{:else if hasError}
   <div class="error" role="alert" data-testid="error-banner">
     <strong data-testid="error-code">{sim.errorCode}</strong>
     <span data-testid="error-message">{sim.errorMessage}</span>
@@ -71,5 +77,9 @@
   }
   .error button {
     margin-left: auto;
+  }
+  .speed-limit {
+    border-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
   }
 </style>

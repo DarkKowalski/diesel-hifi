@@ -24,7 +24,8 @@ pub enum RunState {
 }
 
 /// A latched fault carried in the snapshot so the UI can show it without
-/// needing the error to be thrown.
+/// needing the error to be thrown. A speed-limit pause is recoverable through
+/// changed controls; numerical and pressure faults require a reset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimFault {
     pub code: ErrorCode,

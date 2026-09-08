@@ -35,6 +35,7 @@ class SimStore {
   errorMessage = $state<string>('');
   errorCode = $state<string>('');
   running = $state(false);
+  speedLimitPaused = $state(false);
 
   // Dynamometer sweep.
   sweepPoints = $state<OperatingPoint[]>([]);
@@ -110,6 +111,7 @@ class SimStore {
     if (error instanceof SimClientError) {
       this.errorCode = error.code;
       this.errorMessage = error.message;
+      if (error.code === 'SPEED_LIMIT_EXCEEDED') this.speedLimitPaused = true;
     } else {
       this.errorCode = 'UI_ERROR';
       this.errorMessage = error instanceof Error ? error.message : String(error);
@@ -177,6 +179,7 @@ class SimStore {
       this.sweepPeaks = null;
       this.controls = { ...DEFAULT_CONTROLS };
       this.running = false;
+      this.speedLimitPaused = false;
       this.clearError();
     });
   }
@@ -213,6 +216,21 @@ class SimStore {
   /** Cut fuelling. The engine coasts down under friction. */
   async stopEngine(): Promise<void> {
     await this.setControls({ ignition: false, starter: false, pedal: 0 });
+  }
+
+  /** Continue the preserved engine state after changing overspeed conditions. */
+  async resumeSimulation(): Promise<void> {
+    if (!this.speedLimitPaused) return;
+    await this.#withClient(async (client) => {
+      await client.setControls({ ...this.controls });
+      // Discard samples left by the interrupted batch before restarting playback.
+      await client.setAudio(this.audioRunning);
+      this.#audio?.flush();
+      await client.run(true);
+      this.running = true;
+      this.speedLimitPaused = false;
+      this.clearError();
+    });
   }
 
   /**
@@ -370,6 +388,7 @@ class SimStore {
       await client.reset({ ...DEFAULT_RESET });
       this.controls = { ...DEFAULT_CONTROLS };
       this.running = false;
+      this.speedLimitPaused = false;
       // Buffered samples belong to the run that produced them.
       this.#audio?.flush();
       this.clearError();

@@ -91,6 +91,9 @@ generator standing between it and the model.
   terms. The governor requests fuel. Starter crank torque derives from the motor
   circuit and gear ratio.
 - 23 MPa is a validation envelope, not a pressure target.
+- The 2400 rpm model ceiling is separate from the 2100 rpm fuel cutoff. Road
+  torque can accelerate the engine with no fuel. An accelerating ceiling crossing
+  pauses the simulation; it does not add braking torque or simulate engine damage.
 - Fixed-step deterministic integration. Non-finite state and out-of-range
   configuration are rejected.
 - Any randomness is seeded explicitly.
@@ -107,6 +110,21 @@ thousands of them and a snapshot has to stay compact. Errors
 are structured for invalid IDs, inputs and numerical state. Memory ownership is
 explicit and there are no per-step JS/WASM calls. The module runs in a dedicated
 Web Worker and needs neither `SharedArrayBuffer` nor cross-origin isolation.
+
+`SPEED_LIMIT_EXCEEDED` is a recoverable pause, distinct from `NON_FINITE_STATE`.
+The crossing step completes, keeping pressure, angle, time and audio consistent;
+its finite speed overshoot is retained. Repeating unchanged controls keeps the
+pause latched. Changed, validated controls clear only this pause, allowing
+deceleration from the preserved state; renewed acceleration above the ceiling
+pauses again. Reset speeds above the configured ceiling are rejected before
+state changes. Numerical and pressure faults still require a reset.
+
+The browser shows **Engine overspeed** and **Resume simulation**. For the reported
+gear-12 descent, set road grade to 0% and stay in gear, then resume. Neutral can
+pause again as compressed cylinders expand without the truck's reflected inertia.
+Start remains disabled while paused;
+resuming neither engages the starter nor resets the engine. Unplayed samples
+from the interrupted batch are discarded before playback resumes.
 
 The UI provides an engine selector populated through the real catalog API,
 start/stop and reset, pedal and load controls, RPM with pressure/torque/state
@@ -579,6 +597,7 @@ assumptions are specified above and below.
 | Friction | FMEP: 60 kPa constant +0.005 × peak pressure +1200 × piston speed +130 × piston speed², SI units; no oil-temperature or breakaway term |
 | Governors | PI idle control at published 560 rpm; fuel tapers from 1900 to zero at 2100 rpm |
 | Accessories and controls | Accessory torque 25 N·m +0.02 × absolute crank rad/s; external load limited to 5000 N·m; road grade to ±15% |
+| Model speed ceiling | 2400 rpm; recoverable pause, separate from the fuel cutoff; no vehicle service brake or overspeed-damage model |
 | Starter circuit | 0.01263 Ω total, 0.0035 Ω battery/cable resistance; 9.9752e-5 N·m/A² torque constant; 620 A saturation knee; 0.063 N·m/(rad/s) drag; 0.9 mesh efficiency |
 | Starter engagement and contact | 145 ring teeth; 8 ms seating; power starts at 60 ms; 420 rpm release; 0.15 tooth-pitch contact half-width; seating impulse 0.12 |
 | Exhaust duct | 3.5 m, area 0.008 m²; mouth reflection −0.8 and radiation corner 2 kHz; 12 L aftertreatment adds 1.5 m equivalent length; transmission 0.61 per traverse; 14 dB turbine loss above 400 Hz; runners 100–700 mm |
@@ -626,6 +645,9 @@ assumptions are specified above and below.
   clutch or independent vehicle-speed integration: shifts change road speed
   immediately and neutral disengages rather than coasts. Efficiency applies only
   in traction, slightly overstating overrun retardation.
+- Descents that drive the engine past the modelled speed ceiling pause for a
+  control change. There is no service-brake control or engine-damage simulation;
+  a fuel cutoff alone cannot prevent road-driven overspeed.
 
 ## Determinism
 
@@ -633,6 +655,8 @@ Identical configuration, seed, controls and step count produce bit-identical
 snapshots and audio; advancing a batch equals advancing its steps individually.
 Sweeps hold crank speed deterministically. Invalid/non-finite state and pressure
 envelope breaches latch structured faults.
+Speed-limit pauses are deterministic too: one completed crossing step produces
+one audio frame, regardless of the requested batch size.
 
 Live browser sessions derive step count from elapsed wall time and therefore do
 not reproduce identical counts across machines. The worker's `stepOnce` advances
@@ -648,6 +672,9 @@ These requirements remain in force. Known failures and gaps are listed under
 - Published values and provenance round-trip unchanged; calibrated targets are
   visible in metadata and this document. Nominal pressure stays below 23 MPa.
 - Catalog list, active/unknown ID, selection and deterministic reset work.
+- Gear 12 on a −15% descent pauses at the model speed ceiling with a specific
+  overspeed notice. Changing the grade to level road and resuming preserves elapsed
+  simulation time and permits deceleration. Unchanged inputs keep the pause latched.
 - WASM loads and advances through a worker; UI stays responsive and selection is
   populated from the catalog. Complete static output loads at root and subpath
   without external runtime requests.
@@ -742,16 +769,17 @@ The reference probe accepts PCM 16/24/32-bit and float WAV, mono or stereo.
 `--rpm-min` changes the search floor; `--hop` changes spacing between
 analysis windows. Record these options with any reference measurement.
 
-### Verification, 2026-09-08 sound and restart implementation
+### Verification, 2026-09-08
 
 | Command | Result |
 |---|---|
-| `cargo test --release --workspace --quiet` | Exit 0; 342 passed, 0 failed, including 56 acoustic tests |
+| `cargo test --release --workspace --quiet` | Exit 0; 349 passed, 0 failed, including 56 acoustic tests |
+| `cargo test -p sim-core --test overspeed --quiet` | Exit 0; 7 passed, including recovery at 12 different crank phases |
 | `cargo test -p sim-core --test restart --quiet` | Exit 0; all 6 restart regression tests passed |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Exit 0 |
 | `cargo fmt --all -- --check` | Exit 0 |
 | `pnpm check` | Exit 0; 0 errors, 0 warnings |
-| `pnpm test` | Exit 0; 17 WASM, 86 unit and 34 browser tests passed |
+| `pnpm test` | Exit 0; 18 WASM, 86 unit and 36 browser tests passed, including downhill overspeed recovery at root and subpath |
 | `pnpm build` and `pnpm build:subpath` | Both exit 0; each static output verified |
 | `cargo run --release -p sim-core --example sweep` | Exit 0; 376.9 kW, 2545.1 N·m peaks; maximum pressure 20.18 MPa |
 | `cargo run --release -p sim-core --example brake_sweep` | Exit 0; 108.6/274.3 kW stage III at 1300/2300 rpm |

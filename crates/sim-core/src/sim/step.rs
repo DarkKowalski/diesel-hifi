@@ -938,21 +938,27 @@ pub(super) fn step(
     if omega < 0.0 {
         omega = 0.0;
     }
-    if omega > rpm_to_rad_per_s(limits.max_rpm) {
-        return Err(SimError::new(
-            ErrorCode::NonFiniteState,
-            format!(
-                "engine speed {:.0} rpm exceeded the {:.0} rpm hard limit",
-                governor::rad_per_s_to_rpm(omega),
-                limits.max_rpm
-            ),
-        ));
-    }
+    let speed_limit_reached =
+        omega > rpm_to_rad_per_s(limits.max_rpm) && omega >= state.omega_rad_per_s;
 
+    // Finish the crossing step so pressures, angle, time and audio describe the
+    // same instant. Keep its small, finite overshoot rather than applying an
+    // unmodelled braking torque. After a control change, deceleration from that
+    // state is allowed; renewed acceleration pauses again.
     state.omega_rad_per_s = omega;
     state.crank_angle_rad = theta_new;
     state.sim_time_s += dt;
     state.steps_advanced += 1;
+
+    if speed_limit_reached {
+        return Err(SimError::new(
+            ErrorCode::SpeedLimitExceeded,
+            format!(
+                "Simulation paused at the {:.0} rpm model limit. On a descent, set road grade to 0% and stay in gear before resuming.",
+                limits.max_rpm
+            ),
+        ));
+    }
 
     Ok(())
 }

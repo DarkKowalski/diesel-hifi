@@ -601,6 +601,8 @@ pub struct Inertia {
 pub struct Limits {
     /// Validation/safety envelope, not a normal pressure target.
     pub max_combustion_pressure_pa: f64,
+    /// Modelled speed ceiling. An accelerating crossing pauses after its complete
+    /// step; changed controls may resume a deceleration from the finite overshoot.
     pub max_rpm: f64,
     pub max_gas_temperature_k: f64,
 }

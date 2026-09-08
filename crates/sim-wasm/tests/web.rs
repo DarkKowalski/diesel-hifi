@@ -73,6 +73,30 @@ fn braking_point_options(stage: u32, settle: u32, measure: u32) -> JsValue {
 }
 
 #[wasm_bindgen_test]
+fn downhill_speed_limit_preserves_state_and_allows_recovery() {
+    let mut handle = SimHandle::new().unwrap();
+    let reset = serde_wasm_bindgen::to_value(&sim_core::ResetOptions {
+        initial_rpm: 2400.0,
+        ..sim_core::ResetOptions::default()
+    })
+    .unwrap();
+    handle.reset(reset).unwrap();
+    handle.set_controls(braking_controls(0, 12, -15.0)).unwrap();
+    let error = handle.advance(1000).unwrap_err();
+    assert_eq!(
+        get(&error, "code").as_string().unwrap(),
+        "SPEED_LIMIT_EXCEEDED"
+    );
+    let paused = handle.snapshot().unwrap();
+    assert_eq!(number(&paused, "stepsAdvanced"), 1.0);
+    handle.set_controls(braking_controls(0, 12, 0.0)).unwrap();
+    let recovered = handle.advance(4000).unwrap();
+    assert_eq!(number(&recovered, "stepsAdvanced"), 4001.0);
+    assert!(number(&recovered, "rpm") < 2400.0);
+    assert!(number(&recovered, "simTimeS") > number(&paused, "simTimeS"));
+}
+
+#[wasm_bindgen_test]
 fn exposes_stable_api_versions() {
     // The API version moves with new required calls; the snapshot protocol
     // stays at 2 because Milestones 3 and 4 only added members to it.

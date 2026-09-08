@@ -480,6 +480,12 @@ impl Simulation {
     /// state.
     pub fn reset(&mut self, options: ResetOptions) -> Result<()> {
         options.validate()?;
+        if options.initial_rpm > self.config.config().limits.max_rpm {
+            return Err(SimError::invalid_control(format!(
+                "initial_rpm must not exceed the configured {} rpm limit",
+                self.config.config().limits.max_rpm
+            )));
+        }
 
         let cfg = self.config.config();
         let derived = self.config.derived();
@@ -622,6 +628,17 @@ impl Simulation {
                 controls.road_grade_percent
             )));
         }
+        // A speed-limit pause preserves finite engine state. Changed driving
+        // conditions may let it decelerate, but must not clear numerical faults.
+        if controls != self.state.controls
+            && self
+                .state
+                .fault
+                .as_ref()
+                .is_some_and(|fault| fault.code == ErrorCode::SpeedLimitExceeded)
+        {
+            self.state.fault = None;
+        }
         self.state.controls = controls;
         Ok(())
     }
@@ -683,6 +700,8 @@ impl Simulation {
     ///
     /// `advance(n)` is bit-identical to `n` calls of `advance(1)`. Once a fault
     /// is latched, every further call returns that fault and state stops moving.
+    /// A speed-limit pause completes the crossing step; changed valid controls
+    /// clear that pause so the engine can decelerate without a reset.
     pub fn advance(&mut self, steps: u32) -> Result<()> {
         if let Some(fault) = &self.state.fault {
             return Err(fault.clone());
