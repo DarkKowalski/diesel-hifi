@@ -238,6 +238,16 @@ export function buildStageGraph(
   arrivals.connect(direct);
   direct.connect(room);
 
+  // What the early reflections bounce off is upholstery, and upholstery does not
+  // return the top end. One damping filter shared by both taps rather than one
+  // each: they are hitting the same kind of surface, and two identical filters
+  // would be two nodes making one statement.
+  const reflectionDamping = keep(context.createBiquadFilter());
+  reflectionDamping.type = 'lowpass';
+  reflectionDamping.frequency.value = spec.reflectionDampingHz;
+  reflectionDamping.Q.value = 0.7;
+  roomSource.connect(reflectionDamping);
+
   for (const tap of spec.taps) {
     const delay = keep(context.createDelay(Math.max(tap.delayS, 0.001) * 2));
     delay.delayTime.value = tap.delayS;
@@ -245,7 +255,7 @@ export function buildStageGraph(
     level.gain.value = tap.gain;
     const panner = keep(context.createStereoPanner());
     panner.pan.value = tap.pan;
-    roomSource.connect(delay);
+    reflectionDamping.connect(delay);
     delay.connect(level);
     level.connect(panner);
     panner.connect(room);

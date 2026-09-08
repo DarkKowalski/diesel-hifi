@@ -537,12 +537,56 @@ that is already failing its criterion in the same direction. Recorded in
 `README.md` under **Known deficits**, not attempted in the milestone that
 measured it, for the reason this plan gives every time.
 
+## Seventh Implementation Package
+
+The cab's absorption and the bass measurement, delivered as milestone 14. Two
+listener suggestions rather than a report, and both were right.
+
+**The cabin is lined with soft things.** Porous absorbers take around 0.1 of the
+energy at 125 Hz and 0.6 to 0.9 by 2 kHz, so a lined cab's reverberation time
+falls steeply with frequency. The model had one decay constant for every
+frequency — a hard box — and full-bandwidth early reflections. The tail now
+decays four times faster above 900 Hz, the reflections are damped at 1.8 kHz, and
+level-matching survived it. Two side findings came out of the calibration: the
+tail was **11% quieter at 96 kHz than at 44.1 kHz** once the decay was
+frequency-dependent, because white noise runs to Nyquist; and renormalising a
+damped tail to unit energy makes the cab *louder* the more treble it absorbs,
+which is a tone control rather than a furnishing.
+
+**The bass has no harmonic series**, which is the larger finding and it is
+recorded rather than fixed:
+
+| Question | Outcome |
+|---|---|
+| Is the bass short of harmonics? | **Yes, decisively.** The torque forcing is 87-89% fundamental at every operating point, crest factor 4.0-4.9 dB against a sine's 3.0 |
+| Is it the modal bank filtering them out? | **No.** The drive is a sine before it reaches the bank. Measured by dumping the forcings to WAV and running the reference probe on them |
+| Is it a property of the measurement? | **No.** The exhaust drive over the same captures is 20-49% fundamental with crest to 11.5 dB — a real pulse train |
+| Is there anywhere for harmonics to go? | **No.** The body bank ends at 220 Hz and the block bank's weights there are 0.25 and 0.4, so the structure-borne response has a trough over 220-750 Hz — exactly where the third to eighth firing orders sit |
+
+This is the deficit behind milestone 13's balance request and it explains why
+granting that request made the sound boomy rather than fuller: turning up a path
+that carries one order gives more of that order. A fix needs both halves — a
+drive with harmonics and a path that passes them — and it lands on the `<80 Hz`
+criterion already failing plus the block bank's ascending weights that
+`README.md` records as compensating for a different shortfall. Three coupled
+calibrations, first measured this milestone. Recorded under **Known deficits**.
+
+Worth noting for the plan's own method: the two most productive listening inputs
+so far were not verdicts on the output but **hypotheses about the model**. "Too
+much treble" agreed with two instruments and taught nothing. "The bass has no
+harmonics" named a mechanism, took an afternoon to check, and found a defect
+fourteen milestones of measurement had missed. Phase 7 should ask listeners for
+mechanisms, not only for preferences.
+
 The next package is a choice between three, and the plan no longer dictates it:
 
-- **The body path's load scaling**, newly measured in milestone 13 and the one
-  with a listening report pointing straight at it. It is a source change and it
-  collides with the criterion below, which is an argument for taking the two
-  together rather than for avoiding either.
+- **The bass harmonic series**, measured in milestone 14 and now the clear
+  favourite. It subsumes the body path's load scaling below — a path carrying one
+  order has a level problem *and* a scaling problem, and both are symptoms of the
+  drive being a sine. Two parts: give the torque drive harmonics, and open the
+  220-750 Hz trough between the two modal banks so they have somewhere to go.
+- **The body path's load scaling**, measured in milestone 13. Probably the same
+  work as the item above rather than separate work.
 - **The idle low-band criterion.** Now three pieces of evidence against it and
   none for it: the measured reference, and two listening reports. Cheapest, and a
   criterion decision rather than a model change — but the item above will push

@@ -49,8 +49,46 @@ export interface ReflectionTap {
 export interface ImpulseSpec {
   /** Total length of the response. */
   durationS: number;
-  /** Time for the envelope to fall by 60 dB. */
+  /**
+   * Time for the low-frequency envelope to fall by 60 dB.
+   *
+   * Low frequency specifically, because this cab does not decay at one rate.
+   * See [`decayHighS`].
+   */
   decayS: number;
+  /**
+   * Time for the envelope **above [`dampingHz`]** to fall by 60 dB.
+   *
+   * **A truck cab is a small box lined with soft things.** Seats, headliner,
+   * carpet, door trim and a bunk are porous absorbers, and porous absorbers are
+   * a function of frequency: absorption coefficients for upholstery and carpet
+   * run around 0.1 at 125 Hz and 0.6 to 0.9 by 2 kHz. Reverberation time falls
+   * roughly as absorption rises, so the top end of a cab dies several times
+   * faster than the bottom — which is the single most characteristic thing
+   * about how a lined cabin sounds, and why sitting in one is muffled rather
+   * than merely quieter.
+   *
+   * This was one decay constant for every frequency until milestone 14, which
+   * is a hard box with equally reflective walls: a tiled bathroom, not a truck.
+   * The tail it generated had a flat spectrum, so the cab was returning treble
+   * it should have swallowed.
+   */
+  decayHighS: number;
+  /** Corner between the two decay rates. */
+  dampingHz: number;
+  /**
+   * Corner of the one-pole roll-off applied to the noise before anything else.
+   *
+   * A diffuse tail in a box lined with foam has very little energy at 10 kHz,
+   * so this is physically reasonable on its own — but the reason it is
+   * *required* is arithmetic. White noise spans to Nyquist, so the share of its
+   * energy sitting above [`dampingHz`] depends on the device rate: at 96 kHz
+   * more of the tail lands in the fast-decaying band than at 44.1 kHz, and the
+   * tail comes out 11% quieter for no reason a listener would accept. Giving the
+   * noise a corner of its own fixes its shape in hertz, so the split between the
+   * two decay rates stops depending on the machine.
+   */
+  bandwidthHz: number;
   /** Gap before the diffuse tail begins; the discrete taps cover this window. */
   predelayS: number;
   /** Explicit seeds — one per channel, so the tail decorrelates into stereo. */
@@ -145,6 +183,18 @@ export interface CabinSpec {
   /** Level of the unreflected signal within the wet path. */
   directGain: number;
   taps: ReflectionTap[];
+  /**
+   * Corner of the one-pole low pass on the early reflections.
+   *
+   * The same reason as [`ImpulseSpec.decayHighS`], applied a stage earlier. The
+   * first thing an exhaust pulse hits on its way round the cab is a seat back, a
+   * headliner or a bunk curtain, and what comes off those is not a full-bandwidth
+   * copy of what arrived. The taps were exactly that — delayed, attenuated and
+   * panned, but spectrally identical to the direct sound — which made the cab
+   * *brighter* than the dry signal in the first 12 ms, since two extra copies of
+   * the top end arrived on top of it.
+   */
+  reflectionDampingHz: number;
   /** Level of the convolved diffuse tail within the wet path. */
   reverbGain: number;
   impulse: ImpulseSpec;
@@ -324,10 +374,20 @@ export const CABIN_SPEC: CabinSpec = {
     { delayS: 0.0073, gain: 0.28, pan: -0.6 },
     { delayS: 0.0119, gain: 0.22, pan: 0.55 },
   ],
-  reverbGain: 0.3,
+  reflectionDampingHz: 1800,
+  // 0.3 until milestone 14. A cab that absorbs its top end returns less energy
+  // as well as a darker spectrum, and the tail's own normalisation deliberately
+  // states only the spectrum — see `impulseChannel`. This is the other half.
+  reverbGain: 0.2,
   impulse: {
     durationS: 0.18,
     decayS: 0.13,
+    // A quarter of the low-frequency decay. Upholstery, carpet and a headliner
+    // absorb several times more at 2 kHz than at 125 Hz, so the treble in a cab
+    // is gone while the boom is still going.
+    decayHighS: 0.035,
+    dampingHz: 900,
+    bandwidthHz: 5000,
     predelayS: 0.006,
     seedLeft: 0x5eed_1a7e,
     seedRight: 0x1d5e_a5e7,
@@ -397,7 +457,19 @@ function xorshift32(seed: number): () => number {
   };
 }
 
-/** One channel of decaying noise, with the leading predelay left silent. */
+/**
+ * One channel of decaying noise, with the leading predelay left silent.
+ *
+ * **Two decay rates, split at `dampingHz`.** The noise is separated into a low
+ * band and a high band by a one-pole filter and its complement, each band is
+ * given its own exponential envelope, and the two are added back. The result is
+ * a tail whose spectrum grows darker as it decays — which is what a lined box
+ * does, and what a single envelope cannot represent however it is tuned.
+ *
+ * The split is complementary by construction: `low + high` reconstructs the
+ * noise exactly, so with equal decay times this reduces to the flat-spectrum
+ * tail it replaces. A test asserts that.
+ */
 function impulseChannel(sampleRate: number, spec: ImpulseSpec, seed: number): Float32Array {
   const length = Math.max(1, Math.round(spec.durationS * sampleRate));
   const predelay = Math.min(length, Math.round(spec.predelayS * sampleRate));
@@ -405,26 +477,50 @@ function impulseChannel(sampleRate: number, spec: ImpulseSpec, seed: number): Fl
   const channel = new Float32Array(length);
 
   // -60 dB over the decay time, which is what a decay time means.
-  const decay = Math.max(spec.decayS, 1 / sampleRate);
-  const perSample = Math.exp(-6.907_755 / (decay * sampleRate));
+  const decayLow = Math.max(spec.decayS, 1 / sampleRate);
+  const decayHigh = Math.max(spec.decayHighS, 1 / sampleRate);
+  const perSampleLow = Math.exp(-6.907_755 / (decayLow * sampleRate));
+  const perSampleHigh = Math.exp(-6.907_755 / (decayHigh * sampleRate));
 
-  let envelope = 1;
+  // One-pole coefficients: one bounding the noise, one splitting the two bands.
+  const onePole = (hz: number) => Math.exp((-2 * Math.PI * Math.max(hz, 1)) / sampleRate);
+  const limit = onePole(spec.bandwidthHz);
+  const pole = onePole(spec.dampingHz);
+
+  // Energy this tail would have carried at one decay rate, accumulated
+  // alongside. Dividing by *that* rather than by the tail actually produced is
+  // what lets absorption absorb: renormalising the damped tail to unit energy
+  // takes the treble out and hands the same energy to the bass, which is a tone
+  // control rather than a soft furnishing — and it showed up immediately as a
+  // cab that got *louder* at idle the more of its top end it swallowed. The
+  // noise is band-limited first so this ratio does not depend on where Nyquist
+  // is. With equal decay rates the two energies are the same number and this
+  // reduces to the flat tail it replaced.
+  let referenceEnergy = 0;
+
+  let limitState = 0;
+  let lowState = 0;
+  let envelopeLow = 1;
+  let envelopeHigh = 1;
   for (let i = predelay; i < length; i += 1) {
-    channel[i] = random() * envelope;
-    envelope *= perSample;
+    limitState = limitState * limit + random() * (1 - limit);
+    const noise = limitState;
+    lowState = lowState * pole + noise * (1 - pole);
+    const high = noise - lowState;
+    channel[i] = lowState * envelopeLow + high * envelopeHigh;
+    const reference = noise * envelopeLow;
+    referenceEnergy += reference * reference;
+    envelopeLow *= perSampleLow;
+    envelopeHigh *= perSampleHigh;
   }
 
   // Normalise to unit energy so the wet level is a property of the room and not
   // of the device sample rate. A 48 kHz device generates half again as many
   // noise samples as a 32 kHz one; without this the same `reverbGain` would be
   // audibly louder on some machines than others.
-  let sumSquares = 0;
-  for (let i = 0; i < length; i += 1) {
-    sumSquares += channel[i]! * channel[i]!;
-  }
-  const rms = Math.sqrt(sumSquares / length);
-  if (rms > 0) {
-    const scale = 1 / (rms * Math.sqrt(length));
+  //
+  if (referenceEnergy > 0) {
+    const scale = 1 / Math.sqrt(referenceEnergy);
     for (let i = 0; i < length; i += 1) {
       channel[i]! *= scale;
     }

@@ -158,6 +158,17 @@ next would have amplified it.
 
 | 13 | **The seat gets a balance, and finds out why it cannot have much of one**: each radiating path gets a level of its own in the cab, applied cab-side so the raw stage stays the solver's own output. Acting on a listening report — body up, the others down — the body goes up 1.5 dB and the block down 3, taking about 2 dB more of the top end out on the way to the driver. The request could not be met in full, and the measurement that stopped it is the result: the body path sits **1.1 dB behind the exhaust at idle and 12.8 dB behind at full load**, so no constant trim describes both ends. No physics or calibration changed. |
 
+| 14 | **The cab stops reflecting treble it should swallow, and the bass is found to have no harmonics**: the generated room tail gets two decay rates instead of one — a quarter as long above 900 Hz, because a cab lined with seats, carpet and a headliner absorbs several times more there than at 125 Hz — and the early reflections get a damping filter, because what bounces off a seat back is not a full-bandwidth copy. Measuring the forcings to explain a listening report then found the larger problem: the **torque drive is 87% fundamental with a crest factor of 4.8 dB**, so the body path can only ever be a tone. Cab change delivered; the bass finding recorded. |
+
+Milestone 14 is two things that arrived together because one was found while
+looking into the other. The cab change is the listener's own suggestion — a
+cabin is full of soft things and soft things absorb treble — and it is
+straightforwardly right: the tail had a single decay constant for every
+frequency, which is a hard box. The bass finding came from asking why raising
+the body path in milestone 13 had made the sound boomy rather than fuller, and
+the answer is under **What the drive contains**: there are no harmonics in the
+bass to raise.
+
 Milestone 13 is a listening-stage change and the first thing in this document
 driven by someone hearing it rather than by an instrument. It is also the first
 time a listening request has been **partly refused by a measurement**: the level
@@ -552,6 +563,67 @@ Pointing a new instrument at a signal whose answer is already known is what foun
 the modulation detector in milestone 8 and the octave error in milestone 10; here
 it is what stopped a clean blind result from being mistaken for evidence.
 
+#### What the drive contains
+
+**What the traces contain** asks whether each forcing is continuous. This asks
+what is *in* it, and the two questions have different answers.
+
+The measurement is the per-path captures and the forcings themselves, both run
+through `reference_probe` — which estimates a firing rate from the signal and
+reports the share of energy in each of the first four orders. Pointing it at a
+capture whose speed is already known is the same trick that caught the octave
+error in milestone 10.
+
+| Energy in orders 1 / 2 / 3 / 4 | `idle` | `cruise-1200` | `full-1400` | `rated-1800` |
+|---|---|---|---|---|
+| **Torque forcing** (drives the body) | 87.8 / 11.0 / 1.1 / 0.1 | 86.8 / 11.4 / 1.4 / 0.3 | 89.3 / 9.7 / 0.8 / 0.1 | 87.2 / 11.2 / 1.3 / 0.2 |
+| **Pressure forcing** (drives the block) | 87.5 / 10.2 / 1.4 / 0.4 | 85.4 / 9.9 / 2.5 / 1.2 | 91.4 / 6.2 / 1.2 / 0.6 | 85.5 / 10.4 / 2.4 / 1.0 |
+| **Mouth flow** (drives the exhaust) | 19.7 / 31.9 / 9.3 / 10.8 | 49.1 / 29.9 / 13.0 / 4.0 | 38.3 / 34.5 / 21.0 / 4.4 | 74.9 / 12.4 / 10.3 / 0.8 |
+| Crest, torque / pressure / mouth | 4.0 / 7.1 / 11.5 dB | 4.9 / 7.1 / 8.8 dB | 4.8 / 6.2 / 8.6 dB | 4.8 / 6.9 / 7.4 dB |
+
+**The torque forcing is a sine wave.** It reads 87 to 89% in its fundamental at
+every operating point, with a crest factor of 4.0 to 4.9 dB against the 3.0 dB a
+pure sine gives. The exhaust drive, by contrast, is a genuine pulse train — 20 to
+49% in the fundamental, energy spread across four orders, crest up to 11.5 dB —
+because it *is* a train of blowdown events.
+
+That propagates straight through. The body path as radiated:
+
+| Body path | `idle` | `cruise-1200` | `full-1400` | `rated-1800` |
+|---|---|---|---|---|
+| Orders 1 / 2 / 3 / 4 | 33.0 / **64.1** / 2.5 / 0.3 | **97.4** / 2.0 / 0.4 / 0.1 | **84.2** / 14.8 / 0.8 / 0.1 | **95.8** / 3.8 / 0.4 / 0.0 |
+| Crest | 7.0 dB | 4.8 dB | 5.7 dB | 5.1 dB |
+
+**So the low end of this engine is a hum and not a growl**, and that is a
+statement about a harmonic series rather than about a level. A diesel's bass is
+the firing frequency *plus* a long series above it; ours is one order carrying
+95% of the path.
+
+Idle gives away the mechanism. There the *second* order dominates at 64.1%,
+because at 550 rpm the second order is 55 Hz and the body modal bank's lowest
+resonance is at 60 Hz. **The bank is selecting whichever order lands nearest its
+bottom mode**, which is what a bank of four resonators spanning less than two
+octaves at Q 4 to 5 does. Its provenance note says it is "placed to straddle the
+firing frequency across the whole speed range", and it does exactly that — a
+design that passes the fundamental is a design that rejects the harmonics.
+
+And there is nowhere for those harmonics to go even if the drive had them:
+
+| Frequency | 60–220 Hz | **220–750 Hz** | 1.4–3.6 kHz |
+|---|---|---|---|
+| Body bank weights | 1.0, 1.0, 0.8, 0.5 | *(bank ends at 220 Hz)* | — |
+| Block bank weights | — | **0.25, 0.4, 0.9** | 3.0, 7.0, 12.0 |
+
+The body bank fades out where the block bank has not yet arrived, so the
+structure-borne response has a trough from roughly 220 Hz to 750 Hz — precisely
+where the third through eighth firing orders sit. The block bank's ascending
+weights are deliberate and documented, but their side effect is that the one
+band a diesel growls in is the quietest thing in the model.
+
+Recorded rather than fixed, under **Known deficits**. It is a source change with
+two independent parts — a drive that has harmonics, and a path that passes them —
+and it lands on the `<80 Hz` criterion that is already failing.
+
 #### Known deficits
 
 Recorded here rather than tuned away, because tuning a number the day it is first
@@ -706,6 +778,45 @@ be half delivered:**
   torque **normalised by rated torque**, which is bounded above by construction —
   it cannot exceed about one however hard the engine is worked. One source has a
   ceiling and the other does not, so their ratio has to move with load.
+
+- **The bass has no harmonic series, so raising it produces a hum.** Measured in
+  milestone 14 and recorded in full under **What the drive contains**: the torque
+  forcing is 87 to 89% fundamental at every operating point with a crest factor
+  of 4.0 to 4.9 dB, which is a sine wave, and the body path it drives reads 84 to
+  97% in a single order. The exhaust drive over the same captures is 20 to 49%
+  fundamental with crest up to 11.5 dB, so this is a property of one source
+  rather than of the measurement.
+
+  **This is the deficit behind the one above, and it is why the milestone 13
+  request could not simply be granted.** Turning up a path that carries one
+  order gives more of that order. What a diesel's low end actually is — the
+  reason it reads as a large engine rather than as a tone at the right pitch — is
+  the *series*: the firing frequency and a long tail of harmonics above it.
+
+  Two independent things are missing and a fix needs both:
+
+  - **A drive with harmonics.** Six cylinders firing every 120° of crank, each
+    contributing a hump of pressure times a geometric factor that lasts most of
+    an expansion stroke, overlap into something very close to a sinusoid. Some of
+    that smoothness is real — a large six does have smooth crank torque — but 11%
+    of energy at the second order and 1% at the third is at the bottom of the
+    plausible range, and a real cab is also excited by each combustion event
+    shaking the block, which the torque *reaction* does not represent at all.
+  - **A path that passes them.** The body modal bank spans 60 to 220 Hz at Q 4
+    to 5, so it selects whichever order lands nearest its bottom mode — visible
+    at idle, where the second order carries 64% because 55 Hz sits next to the
+    60 Hz resonance. Above 220 Hz the body bank has ended and the block bank's
+    weights are 0.25 and 0.4, so the structure-borne response has a trough from
+    220 to 750 Hz. That is exactly the band the third through eighth firing
+    orders occupy.
+
+  Neither is attempted here. Both move band shares, both move the `<80 Hz`
+  figure that is already failing its criterion, and the second one interacts
+  with the block bank's ascending weights that **Modelling simplifications**
+  records as compensating for a different shortfall. Changing three coupled
+  calibrations in the milestone that first measured any of them is how the
+  previous acceptance criteria came to enforce the defect they were meant to
+  catch.
 
   **This was found by trying to fix something else.** A listener asked for the
   body path to come up; the obvious answer is a cab trim; and a trim large enough
@@ -1238,6 +1349,50 @@ driver's ear went from 3.7 to 4.2 against a raw stage sitting at 2.4, and about
 2 dB more of the top end is now taken out on the way in. The rest of that request
 is a **source** change and is recorded under **Known deficits**.
 
+**The cab is lined with soft things, and as of milestone 14 it behaves like it.**
+Porous absorbers — seats, headliner, carpet, door trim, a bunk — take around 0.1
+of the energy out at 125 Hz and 0.6 to 0.9 by 2 kHz, so reverberation time in a
+lined cabin falls steeply with frequency. That is the single most characteristic
+thing about sitting in one, and the model had none of it: the generated tail had
+**one decay constant for every frequency**, which describes a hard box, and the
+early reflections were full-bandwidth delayed copies, which describes bouncing an
+exhaust pulse off glass rather than off a seat back.
+
+Three changes, all of them the same physical statement:
+
+| | Was | Now |
+|---|---|---|
+| Tail decay above 900 Hz | same as below, 0.13 s | **0.035 s**, about a quarter |
+| Early reflections | full bandwidth | one-pole low pass at **1.8 kHz** |
+| Tail bandwidth | to Nyquist | one-pole at **5 kHz** |
+| Tail level | 0.30 | **0.20** |
+
+The last two need their reasons stating, because neither is about absorption.
+
+The tail's bandwidth is there for an arithmetic reason: white noise runs to
+Nyquist, so the share of it sitting above the damping corner depends on the
+device rate, and the tail came out **11% quieter at 96 kHz than at 44.1 kHz** —
+a real defect, caught by the test that has asserted rate-independence since
+milestone 7. Giving the noise a corner in hertz fixes its shape and the split
+stops depending on the machine.
+
+The tail's level fell because absorbing the top end and then renormalising to
+unit energy is a *tone control*, not a soft furnishing: it takes the treble out
+and hands the same energy to the bass. Measured, that made the cab **louder at
+idle the more of its top end it swallowed** — the opposite of the intended
+change. The tail is now normalised against the energy it would have carried
+undamped, so absorption genuinely absorbs, and `reverbGain` carries what is left.
+
+Level-matching held through all of it: the cab sits +2.7 dB over raw at idle and
+−2.5 dB under load, inside the ±3 dB the browser suite asserts.
+
+**What it does not fix is the treble reaching the driver directly**, and that is
+correct rather than a shortfall. Soft furnishings absorb *reflected* sound; the
+direct path's losses are the per-path low passes above, which have been there
+since milestone 7. The reflections and the tail are a minority of the room mix,
+so this is a change of a decibel or so in the output — audibly less brittle,
+not a different engine.
+
 None of this is published. The manual says nothing about how the engine sounds
 and less about how its cab sounds; these are listening choices and the UI says so
 where you switch them.
@@ -1280,6 +1435,26 @@ Acting on it directly — a large boost on the body path in the cab — broke th
 level match between the cockpit and raw stages, and *why* it broke is a finding
 about the model rather than about the request. See **Where you are listening
 from** for what the cab could deliver and **Known deficits** for the rest.
+
+**Milestone 14, two suggestions rather than a report.** The listener asked
+whether the bass was short of a harmonic series, and pointed out that a cabin is
+surrounded by soft things that absorb high frequencies. Both were checked and
+both were right, and they are the most productive entries in this section so far
+because neither was a verdict on the output — they were hypotheses about the
+model, and hypotheses can be measured.
+
+- The soft furnishings are now modelled: see **Where you are listening from**.
+- The bass harmonic series is **absent and now measured**: the torque forcing is
+  87 to 89% fundamental with a crest factor of 4.8 dB. See **What the drive
+  contains**. It is the deficit behind the milestone 13 balance request, and it
+  is why turning the body path up made the sound boomy rather than fuller.
+
+Worth noting what this does to the weight of the earlier reports. A listener
+saying *too much treble, not enough bass* was consistent with two instruments,
+which was reassuring but not informative. A listener saying *the bass has no
+harmonics* named a mechanism, and checking it took one afternoon and found a
+defect nobody had gone looking for in fourteen milestones. The lesson is about
+which questions to ask a listener, not about whether to trust one.
 
 What none of this is: a validation. Phase 7 of the acoustic plan asks for blinded,
 level-matched comparisons across operating conditions with the playback equipment
@@ -1599,7 +1774,7 @@ none of it supplies these numbers.
 | **Combustion noise** | The weights still *ascend* with frequency, which is the opposite of the radiating physics. This was re-examined and kept: descending weights were tried, on the argument that a big engine should ring low, and they starved the top end to under 1% above 2 kHz because the drive genuinely falls that steeply — the premixed Wiebe rise starts with zero slope, so the model's burn onset drives the upper modes far more weakly than a real one would. The weights compensate for a shortfall in the drive rather than claiming an engine radiates more at 3.6 kHz than at 750 Hz. What changed instead is where the bank *starts* and how sharp it is |
 | **Cylinder build scatter** | ±2% exhaust port area, ±1.5% injector delivery, drawn once per cylinder at reset from the reset seed and never per step. Six bit-identical cylinders sum to a pure harmonic comb the ear hears as synthesised. Far too small to move any calibration result, and a test asserts peak power and torque are unchanged by it |
 | **Cycle-to-cycle scatter** | ±2% delivered fuel, drawn once per cylinder *per cycle* at intake valve closing from the same seeded stream. Build scatter makes the cylinders differ from each other; this was the only thing making a cylinder differ from its own last cycle until milestone 12, and is now the smaller of two such things — trapping through a real port carries the residual forward, which does the same job at roughly twice the size. Its effect is honestly modest, it is kept because it is still a working lever, and see **Modelling simplifications** for the measurement |
-| **Cockpit listening stage** | Per path: exhaust at 0 dB, low-passed at 1.6 kHz with −3 dB at 400 Hz, delayed 12 ms, full room send; block at −3 dB, low-passed at 3.2 kHz with +2 dB at 1 kHz, delayed 2 ms, 0.4 room send; body at **+1.5 dB**, low-passed at 250 Hz with +1 dB at 120 Hz, no delay and **no room send at all**. The three path levels say where the driver is sitting and are applied inside the cab chain only, so the raw stage stays exactly the sum the solver emitted. Then shared: 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right); 180 ms seeded impulse response decaying over 130 ms after 6 ms predelay; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.39 out. No shared low pass: one figure could not describe a tailpipe metres away and an engine through the bulkhead at once. Presentation only — downstream of everything, changes no state, bypassable |
+| **Cockpit listening stage** | Per path: exhaust at 0 dB, low-passed at 1.6 kHz with −3 dB at 400 Hz, delayed 12 ms, full room send; block at −3 dB, low-passed at 3.2 kHz with +2 dB at 1 kHz, delayed 2 ms, 0.4 room send; body at **+1.5 dB**, low-passed at 250 Hz with +1 dB at 120 Hz, no delay and **no room send at all**. The three path levels say where the driver is sitting and are applied inside the cab chain only, so the raw stage stays exactly the sum the solver emitted. Then shared: 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right), both through a 1.8 kHz low pass because what they bounce off is upholstery; a 180 ms seeded impulse response after 6 ms of predelay, band-limited at 5 kHz and decaying over **130 ms below 900 Hz and 35 ms above it** — a lined cabin absorbs several times more at 2 kHz than at 125 Hz — at a level of 0.20; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.39 out. No shared low pass: one figure could not describe a tailpipe metres away and an engine through the bulkhead at once. Presentation only — downstream of everything, changes no state, bypassable |
 | **Body and mount response** | Four modes at 60, 95, 150 and 220 Hz at Q 4.0, 4.0, 4.5 and 5.0, weighted 1.0, 1.0, 0.8 and 0.5, driven by gas plus pumping torque normalised by rated torque. Q in the single figures because a trimmed cab panel is heavily damped and a sharp bank here jumps in level as the firing frequency sweeps past each mode. This is a *vehicle* response excited by the engine, not an engine property; the source is an engine manual and publishes nothing about either |
 
 ## Modelling simplifications
@@ -1993,6 +2168,43 @@ checked against a real fix, it turned out to predict one to within half a
 percentage point.
 
 [`analysis::jumps`]: crates/sim-core/src/analysis.rs
+
+### Verification, milestone 14
+
+Run on Windows 11. A listening-stage change plus a measurement. No Rust source,
+configuration or acoustic source was touched, so the native suite and the probes
+are unchanged and were not re-run; the bass measurement used the existing
+`reference_probe` against the existing per-path captures, plus a throwaway
+example to dump the three forcings as WAV, which was deleted rather than kept —
+if that measurement wants repeating it belongs in `trace_probe`.
+
+| Command | Result |
+|---|---|
+| `pnpm check` | 0 errors, 0 warnings |
+| `pnpm test` | 86 unit passed, 34 browser passed at root and subpath, 0 failed |
+
+Three unit tests changed and one is new, and two of the three changes are worth
+reading because they are cases where an assertion was measuring a proxy:
+
+| Test | What it asserted | What it asserts now |
+|---|---|---|
+| `carries the same energy whatever the device rate` | both rates give energy ≈ 1 | the two rates agree with **each other**, and the figure is below one. Absorption legitimately removes energy; equality to one was the old invariant, rate-independence was always the claim |
+| `decorrelates the two channels without changing their energy` | channel energies equal to six decimal places | equal within a quarter. The tail's energy is dominated by its first twenty milliseconds, which at this bandwidth is a few hundred independent samples, so two seeds differ by about a decibel at any setting |
+| `builds every filter chain in the order the specification gives` | six per-path plus four shared biquads | plus the reflection damping filter, which is not a shared stage — it sits on the reflection bus only, so the direct sound and the tail bypass it |
+
+The new one, `gets darker as it decays`, is the change stated as a measurement:
+the tail's high-to-low energy ratio falls by a factor of seven between its first
+and second quarters.
+
+One test was **rewritten because its metric was wrong, not because it failed
+usefully.** A first attempt asserted that equal decay rates reproduce a
+flat-spectrum tail, measured through the same brightness proxy. It failed — the
+first quarter reads 0.26 against 0.31 for the rest, an artefact of a decaying
+envelope inside the window rather than of the code. The property is exactly
+algebraic: the band split is `low` and `noise − low`, which reconstructs the
+noise, so with equal decays the corner between them cannot matter. It is now
+asserted as bit-equality between two very different corners, which is what it
+actually claims.
 
 ### Verification, milestone 13
 

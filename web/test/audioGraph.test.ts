@@ -295,9 +295,20 @@ describe('the post-processing graph', () => {
     const { context } = build();
     const filters = context.created.filter((node): node is FakeBiquad => node.kind === 'biquad');
 
-    // Three per-path chains and then the shared one, in that order.
+    // Three per-path chains, the early-reflection damping, then the shared one.
+    //
+    // The damping filter is not in `CABIN_SPEC.filters` because it is not a
+    // shared stage: it sits on the reflection bus only, so the direct sound and
+    // the diffuse tail do not pass through it. What bounces off a seat back
+    // loses its top end; what arrives straight at the ear does not.
     const expected = [
       ...AUDIO_PATHS.flatMap((path) => CABIN_SPEC.paths[path].filters),
+      {
+        type: 'lowpass' as const,
+        frequencyHz: CABIN_SPEC.reflectionDampingHz,
+        q: 0.7,
+        gainDb: 0,
+      },
       ...CABIN_SPEC.filters,
     ];
     expect(filters).toHaveLength(expected.length);
