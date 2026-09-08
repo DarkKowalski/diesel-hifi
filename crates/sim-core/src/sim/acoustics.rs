@@ -5,7 +5,7 @@
 //! per step, taken from quantities the solver already integrates, *is* the
 //! signal. What you hear is the same cylinder pressure that drives the crank.
 //!
-//! Three paths radiate, and they are summed at the end rather than in series:
+//! Four paths radiate, and they are summed at the end rather than in series:
 //!
 //! ```text
 //! source     = the volume velocity at the tailpipe mouth, from `exhaust.rs`
@@ -14,17 +14,25 @@
 //! structural = sum over modes of  gain_k * resonator_k(p_forcing)  off the iron
 //! t_forcing  = (gas + pumping torque) / rated torque
 //! body       = sum over modes of  gain_k * resonator_k(t_forcing)  off the frame
-//! mix        = g_exh*exhaust + g_str*structural + g_body*body
+//! m_forcing  = tooth contact * (starter torque / stall torque), from `starter.rs`
+//! starter    = sum over modes of  gain_k * resonator_k(m_forcing)  off the housing
+//! mix        = g_exh*exhaust + g_str*structural + g_body*body + g_st*starter
 //! gain       = level follower on |mix| against the knee: drop at once, recover slowly
-//! frame      = [g_exh*exhaust, g_str*structural, g_body*body] * gain
+//! frame      = [g_exh*exhaust, g_str*structural, g_body*body, g_st*starter] * gain
 //! ```
 //!
-//! The three paths leave here **separately**, one interleaved frame per step,
+//! The fourth is the odd one out, and deliberately so: it is not the engine
+//! radiating, it is a separate machine in mesh with the flywheel for a second or
+//! two. `m_forcing` is exactly zero with the pinion retracted, so that path
+//! contributes exactly `0.0` at every fuelled operating point and the mix there
+//! is bit-identical to the three-path model that preceded it.
+//!
+//! The paths leave here **separately**, one interleaved frame per step,
 //! and are summed at the listener rather than here. They do not reach a driver
 //! by the same route — see the note on the frame ring below — so
 //! `web/src/lib/cabin.ts` gives each its own transfer, which it cannot do to a
 //! signal that has already been added up. The saturation is still decided on the
-//! mix and applied as a common gain, so the three still sum to exactly the one
+//! mix and applied as a common gain, so they still sum to exactly the one
 //! sample this used to emit.
 //!
 //! ## Why the ceiling is a follower and not a clipper
@@ -45,7 +53,7 @@
 //! constant of several firing periods, so a steady passage runs at a very nearly
 //! constant gain.
 //!
-//! ## Why three and not two
+//! ## Why three engine paths and not two
 //!
 //! The exhaust and the structure were the first two, and between them they leave
 //! a hole exactly where a heavy truck lives. The exhaust path is a clean comb at
@@ -126,7 +134,7 @@
 //! pipe are between the exhaust pulse and the listener, and nothing at all is
 //! between the block and the listener — and would attenuate precisely the band
 //! it exists to supply. The body path reaches the listener through the mounts
-//! and the seat and does not go out of the tailpipe either. So all three paths
+//! and the seat and does not go out of the tailpipe either. So all four paths
 //! are shaped separately and summed after, before the clipper.
 //!
 //! Until Milestone 5 the exhaust path's shaping was a two-pole lowpass called
@@ -166,19 +174,56 @@
 use crate::config::validate::CYCLE_RAD;
 use crate::config::{AudioCalibration, StructuralMode};
 
-/// Radiating paths carried separately to the listener: exhaust, block, body.
+/// Radiating paths carried separately: exhaust, block, body, starter.
 ///
 /// Fixed rather than configurable. Each path is a distinct physical mechanism
 /// with its own driving quantity and its own route to a listener, so this is a
 /// count of mechanisms the model implements and not a tuning parameter. The
 /// order is the order they are emitted in, and `web/src/lib/cabin.ts` depends on
 /// it.
-pub const PATHS: usize = 3;
+///
+/// The fourth is not a fourth thing the engine does. It is a different machine
+/// bolted to the outside of it, in mesh for a second or two and gone — which is
+/// why it emits *exactly* zero the rest of the time, and why adding it left
+/// every steady operating point bit-identical.
+pub const PATHS: usize = 4;
 
 /// Index of each path within a frame.
 pub const PATH_EXHAUST: usize = 0;
 pub const PATH_BLOCK: usize = 1;
 pub const PATH_BODY: usize = 2;
+pub const PATH_STARTER: usize = 3;
+
+/// What the radiating paths are driven by, one step's worth.
+///
+/// One struct rather than four arguments, and it serves two purposes at once:
+/// it is what [`Acoustics::push`] takes, and it is what
+/// `Simulation::acoustic_forcing` reports. Those used to be separate — loose
+/// arguments here, a mirrored struct in `sim::mod` — and a probe reading a
+/// second description of the drive can only report discontinuities in the
+/// description. Sharing the type makes them the same thing by construction.
+///
+/// It is also what keeps `push` inside a sane argument count now that there are
+/// four paths.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Forcing {
+    /// Volume velocity at the tailpipe mouth: what the exhaust path radiates.
+    pub mouth_volume_velocity: f64,
+    /// Summed cylinder pressure over ambient: what shakes the block.
+    ///
+    /// Differenced here rather than by the caller, because what shakes iron is
+    /// the *rate* of pressure rise.
+    pub pressure_sum: f64,
+    /// Gas plus pumping torque over rated torque: what the engine does to its
+    /// mounts.
+    pub torque_fraction: f64,
+    /// Tooth-mesh force over the starter's stall torque: what the starter rings.
+    ///
+    /// Exactly zero with the pinion retracted, which is most of the time, and
+    /// which is why every steady operating point reads the same as it did before
+    /// there was a starter path at all.
+    pub starter_mesh: f64,
+}
 
 /// Smooth 0 to 1 ramp, continuous at both ends.
 #[inline]
@@ -452,7 +497,7 @@ impl Resonator {
 /// resized, so producing audio allocates nothing in the hot loop.
 ///
 /// **Interleaved, `PATHS` floats to a frame, one frame per solver step.** One
-/// ring rather than three is the point: the three paths are filtered separately
+/// ring rather than one each is the point: the paths are filtered separately
 /// by the listening stage but they are the same instant of the same engine, and
 /// three buffers with three sets of cursors could be drained unevenly and slide
 /// out of alignment. Interleaving makes misalignment unrepresentable.
@@ -484,6 +529,8 @@ pub struct Acoustics {
     resonators: Vec<Resonator>,
     /// Body modal bank, driven by torque rather than by pressure.
     body: Vec<Resonator>,
+    /// Starter modal bank: the nose cone and the flywheel housing.
+    starter: Vec<Resonator>,
 
     /// The limiter's current gain. One, until the mix asks for less.
     limiter_gain: f64,
@@ -500,7 +547,7 @@ pub struct Acoustics {
     /// One entry per frame, and **no cursors of its own**: the frame cursors
     /// always move by `PATHS`, so `write / PATHS` and `read / PATHS` index this
     /// directly. Alignment is therefore structural rather than maintained, which
-    /// is the same argument that puts the three paths in one interleaved ring.
+    /// is the same argument that puts every path in one interleaved ring.
     ///
     /// It exists because the limiter is no longer invertible from its output.
     /// The soft clipper it replaces was a memoryless function of the mix, so
@@ -544,6 +591,11 @@ impl Acoustics {
                 .iter()
                 .map(|m| Resonator::new(m, dt))
                 .collect(),
+            starter: audio
+                .starter_modes
+                .iter()
+                .map(|m| Resonator::new(m, dt))
+                .collect(),
             limiter_gain: 1.0,
             release_coefficient: release_coefficient(audio.limiter_release_s, dt),
             buffer: vec![0.0; capacity * PATHS],
@@ -567,7 +619,12 @@ impl Acoustics {
         // The modes keep their tuning but lose their ringing. A bank still
         // carrying the last burn across a reset would sound it out into a
         // freshly reset engine, which is the click this method exists to avoid.
-        for resonator in self.resonators.iter_mut().chain(self.body.iter_mut()) {
+        for resonator in self
+            .resonators
+            .iter_mut()
+            .chain(self.body.iter_mut())
+            .chain(self.starter.iter_mut())
+        {
             resonator.clear();
         }
         // A reset engine is not being limited. Releasing towards one from
@@ -595,7 +652,7 @@ impl Acoustics {
 
     /// Frames dropped since the last reset because the consumer fell behind.
     ///
-    /// A frame rather than a sample, because the three paths are dropped
+    /// A frame rather than a sample, because the paths are dropped
     /// together or not at all: losing one path of a frame would slide the three
     /// out of alignment for the rest of the run, and the whole reason they share
     /// one ring is that they must stay aligned.
@@ -613,14 +670,13 @@ impl Acoustics {
         reference_spl_db + 20.0 * rms.log10()
     }
 
-    /// Filter one step's worth of all three sources and push the sample.
+    /// Filter one step's worth of all four sources and push the frame.
     ///
-    /// `source` is the tailpipe mouth's volume velocity; `pressure_sum` is the
-    /// summed cylinder pressure normalised by ambient, which drives the
-    /// structural path; `torque_fraction` is the fluctuating crank torque
-    /// normalised by rated torque, which drives the body path.
-    /// `radiation_corner_hz` is the pipe mouth's own radiation corner, passed in
-    /// from the exhaust system rather than configured twice.
+    /// [`Forcing`] carries the four driving quantities, and is the same type the
+    /// simulation reports through `acoustic_forcing` — so the probe cannot be
+    /// looking at a second description of the drive. `radiation_corner_hz` is
+    /// the pipe mouth's own radiation corner, passed in from the exhaust system
+    /// rather than configured twice.
     ///
     /// Everything is shaped here rather than in the caller, so the whole
     /// radiation model stays in one place.
@@ -628,12 +684,16 @@ impl Acoustics {
     pub fn push(
         &mut self,
         audio: &AudioCalibration,
-        source: f64,
-        pressure_sum: f64,
-        torque_fraction: f64,
+        forcing: &Forcing,
         radiation_corner_hz: f64,
         dt: f64,
     ) {
+        let Forcing {
+            mouth_volume_velocity: source,
+            pressure_sum,
+            torque_fraction,
+            starter_mesh,
+        } = *forcing;
         // What an open pipe radiates into the far field is proportional to the
         // *rate of change* of the flow leaving it, not to the flow itself: it is
         // an acoustic monopole, and a monopole radiates `d(volume flow)/dt`.
@@ -677,6 +737,14 @@ impl Acoustics {
             // frame struck by the simulation starting rather than by the engine.
             for resonator in &mut self.body {
                 resonator.seed_input(torque_fraction);
+            }
+            // The starter bank is seeded on the same terms, and for a reset
+            // engine it is seeding with zero — a pinion cannot already be in
+            // mesh at step zero. It is done anyway rather than skipped, because
+            // "the forcing happens to be zero here" is not the invariant; the
+            // invariant is that a bank never sees its first value as an edge.
+            for resonator in &mut self.starter {
+                resonator.seed_input(starter_mesh);
             }
             self.primed_steps = 1;
         }
@@ -736,7 +804,30 @@ impl Acoustics {
             body += resonator.tick(torque_fraction);
         }
 
-        // --- the three paths, kept apart ---
+        // --- starter path ---
+        //
+        // A pinion driving a ring gear. Fed undifferenced for the same reason
+        // the body path is: the forcing is a contact *force*, and the
+        // resonators' own zeros difference it once, which is enough.
+        //
+        // The bank is a small aluminium nose cone and the flywheel housing it
+        // bolts to, so it sits above the block's bank rather than among it. What
+        // drives it is a train of tooth contacts whose rate is the ring gear
+        // passing the pinion and whose amplitude is the torque going through the
+        // mesh — so the whine rises in pitch with cranking speed and dips as
+        // each cylinder comes up on compression, and neither is scheduled.
+        //
+        // With the pinion retracted `starter_mesh` is exactly zero, the bank is
+        // linear and its state is zero, so this path contributes exactly 0.0 to
+        // the mix. That is not a nicety: it is what makes the mix at every
+        // fuelled operating point bit-identical to the three-path model, and a
+        // test asserts it.
+        let mut starter = 0.0;
+        for resonator in &mut self.starter {
+            starter += resonator.tick(starter_mesh);
+        }
+
+        // --- the four paths, kept apart ---
         //
         // The paths leave here separately, because they do not reach a listener
         // by the same route: the exhaust arrives from a stack metres behind and
@@ -744,14 +835,19 @@ impl Acoustics {
         // the body through the mounts and the seat with no air path at all.
         // `web/src/lib/cabin.ts` gives each its own transfer, which it cannot do
         // to a signal that has already been summed.
+        // Balance first, then level. `output_gain` is common to all four, so it
+        // cannot move a band share, a comb share or the ratio between any two
+        // paths — it only decides how much of the range sits under the knee.
+        let output = audio.output_gain;
         let paths = [
-            audio.exhaust_gain * highpassed,
-            audio.structural_gain * structural,
-            audio.body_gain * body,
+            output * audio.exhaust_gain * highpassed,
+            output * audio.structural_gain * structural,
+            output * audio.body_gain * body,
+            output * audio.starter_gain * starter,
         ];
-        let mix = paths[0] + paths[1] + paths[2];
+        let mix = paths[0] + paths[1] + paths[2] + paths[3];
 
-        // Saturation as a *gain*, applied to all three alike.
+        // Saturation as a *gain*, applied to all four alike.
         //
         // It has to be decided on the mix — that is what approaches the ceiling.
         // At full load the summed signal is near the knee while the loudest
@@ -783,7 +879,7 @@ impl Acoustics {
         //   a steady passage the gain settles to very nearly a constant, and a
         //   constant gain preserves crest factor and pulse shape exactly.
         //
-        // The gain is never above one, so the three channels still sum to exactly
+        // The gain is never above one, so the channels still sum to exactly
         // the single sample this emits, and the paths remain a routing detail
         // rather than a change in the sound.
         let knee = audio.soft_clip_knee;
@@ -815,7 +911,7 @@ impl Acoustics {
 
         // Slow decay toward the current level, roughly a 50 ms window at 40 kHz.
         // Measured on the mix, because the level meter reports what is being
-        // played rather than one component of it. `bounded` is the sum the three
+        // played rather than one component of it. `bounded` is the sum the four
         // paths below add up to, so this is the level of what is emitted.
         let level = if bounded.is_finite() { bounded } else { 0.0 };
         self.mean_square += (level * level - self.mean_square) * 0.0005;
@@ -832,7 +928,7 @@ impl Acoustics {
             // reporting it.
             //
             // The clamp is a guarantee rather than an expectation. `factor`
-            // bounds the *sum*, and three signed terms summing inside the knee
+            // bounds the *sum*, and signed terms summing inside the knee
             // does not by itself bound each one — two paths in opposition could
             // in principle each exceed it. Measurement says that never happens
             // at any operating point, and a test says so too, but the boundary
@@ -951,11 +1047,23 @@ mod tests {
             highpass_cutoff_hz: 25.0,
             soft_clip_knee: 0.9,
             limiter_release_s: 0.3,
+            output_gain: 1.0,
             structural_gain: 0.02,
             structural_modes: modes(),
             body_gain: 0.02,
             body_modes: body_modes(),
+            starter_gain: 0.02,
+            starter_modes: starter_modes(),
         }
+    }
+
+    /// Higher and lighter than the block: a nose cone and a flywheel housing.
+    fn starter_modes() -> Vec<StructuralMode> {
+        vec![StructuralMode {
+            frequency_hz: 1_200.0,
+            q: 10.0,
+            gain: 1.0,
+        }]
     }
 
     /// The pipe mouth's radiation corner these tests assume.
@@ -966,9 +1074,19 @@ mod tests {
         Acoustics::new(capacity, &audio(), DT)
     }
 
+    /// One step's drive, in the order the module header lists the paths.
+    fn drive(source: f64, pressure_sum: f64, torque_fraction: f64, starter_mesh: f64) -> Forcing {
+        Forcing {
+            mouth_volume_velocity: source,
+            pressure_sum,
+            torque_fraction,
+            starter_mesh,
+        }
+    }
+
     /// Drain `frames` frames and sum each one down to what a listener hears.
     ///
-    /// The three paths are summed here because that is what the graph does at
+    /// The paths are summed here because that is what the graph does at
     /// the far end, so every assertion below stays a statement about the output
     /// rather than about one component of it.
     fn drain_summed(ac: &mut Acoustics, frames: usize) -> Vec<f32> {
@@ -983,7 +1101,7 @@ mod tests {
     /// A quiet engine: no exhaust source, no cylinder pressure change.
     fn silent(ac: &mut Acoustics, audio: &AudioCalibration, steps: usize) {
         for _ in 0..steps {
-            ac.push(audio, 0.0, 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(audio, &drive(0.0, 6.0, 0.0, 0.0), RADIATION_HZ, DT);
         }
     }
 
@@ -1013,7 +1131,7 @@ mod tests {
         let mut ac = bank(4_000);
         let mut sum = 6.0;
         for _ in 0..4_000 {
-            ac.push(&a, 0.0, sum, 0.0, RADIATION_HZ, DT);
+            ac.push(&a, &drive(0.0, sum, 0.0, 0.0), RADIATION_HZ, DT);
             sum += 1.35e-5;
         }
         let out = drain_summed(&mut ac, 4_000);
@@ -1038,7 +1156,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(4_000);
         for _ in 0..4_000 {
-            ac.push(&a, 0.0, 6.0, 0.35, RADIATION_HZ, DT);
+            ac.push(&a, &drive(0.0, 6.0, 0.35, 0.0), RADIATION_HZ, DT);
         }
         let mut out = vec![0.0f32; 4_000];
         ac.drain(&mut out);
@@ -1060,7 +1178,7 @@ mod tests {
         for step in 0..40_000 {
             let t = step as f64 * DT;
             let torque = 0.35 + 0.2 * (std::f64::consts::TAU * 60.0 * t).sin();
-            ac.push(&a, 0.0, 6.0, torque, RADIATION_HZ, DT);
+            ac.push(&a, &drive(0.0, 6.0, torque, 0.0), RADIATION_HZ, DT);
         }
         let out = drain_summed(&mut ac, 40_000);
         // Skip the settling transient; measure where the bank has reached steady
@@ -1091,7 +1209,7 @@ mod tests {
             for step in 0..80_000 {
                 let t = step as f64 * DT;
                 let source = (std::f64::consts::TAU * hz * t).sin();
-                ac.push(&a, source, 6.0, 0.0, RADIATION_HZ, DT);
+                ac.push(&a, &drive(source, 6.0, 0.0, 0.0), RADIATION_HZ, DT);
             }
             let out = drain_summed(&mut ac, 80_000);
             f64::from(out[40_000..].iter().fold(0.0f32, |m, s| m.max(s.abs())))
@@ -1130,7 +1248,12 @@ mod tests {
         let source = crate::analysis::pulse_train(LEN, 1.0 / DT, 65.0, 0.05);
         let mut ac = bank(LEN);
         for sample in &source {
-            ac.push(&a, f64::from(*sample), 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(
+                &a,
+                &drive(f64::from(*sample), 6.0, 0.0, 0.0),
+                RADIATION_HZ,
+                DT,
+            );
         }
         drain_summed(&mut ac, LEN)
     }
@@ -1223,7 +1346,12 @@ mod tests {
             let source = crate::analysis::pulse_train(LEN, 1.0 / DT, 65.0, 0.05);
             let mut ac = bank(LEN);
             for sample in &source {
-                ac.push(&a, f64::from(*sample), 6.0, 0.0, RADIATION_HZ, DT);
+                ac.push(
+                    &a,
+                    &drive(f64::from(*sample), 6.0, 0.0, 0.0),
+                    RADIATION_HZ,
+                    DT,
+                );
             }
             let mut interleaved = vec![0.0f32; LEN * PATHS];
             let mut gains = vec![1.0f32; LEN];
@@ -1281,7 +1409,12 @@ mod tests {
         let source = crate::analysis::pulse_train(LEN, 1.0 / DT, 65.0, 0.05);
         let mut ac = bank(LEN);
         for sample in &source {
-            ac.push(&a, f64::from(*sample), 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(
+                &a,
+                &drive(f64::from(*sample), 6.0, 0.0, 0.0),
+                RADIATION_HZ,
+                DT,
+            );
         }
         let mut interleaved = vec![0.0f32; LEN * PATHS];
         let mut gains = vec![1.0f32; LEN];
@@ -1360,7 +1493,7 @@ mod tests {
         let mut ac = bank(1024);
         for i in 0..1024 {
             let source = if i % 2 == 0 { 1.0e6 } else { -1.0e6 };
-            ac.push(&a, source, 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(&a, &drive(source, 6.0, 0.0, 0.0), RADIATION_HZ, DT);
         }
         let mut out = vec![0.0f32; 1024 * PATHS];
         let n = ac.drain(&mut out);
@@ -1378,7 +1511,7 @@ mod tests {
         let mut ac = bank(200_000);
         // A steady source is a DC offset: it must decay away, not sit there.
         for _ in 0..200_000 {
-            ac.push(&a, 5.0, 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(&a, &drive(5.0, 6.0, 0.0, 0.0), RADIATION_HZ, DT);
         }
         let out = drain_summed(&mut ac, 200_000);
         let last = out[199_999];
@@ -1393,7 +1526,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(64);
         for i in 0..10 {
-            ac.push(&a, f64::from(i), 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(&a, &drive(f64::from(i), 6.0, 0.0, 0.0), RADIATION_HZ, DT);
         }
         assert_eq!(ac.available(), 10, "ten pushes are ten frames");
 
@@ -1409,12 +1542,12 @@ mod tests {
 
     #[test]
     fn a_buffer_too_small_for_one_frame_takes_nothing() {
-        // A partial frame would slide the three paths out of alignment for the
+        // A partial frame would slide the paths out of alignment for the
         // rest of the run, so the drain refuses rather than writing what fits.
         let a = audio();
         let mut ac = bank(64);
         for i in 0..10 {
-            ac.push(&a, f64::from(i), 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(&a, &drive(f64::from(i), 6.0, 0.0, 0.0), RADIATION_HZ, DT);
         }
         let mut stunted = vec![0.0f32; PATHS - 1];
         assert_eq!(ac.drain(&mut stunted), 0);
@@ -1426,7 +1559,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(8);
         for i in 0..20 {
-            ac.push(&a, f64::from(i), 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(&a, &drive(f64::from(i), 6.0, 0.0, 0.0), RADIATION_HZ, DT);
         }
         assert_eq!(ac.available(), 8, "capacity is the ceiling");
         assert_eq!(ac.dropped(), 12);
@@ -1437,7 +1570,7 @@ mod tests {
         let a = audio();
         let mut ac = bank(32);
         for _ in 0..32 {
-            ac.push(&a, 100.0, 6.0, 0.0, RADIATION_HZ, DT);
+            ac.push(&a, &drive(100.0, 6.0, 0.0, 0.0), RADIATION_HZ, DT);
         }
         ac.reset();
         assert_eq!(ac.available(), 0);

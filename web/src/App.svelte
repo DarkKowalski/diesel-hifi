@@ -14,7 +14,13 @@
     return () => sim.destroy();
   });
 
-  // Disengage the starter as soon as the engine sustains itself.
+  // Let go of the key once the engine sustains itself.
+  //
+  // This used to be the *only* thing that disengaged the starter, which is why
+  // it lived here at all: the model had no relay, so a driver who held the key
+  // kept the pinion in mesh for ever. The relay is in `sim::starter` now and
+  // drops out on its own, so what is left here is only releasing the key —
+  // cosmetic, and no longer load-bearing.
   $effect(() => {
     if (sim.snapshot?.state === 'running') {
       void sim.releaseStarterIfRunning();

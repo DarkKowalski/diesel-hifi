@@ -57,7 +57,7 @@ const CAPACITY = 65536;
  * is built. The worker sends `paths` with every block and `push` checks it, so a
  * mismatch is reported rather than silently de-interleaved wrongly.
  */
-const PATHS = 3;
+const PATHS = 4;
 
 /**
  * Frames to accumulate before playback starts, and after any dry spell.

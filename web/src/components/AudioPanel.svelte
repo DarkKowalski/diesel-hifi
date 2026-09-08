@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { AudioPath } from '../lib/audioEngine';
+  import { AUDIO_PATHS } from '../lib/cabin';
   import {
     CLIP_SLOTS,
     matchShortfallDb,
@@ -10,17 +11,25 @@
   import SpectrumView from './SpectrumView.svelte';
 
   /**
-   * The radiating paths, in the order the solver emits them.
+   * What to call each radiating path.
    *
    * Named for the mechanism rather than for the frequency range, because that is
    * what they are: the exhaust is port flow out of a pipe, the block is cylinder
-   * pressure ringing iron, and the body is crank torque shaking the mounts.
+   * pressure ringing iron, the body is crank torque shaking the mounts, and the
+   * starter is a pinion meshing with the flywheel.
+   *
+   * A `Record` keyed by `AudioPath` rather than a list, so the type checker
+   * refuses a missing label — and then mapped over `AUDIO_PATHS`, so the buttons
+   * come out in the order the solver emits them. This was three literal entries,
+   * and adding a fourth path left it silently rendering three buttons: the browser
+   * test that mutes every path could not find the one it was looking for.
    */
-  const PATH_LABELS: Array<{ path: AudioPath; label: string }> = [
-    { path: 'exhaust', label: 'Exhaust' },
-    { path: 'block', label: 'Block' },
-    { path: 'body', label: 'Body' },
-  ];
+  const PATH_LABELS: Record<AudioPath, string> = {
+    exhaust: 'Exhaust',
+    block: 'Block',
+    body: 'Body',
+    starter: 'Starter',
+  };
 
   const snapshot = $derived(sim.snapshot);
 
@@ -131,35 +140,37 @@
 
     <p class="muted small">
       {#if sim.audioStage === 'raw'}
-        The tailpipe signal as the solver produces it, unfiltered — the three radiating paths simply
-        added back up. This is the path the spectrum view was built to verify.
+        The tailpipe signal as the solver produces it, unfiltered — the radiating paths simply added
+        back up. This is the path the spectrum view was built to verify.
       {:else}
         The same samples heard from the driver's seat, each path by its own route: the exhaust from a
         stack metres behind and below, the block two feet away through the bulkhead, the body through
-        the mounts and the seat. <b>Nothing is added</b> — no road noise, no synthesised rumble, no
-        harmonic generation. It is a filter, and every value in it is a listening choice, not a
-        measurement. The manual publishes nothing about how this cab sounds.
+        the mounts and the seat, the starter low on the block through the bulkhead.
+        <b>Nothing is added</b> — no road noise, no synthesised rumble, no harmonic generation. It is
+        a filter, and every value in it is a listening choice, not a measurement. The manual
+        publishes nothing about how this cab sounds.
       {/if}
     </p>
 
     <div class="stage" role="group" aria-label="Radiating paths" data-testid="audio-paths">
-      {#each PATH_LABELS as { path, label } (path)}
+      {#each AUDIO_PATHS as path (path)}
         <button
           type="button"
           data-testid={`audio-path-${path}`}
           aria-pressed={sim.audioPaths[path]}
           onclick={() => sim.setAudioPath(path, !sim.audioPaths[path])}
         >
-          {label}
+          {PATH_LABELS[path]}
         </button>
       {/each}
     </div>
 
     <p class="muted small">
-      The three sources, separately. Muting one is a listening control: the engine goes on producing
-      all three and nothing about the simulation changes. The balance between them is what decides
+      The sources, separately. Muting one is a listening control: the engine goes on producing all
+      of them and nothing about the simulation changes. The balance between them is what decides
       whether this sounds like a truck, and it is calibrated by measurement — the
-      <code>audio_probe</code> example — rather than by ear.
+      <code>audio_probe</code> example — rather than by ear. <b>Starter</b> is silent except while
+      the engine is being cranked, so soloing it is only informative during a start.
     </p>
 
     <details class="compare" data-testid="audio-compare">

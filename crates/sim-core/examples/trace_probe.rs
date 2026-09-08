@@ -52,9 +52,11 @@ use sim_core::analysis::{
 };
 use sim_core::catalog::OM471_9_M3D_JSON;
 use sim_core::scenario::{self, Scenario, CHUNK_STEPS};
-use sim_core::sim::acoustics::{Acoustics, PATHS, PATH_BLOCK, PATH_BODY, PATH_EXHAUST};
+use sim_core::sim::acoustics::{
+    Acoustics, PATHS, PATH_BLOCK, PATH_BODY, PATH_EXHAUST, PATH_STARTER,
+};
 use sim_core::sim::cylinder::Phase;
-use sim_core::sim::Simulation;
+use sim_core::sim::{AcousticForcing, Simulation};
 use sim_core::{EngineConfig, ValidatedConfig};
 
 /// How far a difference must stand above its neighbours to be called a step.
@@ -76,7 +78,7 @@ const BANDS: [(&str, f64, f64); 4] = [
     (">2kHz", 2_000.0, f64::INFINITY),
 ];
 
-/// The three forcings, recorded per step, with the crank state that produced
+/// The four forcings, recorded per step, with the crank state that produced
 /// them.
 struct Traces {
     rpm: f64,
@@ -86,6 +88,13 @@ struct Traces {
     pressure: Vec<f64>,
     /// Gas plus pumping torque over rated torque.
     torque: Vec<f64>,
+    /// Tooth-mesh force over the starter's stall torque.
+    ///
+    /// All zeros at every steady operating point, because the pinion is out at
+    /// all of them. That is not a defect in the trace: it is the property that
+    /// keeps the steady figures bit-identical, and it is why this one is
+    /// reported from the transients instead.
+    starter_mesh: Vec<f64>,
     /// Cylinder phases after each step, for attributing a step to its cause.
     phases: Vec<[Phase; 6]>,
 }
@@ -117,6 +126,7 @@ fn replay(
         mouth: Vec::new(),
         pressure: Vec::new(),
         torque: Vec::new(),
+        starter_mesh: Vec::new(),
         phases: Vec::new(),
     };
     let mut sink = vec![0.0f32; CHUNK_STEPS as usize * sim.audio_path_count()];
@@ -137,6 +147,7 @@ fn replay(
                     traces.mouth.push(forcing.mouth_volume_velocity);
                     traces.pressure.push(forcing.pressure_sum);
                     traces.torque.push(forcing.torque_fraction);
+                    traces.starter_mesh.push(forcing.starter_mesh);
                     let mut here = [Phase::Closed; 6];
                     for (index, slot) in here.iter_mut().enumerate().take(cylinders) {
                         *slot = sim.cylinder_phase(index).unwrap_or(Phase::Closed);
@@ -165,7 +176,42 @@ fn replay(
     Ok(traces)
 }
 
-/// Run one path from a forcing trace, with the other two gains zeroed.
+/// Whether the starter's mesh drive is continuous, and how loud it gets.
+///
+/// Reported for the transients because those are the only scenarios where the
+/// pinion is ever in mesh. Two things can go wrong and both would be steps: the
+/// pinion could arrive already loaded, or the relay could drop out with torque
+/// still going through the mesh. Either is an edge in a radiated quantity, which
+/// is the defect this probe was built for.
+///
+/// No firing-rate metric here, deliberately. A transient sweeps its own firing
+/// rate and a comb share against the mean of a sweep measures a frequency the
+/// engine held for a fraction of the capture.
+fn report_starter_continuity(id: &str, mesh: &[f64]) {
+    let peak = mesh.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    if peak == 0.0 {
+        return;
+    }
+    let largest_step = mesh
+        .windows(2)
+        .fold(0.0f64, |m, w| m.max((w[1] - w[0]).abs()));
+    let found = jumps(mesh, ISOLATION);
+    let engaged = mesh.iter().filter(|x| **x != 0.0).count();
+    println!(
+        "{id} — starter mesh drive: in mesh for {:>6} of {} samples, peak {peak:>6.3}, \
+         largest single-step move {largest_step:>6.4}, blind steps {}",
+        engaged,
+        mesh.len(),
+        found.len(),
+    );
+    println!(
+        "              first contact and relay drop-out are both ramps, so the drive \
+         enters and leaves at zero"
+    );
+    println!();
+}
+
+/// Run one path from a forcing trace, with the other gains zeroed.
 ///
 /// The paths are driven through the real `Acoustics`, not through a copy of it,
 /// so a counterfactual cannot drift away from the stage it is a counterfactual
@@ -188,23 +234,26 @@ fn path_from(config: &ValidatedConfig, path: usize, trace: &[f64]) -> Vec<f32> {
     } else {
         0.0
     };
+    audio.starter_gain = if path == PATH_STARTER {
+        audio.starter_gain
+    } else {
+        0.0
+    };
 
     let dt = cfg.solver.fixed_step_s;
     let mut acoustics = Acoustics::new(trace.len().max(1), &audio, dt);
     for sample in trace {
-        let (mouth, pressure, torque) = match path {
-            PATH_EXHAUST => (*sample, 0.0, 0.0),
-            PATH_BLOCK => (0.0, *sample, 0.0),
-            _ => (0.0, 0.0, *sample),
-        };
-        acoustics.push(
-            &audio,
-            mouth,
-            pressure,
-            torque,
-            cfg.exhaust_system.radiation_cutoff_hz,
-            dt,
-        );
+        // The trace drives exactly one path and the others are given nothing,
+        // which is what makes the counterfactual below a statement about that
+        // path rather than about the mix.
+        let mut forcing = AcousticForcing::default();
+        match path {
+            PATH_EXHAUST => forcing.mouth_volume_velocity = *sample,
+            PATH_BLOCK => forcing.pressure_sum = *sample,
+            PATH_BODY => forcing.torque_fraction = *sample,
+            _ => forcing.starter_mesh = *sample,
+        }
+        acoustics.push(&audio, &forcing, cfg.exhaust_system.radiation_cutoff_hz, dt);
     }
     let mut out = vec![0.0f32; trace.len() * PATHS];
     let written = acoustics.drain(&mut out);
@@ -372,6 +421,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // A transient trace sweeps its own firing rate, so the band shares
             // and order shares below would be averages over every speed it
             // passed through. `audio_capture` keeps those for listening.
+            //
+            // One thing is still worth asking here, and only here: the starter
+            // is a transient by construction — it is in mesh for a second and
+            // gone — so a steady scenario has nothing to say about it. The
+            // question is the same one this whole probe asks, whether the trace
+            // was integrated or assigned, and it is asked without any
+            // firing-rate metric attached.
+            let traces = replay(&config, &scenario)?;
+            report_starter_continuity(scenario.id, &traces.starter_mesh);
             continue;
         }
         let traces = replay(&config, &scenario)?;

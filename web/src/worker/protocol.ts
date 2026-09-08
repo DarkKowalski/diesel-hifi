@@ -98,6 +98,20 @@ export interface Snapshot {
   torqueNetNm: number;
 
   /**
+   * The starter as a machine rather than as a torque.
+   *
+   * A starter datasheet publishes a voltage and a power and nothing else, so
+   * current and terminal volts are the two quantities that make the model
+   * checkable against the real thing. They are also what makes the labouring
+   * legible: as a cylinder comes up on compression the crank slows, back-EMF
+   * falls, current climbs and the terminals sag further.
+   */
+  starterCurrentA: number;
+  starterTerminalVoltageV: number;
+  /** How far the pinion is into mesh, zero to one. */
+  starterEngagement: number;
+
+  /**
    * Whole-cycle averages. Instantaneous torque swings by more than a thousand
    * newton-metres inside a cycle, so these are the values worth reading for
    * anything quantitative. Only meaningful once `cycleValid` is set.

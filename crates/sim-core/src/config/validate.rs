@@ -737,6 +737,14 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
     };
     check_modes(&au.structural_modes, "structural_modes")?;
     check_modes(&au.body_modes, "body_modes")?;
+    check_modes(&au.starter_modes, "starter_modes")?;
+    require(
+        au.starter_gain.is_finite() && au.starter_gain >= 0.0,
+        "audio.starter_gain must be finite and not negative",
+    )?;
+    // Positive rather than merely non-negative: a zero here is a silent engine,
+    // which no configuration wants and which a mute control expresses better.
+    finite_positive(au.output_gain, "audio.output_gain")?;
 
     let gov = &config.governor;
     finite_positive(gov.idle_target_rpm, "governor.idle_target_rpm")?;
@@ -763,8 +771,63 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         "accessory torque terms must not be negative",
     )?;
     finite_positive(l.max_external_load_nm, "load.max_external_load_nm")?;
-    finite_positive(l.starter_torque_nm, "load.starter_torque_nm")?;
-    finite_positive(l.starter_cutout_rpm, "load.starter_cutout_rpm")?;
+
+    let st = &config.starter;
+    finite_positive(st.system_voltage_v, "starter.system_voltage_v")?;
+    finite_positive(st.rated_power_w, "starter.rated_power_w")?;
+    require(
+        st.pinion_teeth >= 1,
+        "starter.pinion_teeth must be at least 1",
+    )?;
+    require(
+        st.ring_gear_teeth > st.pinion_teeth,
+        "starter.ring_gear_teeth must exceed starter.pinion_teeth: a starter \
+         reduces towards the crank, it does not overdrive it",
+    )?;
+    finite_positive(st.circuit_resistance_ohm, "starter.circuit_resistance_ohm")?;
+    finite_positive(
+        st.torque_constant_nm_per_a2,
+        "starter.torque_constant_nm_per_a2",
+    )?;
+    finite_positive(st.field_saturation_a, "starter.field_saturation_a")?;
+    // Zero is rejected rather than tolerated. A series machine with no internal
+    // drag has no finite no-load speed at all, so the cranking speed would be
+    // set by whatever the engine happens to resist and the machine would run
+    // away the moment the pinion left the ring gear.
+    finite_positive(
+        st.internal_drag_nm_per_rad_s,
+        "starter.internal_drag_nm_per_rad_s",
+    )?;
+    require(
+        st.mesh_efficiency > 0.0 && st.mesh_efficiency <= 1.0,
+        "starter.mesh_efficiency must fall in (0, 1]",
+    )?;
+    finite_positive(st.mesh_contact_time_s, "starter.mesh_contact_time_s")?;
+    require(
+        st.pre_engage_time_s.is_finite() && st.pre_engage_time_s >= 0.0,
+        "starter.pre_engage_time_s must be finite and not negative",
+    )?;
+    require(
+        st.pre_engage_time_s >= st.mesh_contact_time_s,
+        "starter.pre_engage_time_s must be at least starter.mesh_contact_time_s: \
+         the main current is released after the pinion has seated, not before, \
+         which is what stops a starter chewing its ring gear",
+    )?;
+    finite_positive(st.disengage_rpm, "starter.disengage_rpm")?;
+    require(
+        st.disengage_rpm < gov.idle_target_rpm,
+        "starter.disengage_rpm must fall below governor.idle_target_rpm: a relay \
+         that holds the pinion in past idle is driving the starter from the engine",
+    )?;
+    require(
+        st.mesh_contact_fraction > 0.0 && st.mesh_contact_fraction <= 0.5,
+        "starter.mesh_contact_fraction must fall in (0, 0.5]: a contact ramp \
+         wider than half a tooth pitch never reaches full contact",
+    )?;
+    require(
+        st.seating_impulse.is_finite() && st.seating_impulse >= 0.0,
+        "starter.seating_impulse must be finite and not negative",
+    )?;
 
     finite_positive(
         config.inertia.rotating_inertia_kg_m2,

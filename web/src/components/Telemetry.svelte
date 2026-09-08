@@ -1,6 +1,6 @@
 <script lang="ts">
   import { sim } from '../lib/state.svelte';
-  import { bar, degrees, kelvin, mg, mpa, nm, rpm, seconds } from '../lib/format';
+  import { amps, bar, degrees, kelvin, mg, mpa, nm, percent, rpm, seconds, volts } from '../lib/format';
 
   const snapshot = $derived(sim.snapshot);
   const controls = $derived(sim.controls);
@@ -29,7 +29,10 @@
       <div><dt>Pumping torque</dt><dd>{nm(snapshot.torquePumpingNm)} N m</dd></div>
       <div><dt>Friction torque</dt><dd>{nm(snapshot.torqueFrictionNm)} N m</dd></div>
       <div><dt>Accessory torque</dt><dd>{nm(snapshot.torqueAccessoryNm)} N m</dd></div>
-      <div><dt>Starter torque</dt><dd>{nm(snapshot.torqueStarterNm)} N m</dd></div>
+      <div><dt>Starter torque</dt><dd data-testid="torque-starter">{nm(snapshot.torqueStarterNm)} N m</dd></div>
+      <div><dt>Starter current</dt><dd data-testid="starter-current">{amps(snapshot.starterCurrentA)} A</dd></div>
+      <div><dt>Starter terminal</dt><dd data-testid="starter-volts">{volts(snapshot.starterTerminalVoltageV)} V</dd></div>
+      <div><dt>Pinion engagement</dt><dd data-testid="starter-engagement">{percent(snapshot.starterEngagement)}%</dd></div>
       <div><dt>Load torque</dt><dd>{nm(snapshot.torqueLoadNm)} N m</dd></div>
       <div><dt>Net torque</dt><dd data-testid="torque-net">{nm(snapshot.torqueNetNm)} N m</dd></div>
       <div><dt>Fuel per cycle</dt><dd data-testid="fuel">{mg(snapshot.fuelPerCycleMg)} mg</dd></div>

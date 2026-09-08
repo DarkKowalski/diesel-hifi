@@ -26,8 +26,15 @@ import workletSource from '../src/audio/exhaust-processor.js?raw';
  * reason there is a resampler to audit.
  */
 
-/** Paths per frame, as the worklet fixes them: exhaust, block, body. */
-const PATHS = 3;
+/**
+ * Paths per frame, as the worklet fixes them: exhaust, block, body, starter.
+ *
+ * Must match `PATHS` in `src/audio/exhaust-processor.js`. The worklet checks the
+ * `paths` field of every block it is sent against its own constant, so a
+ * mismatch between the solver and the graph is reported rather than silently
+ * de-interleaved into nonsense.
+ */
+const PATHS = 4;
 /** The solver's rate. */
 const SOURCE_RATE = 40_000;
 /** The worklet's cushion, in frames. Must match `PRIME_SAMPLES`. */
@@ -121,23 +128,29 @@ function load(deviceRateHz: number) {
   return { processor, push, send, render, statuses };
 }
 
-/** Interleave three generators into frames the worklet accepts. */
-function frames(count: number, make: (index: number) => [number, number, number]): Float32Array {
+/** Interleave one generator per path into frames the worklet accepts. */
+function frames(count: number, make: (index: number) => number[]): Float32Array {
   const out = new Float32Array(count * PATHS);
   for (let i = 0; i < count; i += 1) {
-    const [a, b, c] = make(i);
-    out[i * PATHS] = a;
-    out[i * PATHS + 1] = b;
-    out[i * PATHS + 2] = c;
+    const values = make(i);
+    for (let p = 0; p < PATHS; p += 1) {
+      out[i * PATHS + p] = values[p]!;
+    }
   }
   return out;
 }
 
-/** A tone on path 0, and the same tone doubled and tripled on paths 1 and 2. */
+/**
+ * A tone on path 0, and the same tone scaled by the path index on the rest.
+ *
+ * The scaling is what makes the alignment test below possible: interpolation is
+ * linear, so an input that is exactly doubled has to come out exactly doubled
+ * provided every path is read at the same fractional position.
+ */
 function scaledTone(count: number, hz: number): Float32Array {
   return frames(count, (i) => {
     const v = Math.sin((2 * Math.PI * hz * i) / SOURCE_RATE);
-    return [v, 2 * v, 3 * v];
+    return Array.from({ length: PATHS }, (_, p) => (p + 1) * v);
   });
 }
 
@@ -147,7 +160,7 @@ function toneFeeder(hz: number): (count: number) => Float32Array {
   return (count) => {
     const block = frames(count, (i) => {
       const v = Math.sin((2 * Math.PI * hz * (start + i)) / SOURCE_RATE);
-      return [v, 2 * v, 3 * v];
+      return Array.from({ length: PATHS }, (_, p) => (p + 1) * v);
     });
     start += count;
     return block;
@@ -294,18 +307,24 @@ describe.each([48_000, 44_100])('the worklet at %i Hz', (deviceRateHz) => {
     expect(Math.abs(measured - 300) / 300).toBeLessThan(0.01);
   });
 
-  it('keeps the three paths sample-aligned through the resampler', () => {
+  it('keeps every path sample-aligned through the resampler', () => {
     // The property the interleaved ring exists to guarantee. Linear
     // interpolation is linear, so if every path is read at the same fractional
     // position, an input that is exactly doubled comes out exactly doubled. Any
     // drift between the paths — a per-path cursor, a partial frame, a dropped
     // sample on one channel — breaks that exactly.
+    //
+    // Written over every path rather than over a named three, so a fifth
+    // mechanism cannot arrive without being covered by this.
     const { channels } = steady(deviceRateHz, 700, 60);
-    const [first, second, third] = channels;
+    expect(channels).toHaveLength(PATHS);
+    const first = channels[0]!;
 
-    for (let i = 0; i < first!.length; i += 1) {
-      expect(Math.abs(second![i]! - 2 * first![i]!)).toBeLessThan(1e-6);
-      expect(Math.abs(third![i]! - 3 * first![i]!)).toBeLessThan(1e-6);
+    for (let p = 1; p < PATHS; p += 1) {
+      const path = channels[p]!;
+      for (let i = 0; i < first.length; i += 1) {
+        expect(Math.abs(path[i]! - (p + 1) * first[i]!)).toBeLessThan(1e-6);
+      }
     }
   });
 

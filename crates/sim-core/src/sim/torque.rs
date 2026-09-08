@@ -42,16 +42,6 @@ pub fn accessory_torque_nm(load: &Load, omega_rad_per_s: f64) -> f64 {
     load.accessory_torque_constant_nm + load.accessory_torque_per_rad_s * omega_rad_per_s.abs()
 }
 
-/// Starter torque, tapering linearly to zero at the cut-out speed.
-#[inline]
-pub fn starter_torque_nm(load: &Load, engaged: bool, rpm: f64) -> f64 {
-    if !engaged {
-        return 0.0;
-    }
-    let factor = (1.0 - rpm / load.starter_cutout_rpm).clamp(0.0, 1.0);
-    load.starter_torque_nm * factor
-}
-
 /// Mean piston speed for the given crank speed.
 #[inline]
 pub fn piston_speed_m_per_s(slider: &SliderCrank, omega_rad_per_s: f64) -> f64 {

@@ -180,9 +180,34 @@ fn reset_rejects_invalid_initial_conditions() {
 fn provenance_is_reachable_through_the_catalog_api() {
     let report = engine().provenance();
     assert_eq!(report.config_id, BUILTIN_ENGINE_ID);
-    assert_eq!(report.sources.len(), 1);
     assert!(report.published_count > 0);
     assert!(report.calibrated_count > 0);
+
+    // By id rather than by count. This used to assert `sources.len() == 1`,
+    // which stopped being true the moment the starter arrived with a catalogue
+    // entry of its own — and a count was never the claim. The claim is that the
+    // documents behind the published values are reachable through the API, so
+    // name them: the engine comes from a Daimler manual and the starter from a
+    // Bosch catalogue, and neither publishes anything about the other.
+    let ids: Vec<&str> = report.sources.iter().map(|s| s.id.as_str()).collect();
+    for expected in ["mb-om471-intro-2011", "bosch-hef109-starter"] {
+        assert!(
+            ids.contains(&expected),
+            "source `{expected}` must be reachable, got {ids:?}"
+        );
+    }
+    for source in &report.sources {
+        assert!(
+            !source.title.trim().is_empty(),
+            "{} needs a title",
+            source.id
+        );
+        assert!(
+            !source.scope.trim().is_empty(),
+            "{} needs a scope, so what it does *not* cover is on record",
+            source.id
+        );
+    }
 }
 
 #[test]

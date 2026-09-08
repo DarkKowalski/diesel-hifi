@@ -22,7 +22,8 @@ acceptance criteria, results, and every assumption the model makes.
 crank-angle-resolved four-stroke state; injection, ignition delay, heat release,
 cylinder pressure, crank dynamics, friction, load, idle control; a wastegate
 turbocharger and cooled EGR; the staged decompression engine brake; a rigid truck
-driveline; three-path engine audio; a tested metric library, named reproducible
+driveline; a series-wound starter motor geared to the flywheel; four-path engine
+audio; a tested metric library, named reproducible
 listening scenarios and WAV capture; native deterministic tests; a static Svelte
 UI with the simulation off the UI thread and a level-matched A/B against local
 recordings.
@@ -37,7 +38,8 @@ kinetics, aftertreatment chemistry.
 
 | Path | Responsibility |
 |---|---|
-| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, air path, engine brake, driveline, all three acoustic sources and the exhaust duct, dynamometer harness, snapshots, native tests. **No browser, DOM, audio-device, or filesystem dependency.** |
+| `crates/sim-core` | Configuration, validation, provenance, deterministic physics, air path, engine brake, driveline, all four acoustic sources and the exhaust duct, the starter motor, dynamometer harness, snapshots, native tests. **No browser, DOM, audio-device, or filesystem dependency.** |
+| `crates/sim-core/src/sim/starter.rs` | The starter as a machine: a series-wound DC circuit solved in closed form, a two-stage engagement, an overrun clutch and a latching relay. Pure and config-driven, like `brake.rs`; it is the only place a tooth-mesh rate exists. |
 | `crates/sim-core/src/analysis.rs` | The measuring instruments: transform, band shares, comb share, crest factor, modulation depth. Pure, out of the hot loop, and tested against signals whose answer is known. Shared by the probes and the acoustic tests so a metric has one definition. |
 | `crates/sim-core/src/scenario.rs` | Named, reproducible listening scenarios: a seed, initial conditions and a script of control phases, returning audio plus the conditions the engine actually reached. A measurement harness like `dyno.rs`, and like it it touches nothing outside the simulation. |
 | `crates/sim-wasm` | `wasm-bindgen` adapter. Serialization and boundary only; no physics. |
@@ -55,11 +57,11 @@ local to the build.
 
 ## Configuration and provenance
 
-`EngineConfig` is versioned (schema 5) and validated before any simulation state
+`EngineConfig` is versioned (schema 6) and validated before any simulation state
 exists. It carries identity, geometry, valvetrain, injection, combustion,
 friction, gas, air path, turbo, EGR, exhaust system, engine brake, driveline,
-governor, load, inertia, limits, solver and audio sections, plus source records
-and parameter-level provenance.
+governor, load, starter, inertia, limits, solver and audio sections, plus source
+records and parameter-level provenance.
 
 - **`published`** values must name a source record and a locator.
 - **`derived`** values must state their formula and inputs.
@@ -86,7 +88,8 @@ generator standing between it and the model.
   cylinder pressure through slider-crank geometry; no term writes a target torque
   into crank acceleration.
 - Friction, pumping, accessory, driveline, starter and governor torques are all
-  explicit terms.
+  explicit terms. The starter is a *machine* rather than a torque: its output
+  comes from a circuit and a gear ratio, and it is never written at the crank.
 - 23 MPa is a validation envelope, not a pressure target.
 - Fixed-step deterministic integration. Non-finite state and out-of-range
   configuration are rejected.
@@ -107,9 +110,16 @@ Web Worker and needs neither `SharedArrayBuffer` nor cross-origin isolation.
 
 The UI provides an engine selector populated through the real catalog API,
 start/stop and reset, pedal and load controls, RPM with pressure/torque/state
-telemetry, visible error and worker lifecycle states, a solo toggle per
-radiating path, a level-matched A/B against local audio files, and **an explicit
-user action before Web Audio starts**.
+telemetry, starter current, terminal volts and pinion engagement, visible error
+and worker lifecycle states, a solo toggle per radiating path, a level-matched
+A/B against local audio files, and **an explicit user action before Web Audio
+starts**.
+
+`audioPathCount()` is 4. The solo toggles and the per-path cab transfers are both
+driven from that one list rather than from four literals, because adding the
+fourth path broke two hand-written literals in different files and the type
+checker only caught them by luck of `Record<AudioPath, boolean>` demanding every
+key.
 
 ## Milestones
 
@@ -161,6 +171,18 @@ next would have amplified it.
 | 14 | **The cab stops reflecting treble it should swallow, and the bass is found to have no harmonics**: the generated room tail gets two decay rates instead of one — a quarter as long above 900 Hz, because a cab lined with seats, carpet and a headliner absorbs several times more there than at 125 Hz — and the early reflections get a damping filter, because what bounces off a seat back is not a full-bandwidth copy. Measuring the forcings to explain a listening report then found the larger problem: the **torque drive is 87% fundamental with a crest factor of 4.8 dB**, so the body path can only ever be a tone. Cab change delivered; the bass finding recorded. |
 
 | 15 | **The block stops shouting and starts growling**: the structural modal bank's weights ascended 0.25 to 12.0 with frequency, so the block path shouted above 1 kHz and was nearly silent in the 220–750 Hz band a diesel growls in. Both of those were listener reports. Reshaped to span 6.7 dB instead of 16.8 and re-levelled to hold the balance: the block path goes from **22.6% to 49.8%** of its energy in the first four firing orders at cruise, its loudest octave moves to **315–630 Hz**, `>2 kHz` in the mix falls by 5 to 17 times, and `light-900` clears the exhaust-over-block floor it had been failing for three milestones. |
+
+| 16 | **The starter becomes a motor**: a listener reported that a start has no starter in it, and it did not — the model had a stall torque written straight at the crank, tapering to zero at a chosen speed, which is 11.8 kW of mechanical output from a family whose largest member makes 9.2. It is now a **Bosch HEF109-M 24 V, 7.8 kW machine on a 12-tooth pinion**: a series-wound circuit with a saturating field and a battery that sags, geared 12.08:1 to a 145-tooth ring gear, engaging in the two stages the manufacturer describes. It reaches the published 7.8 kW to **−0.0%** without the solver reading it, draws 1900 A at stall and 891 A cranking against 12.7 V, and radiates through a **fourth acoustic path** driven by tooth contact — 634 Hz at cranking speed, 94.7% of its energy between 300 Hz and 2 kHz. Every steady operating point is **bit-identical**, because a retracted pinion emits exactly zero. |
+
+Milestone 16 is the first source addition since milestone 12, and the first
+milestone in this document to start from someone saying a thing was *missing*
+rather than wrong. The interesting part is not the machine, though; it is what
+the machine could not fix. A correctly scaled starter cranks this engine at
+**262 rpm** where the placeholder managed 270, and heavy-duty practice is 150 to
+250 — because the engine only asks for **114 N·m** at that speed, and a cold
+12.8 litre six asks for four or five times that. Both figures were measured, on
+both solvers, before either was believed. See **The starter** for the machine and
+**Known deficits** for what it exposed in the friction model.
 
 Milestone 15 is the source half of the bass problem, and it is a mistake being
 corrected rather than a feature being added. The block bank's ascending weights
@@ -296,12 +318,66 @@ what three cylinders of six should give. The manual does not say which stage its
 figures describe; maximum brake power is stage III, and that reading is recorded
 as an interpretation, not as published fact.
 
+### The starter
+
+Fitted unit **Bosch HEF109-M 24 V, 7.8 kW, 12-tooth pinion**, part number
+0 001 330 050. The catalogue publishes a nominal voltage, a nominal power and a
+tooth count, and that is all: no torque-speed curve, no resistance, no current.
+So one number is an anchor and everything electrical is calibrated against it.
+
+| | Model | Published | Error |
+|---|---:|---:|---:|
+| Peak mechanical output | 7.80 kW at **149 crank rpm** | 7.8 kW | **−0.0%** |
+| Nominal voltage | 24 V | 24 V | — |
+| Reduction | 12.08:1 from 12 pinion teeth on **145 ring teeth** | 12 teeth published | — |
+
+The speed in bold is an outcome of the calibration, exactly as the peak-power and
+peak-torque speeds are, and the ring gear is not published by either source. The
+anchor is **reached rather than read**: nothing in the stepping path touches
+`starter.rated_power_w`, and a test scans `src/sim` to prove it — the same
+discipline the engine brake's published anchors carry, for the same reason.
+
+From `cargo run --release -p sim-core --example starter_sweep`:
+
+| Crank rpm | 0 | 50 | 100 | 150 | 200 | 250 | 300 | 350 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Amps | 1900 | 1674 | 1465 | 1275 | 1106 | 959 | 834 | 729 |
+| Terminal volts | 0.0 | 2.9 | 5.5 | 7.9 | 10.0 | 11.9 | 13.5 | 14.8 |
+| Crank N·m | 964 | 778 | 606 | 447 | 303 | 175 | 62 | 0 |
+| Shaft kW | 0.00 | 4.53 | 7.05 | **7.80** | 7.06 | 5.10 | 2.15 | 0.00 |
+
+**The terminal voltage column is the whole reason this is a circuit.** A
+torque-speed line has no current to draw and no supply to pull down, so it cannot
+sag — and sagging is what a heavy diesel start sounds like. Cranking draws 891 A
+against 12.7 V, and the crank speed swings **226 to 283 rpm** over each firing
+cycle: as a cylinder comes up on compression the crank slows, back-EMF falls,
+current climbs, the terminals drop further and the mesh carries less torque.
+Nothing schedules that.
+
+Engagement is the two stages the manufacturer describes — *the pinion shaft moves
+forward, engages and turns slightly; then the main current is released* — as an
+8 ms seating ramp followed by the main contacts closing 60 ms later. Both ends
+are ramps, so neither the torque nor the acoustic drive steps: the largest
+single-step move in the mesh drive is **0.044** against a peak of 1.571, and the
+blind step detector finds nothing. The relay **latches**: crank speed ripples by
+tens of rpm over a firing cycle, so a bare speed comparison chatters as the
+engine accelerates through the drop-out threshold, and each chatter reversed the
+engagement ramp and put a 1.52 step into the drive. Letting go of the key rearms
+it.
+
+Starting from cold with no pedal, the engine catches and the relay releases at
+**0.60 s**, settling on governed idle at 575 rpm.
+
+**Cranking speed is 262 rpm, and heavy-duty practice is 150 to 250.** This is
+reported rather than tuned, and what it is really measuring is the *engine* — see
+**Known deficits**.
+
 ### Sound
 
 The engine note is not synthesised. The 25 µs step is a 40 kHz sample rate, so
 the solver emits **one audio frame per step** from quantities it already
-integrates. Three paths radiate, each driven by a different quantity, because
-they are three different mechanisms — and they cross the boundary **separately**,
+integrates. Four paths radiate, each driven by a different quantity, because they
+are four different mechanisms — and they cross the boundary **separately**,
 interleaved into that frame, because they do not reach a listener by the same
 route either:
 
@@ -324,6 +400,21 @@ route either:
   the whole cycle at the firing frequency and its low orders. The engine reacts
   against its mounts, the frame and cab panels take that reaction, and they
   radiate it between roughly 20 and 200 Hz. This is the roar.
+- **The starter**, driven by *tooth contact*. A pinion meshing with a 145-tooth
+  ring gear makes one contact per tooth, so its rate is the ring gear passing the
+  pinion — 634 Hz at cranking speed — and its amplitude is the torque going
+  through the mesh. Three resonators standing for the starter nose cone and the
+  flywheel housing turn that into the whine. This is the only path that is not
+  the engine: it is a separate machine, in mesh for a second or two and then gone.
+
+**The fourth path is the odd one out, and the arithmetic is why it could be
+added at all.** With the pinion retracted its forcing is exactly zero, the bank
+is linear with zero state, and so it contributes exactly `0.0` — which means the
+mix at every fuelled operating point is bit-identical to the three-path model
+that preceded it. Every figure in the table below was re-measured after the path
+was added and not one digit moved. It is the only source change in this document
+that can say that, and it is a property of a retracted pinion rather than of
+care.
 
 **The third path is why this section was rewritten.** Torque and cylinder
 pressure are not the same signal and cannot substitute for one another: pressure
@@ -344,8 +435,12 @@ anything sweeps it. The brake barks because its release lobe is the fastest
 pressure event in the model, and it thumps because that lobe is a torque event
 too. The pipe resonance shifts as the exhaust heats because the speed of sound
 comes from the temperature the solver integrates. Permuting the firing order
-changes the waveform because the runners differ in length. None of that is
-written down as a rule.
+changes the waveform because the runners differ in length. The starter whine
+rises in pitch as the engine picks up speed because the mesh rate is the ring
+gear passing the pinion, and it *dips* every time a cylinder comes up on
+compression because the crank slows there, back-EMF falls, current climbs, the
+battery sags and the mesh carries less torque. None of that is written down as a
+rule.
 
 Where the energy sits, from `cargo run --release -p sim-core --example audio_probe`.
 Every row is a named scenario from `sim-core::scenario`, so it can be regenerated
@@ -354,20 +449,48 @@ rather than reproduced by hand:
 | | `idle` | `light-900` | `cruise-1200` | `full-1400` | `rated-1800` | `brake-1300` | Target |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Speed, rpm | 551 governed | 900 held | 1200 held | 1400 held | 1800 held | 1300 held | — |
-| Firing orders `f0…4·f0` | 48.1% | 60.0% | 72.0% | 88.2% | 72.2% | 43.3% | ≥ 35% loaded |
-| Crest factor | 15.5 dB | 12.0 dB | 11.9 dB | 12.7 dB | 11.5 dB | 12.5 dB | ≥ 9 dB |
-| Modulation depth | 0.66 | 1.11 | 0.77 | 1.55 | 1.08 | 2.31 | > 0 |
-| `<80 Hz` | **39.3%** | 1.9% | 17.8% | 5.4% | 0.0% | 2.0% | ≤ 35% |
-| `80–300 Hz` | 45.4% | 80.1% | 57.8% | 84.9% | 73.9% | **42.1%** | ≥ 45% |
-| `300 Hz–2 kHz` | 14.7% | 16.3% | 23.6% | 9.3% | 24.9% | **55.9%** | ≤ 30% |
-| `>2 kHz` | 0.6% | 1.7% | 0.9% | 0.4% | 1.2% | 0.0% | — |
-| `150 Hz–15 kHz` | 38.5% | 65.3% | 50.1% | 59.7% | 77.2% | 94.4% | ≥ 35% |
+| Firing orders `f0…4·f0` | 48.9% | 71.7% | 73.9% | 90.9% | 85.3% | 44.2% | ≥ 35% loaded |
+| Crest factor | 15.4 dB | 12.4 dB | 11.6 dB | 11.7 dB | **9.0 dB** | 12.4 dB | ≥ 9 dB |
+| Modulation depth | 0.64 | 1.08 | 0.83 | 1.47 | 1.12 | 2.30 | > 0 |
+| `<80 Hz` | **40.4%** | 2.4% | 17.7% | 5.8% | 0.0% | 2.0% | ≤ 35% |
+| `80–300 Hz` | 45.1% | 83.0% | 59.7% | 87.5% | 85.9% | **43.0%** | ≥ 45% |
+| `300 Hz–2 kHz` | 14.3% | 14.5% | 22.6% | 6.6% | 14.0% | **54.9%** | ≤ 30% |
+| `>2 kHz` | 0.2% | 0.1% | 0.1% | 0.0% | 0.0% | 0.0% | — |
+| `150 Hz–15 kHz` | 37.8% | 60.2% | 51.3% | 54.3% | 75.5% | 94.5% | ≥ 35% |
 | `>15 kHz` residue | 0.02% | 0.01% | 0.00% | 0.00% | 0.00% | 0.01% | ≤ 1% |
-| Peak | 0.105 | 0.367 | 0.652 | 0.850 | 0.850 | 0.850 | at or under the 0.85 knee |
-| Level, dBFS | −35.1 | −20.7 | −15.6 | −14.1 | −12.9 | −13.9 | — |
-| Exhaust over block | 10.8 dB | **5.2 dB** | 7.1 dB | 12.2 dB | 6.3 dB | 26.8 dB | ≥ 6 dB |
+| Peak | 0.148 | 0.509 | 0.850 | 0.850 | 0.850 | 0.850 | at or under the 0.85 knee |
+| Level, dBFS | −32.0 | −18.2 | −13.0 | −13.1 | −10.4 | −13.8 | — |
+| Exhaust over block | 11.0 dB | 6.4 dB | 8.5 dB | 12.9 dB | 8.8 dB | 27.0 dB | ≥ 6 dB |
+| Exhaust over body | 1.1 dB | 6.8 dB | 2.8 dB | 12.9 dB | 9.8 dB | 33.7 dB | — |
+| Starter path | silent | silent | silent | silent | silent | silent | exactly zero |
+
+**The crest row now has a figure on its floor**, and it is there deliberately.
+`audio.output_gain` raised the whole range by 3 dB on a listening report that
+everything was too quiet, and the range is bounded at the top by the limiter, so
+the loud end of it pays for the quiet end in pulse dynamics. Measured, +3.0 dB
+is the most a common raise can give before something breaks: `rated-1800` reads
+exactly 9.0 dB against a floor of 9, +4.5 dB reads 8.9 and +6.0 dB reads 8.8.
+The figure is on the boundary rather than inside it, and it should be watched
+rather than treated as a pass with room.
 
 Bold entries miss their target and are discussed under **Known deficits** below.
+
+**The starter row is the acceptance criterion for the fourth path**, and it says
+`silent` rather than a small number because the requirement is exact. The pinion
+is retracted at every one of these operating points, its forcing is exactly zero,
+and its resonator bank is linear with zero state — so the path contributes
+exactly `0.0` and the mix is bit-identical to the three-path model. `audio_probe`
+prints `silent (not engaged at this operating point)` for it rather than
+`-inf dBFS` beside a row of undefined band shares. What the starter does sound
+like is under **The starter** below, measured where it is actually in mesh.
+
+**Two things moved these figures and only one of them is milestone 16's own
+change.** The milestone 15 block bank moved every column and the table was never
+re-run with it; that is corrected here, and the correction is why `light-900`
+reads **6.4 dB** of exhaust over block and clears the 6 dB floor it is recorded
+below as failing. `audio.output_gain` then raised every level by 3 dB, which is
+milestone 16's, and which moved the `Level` and `Peak` rows and nothing else —
+a common gain cannot change a share.
 
 **Milestone 12 moved every column, and two bold entries stopped being bold.**
 `80–300 Hz` at governed idle went from 41.7% to 45.4% and now clears its floor,
@@ -695,20 +818,22 @@ problem. They were one defect in the source, seen through two criteria.
   question has evidence on one side of it and a convention on the other, and that
   is the state in which a criterion normally gets changed. It is the next decision
   rather than this milestone's.
-- **`light-900` has the exhaust only 5.2 dB in front of the block**, under the
-  6 dB floor, and it did not move in milestone 12 while `rated-1800` did. Light
-  load is where ignition delay is longest and the premixed fraction largest, so
-  the block is loudest relative to the exhaust exactly where the balance criterion
-  is tightest — and that loudness is combustion rather than artefact, which is
-  why removing the artefact did nothing here. This is the one balance figure that
-  is asking a real question about the model.
-  **It is not waiting on the reference, because the reference cannot ever answer
-  it.** A ratio between two radiating paths needs the two paths measured
-  separately, and the benchmark is a stereo mix in which they arrived added
-  together. Milestone 8 recorded this as one of three things blocked on
-  characterisation; milestone 10 establishes that it is blocked on something else.
-  Settling it needs either a multi-microphone measurement of a real engine or an
-  argument from mechanism, not more analysis of this file.
+**Closed by milestone 15's block bank, and recorded here because the table only
+caught up in milestone 16:**
+
+- ~~`light-900` has the exhaust only 5.2 dB in front of the block.~~ It now reads
+  **6.4 dB** and clears the 6 dB floor. Reshaping the structural bank away from
+  the top end is what did it, and light load is where that mattered most: it is
+  where ignition delay is longest and the premixed fraction largest, so the block
+  path is loudest relative to the exhaust exactly where the balance criterion is
+  tightest.
+
+  Two things this does *not* settle. The margin is 0.4 dB, which is not a
+  comfortable pass. And the question the deficit was really asking — whether a
+  ratio between two radiating paths can be validated at all — is untouched: a
+  ratio needs the two paths measured separately and the benchmark recording is a
+  stereo mix in which they arrived added together. Settling that still needs a
+  multi-microphone measurement of a real engine or an argument from mechanism.
 
 **Still visible, because the clipper had been flattering it:**
 
@@ -845,6 +970,90 @@ be half delivered:**
   failing its criterion in the direction this would push it. Which is why it is
   recorded here and not attempted in the same milestone as the measurement.
 
+**Newly measured in milestone 16, and the reason a correctly scaled starter
+still cranks too fast:**
+
+- **The friction model has no temperature term, so cranking drag is warm-engine
+  drag.** Fitting a real starter to this engine turned up the fact that the
+  engine barely resists being turned: at 262 rpm it asks for **114 N·m**, of
+  which 62 is Chen-Flynn friction and 25 is accessory drag. A cold 12.8 litre six
+  wants four or five times that — thick oil, high breakaway, cold rings — and
+  heavy-duty practice cranks at 150 to 250 rpm rather than 262.
+
+  **The starter is not what is wrong, and this was measured on both solvers
+  before either was believed.** The placeholder cranked at **270 rpm** on
+  1500 N·m; the HEF109-M cranks at **262 rpm** on 964 N·m of stall torque. Half
+  the torque moved the speed by 8 rpm, because the crossing sits where the demand
+  curve is nearly flat and both machines have far more than 114 N·m to give
+  there. The cranking speed is a measurement of the friction model.
+
+  | | Placeholder | HEF109-M |
+  |---|---:|---:|
+  | Cranking speed, ignition off | 270 rpm | 262 rpm |
+  | Swing over the firing cycle | 245–294 rpm | **226–283 rpm** |
+  | Torque the engine asked for | 110 N·m | 114 N·m |
+  | Catch, ignition on | 0.45 s | 0.60 s |
+
+  The swing is the one column that improved, and it is the one the circuit was
+  for: 57 rpm against 49, because the supply sags under compression instead of
+  the torque depending on speed alone.
+
+  Not fixed here, and the reason is the usual one. `friction.fmep_constant_pa` is
+  calibrated against peak power, peak torque and best fuel consumption, all
+  measured warm; giving it a temperature term moves every figure in
+  **Results → Calibration** in the same milestone that first measured the
+  shortfall. It is also not obviously a friction term alone — cold blowby and
+  cold heat loss both take work out at cranking speed and the model has neither
+  as a temperature effect.
+
+- **The starter's whine has no commutator or brush noise in it.** What radiates is
+  tooth contact only. A real starter also whirs from its armature — pole-pass and
+  commutator-segment rates, both well inside the audible band — and that is a
+  separate mechanism from the mesh, not a tuning of it. It is deliberately
+  excluded on the same grounds as turbocharger whine: it is the least grounded
+  thing available, and nothing published says anything about it.
+
+- **The engine being turned over has nowhere to radiate its thump.** At 262 rpm a
+  six makes three compression events a revolution, so the thump is at **13.1 Hz**
+  with harmonics at 26, 39 and 52 Hz — and the lowest resonance in any radiating
+  bank in this model is 60 Hz. Measured over the cranking window, the engine's own
+  paths sit at −40.2 dB (exhaust), −46.9 (body) and −50.1 (block), against a
+  starter at −35.5.
+
+  | Cranking window, 0.10–0.58 s | dBFS |
+  |---|---:|
+  | starter | −35.5 |
+  | exhaust | −40.2 |
+  | body | −46.9 |
+  | block | −50.1 |
+
+  **Extending the body bank downward was tried and reverted, and the measurement
+  is why.** A mode at 40 Hz, Q 4, weight 1.0 lifted the cranking body path by
+  5.5 dB — and took governed idle from 40.4% to 56.0% below 80 Hz, and its
+  `150 Hz–15 kHz` share from 37.8% to **27.5%**, failing the ≥ 35% criterion.
+  Weights of 0.6, 0.45 and 0.3 read 32.4%, 34.1% and 35.6% there, so only the
+  smallest of them clears the floor at all, and it buys 1.9 dB. Adding response
+  below 60 Hz spends output headroom on content no ordinary speaker reproduces,
+  and it does so at the direct expense of the band where the engine is audible.
+  A bank that reaches lower is the wrong lever.
+
+  **The right one is the harmonic series**, and it is the same fix
+  **What the drive contains** has been asking for since milestone 14: the ear
+  reconstructs a missing fundamental from its harmonics, which is why a truck
+  heard through a laptop still sounds like a truck. That needs a drive with
+  harmonics in it — the torque forcing is 87 to 89% fundamental — and a path that
+  passes them, and the candidate mechanism is named there already: a real cab is
+  excited by each combustion event hammering the block, not only by the smooth
+  reaction torque, and the torque forcing represents none of that.
+
+  Two reasons it is not attempted here. It is a change to a radiating source, so
+  it moves every band share and every crest figure in the table above, including
+  the two that now sit on their floors. And the rule this document keeps coming
+  back to is that a filter is allowed and a harmonic generator is not — so the
+  harmonics have to come from the *drive*, which is a mechanism change rather
+  than a calibration, and it deserves the milestone the last two source changes
+  each got.
+
 **Newly measured in milestone 12, and not caused by it:**
 
 - **The air path limit-cycles at high speed under load.** At full pedal against
@@ -878,10 +1087,12 @@ alone had been on record for a milestone and read as evidence about the brake.
 of its own from the ring buffer through to the Web Audio graph, where `cabin.ts`
 gives it its own transfer. What the solver still does is decide the *saturation*,
 because that is a property of the mix: it derives one gain from the summed signal
-and scales all three paths by it. The gain is never above one, so the three
+and scales all four paths by it. The gain is never above one, so the
 channels sum to exactly the single sample this used to emit — which is why
 splitting the paths in milestone 7 left the **raw** listening stage
-bit-comparable to milestone 6.
+bit-comparable to milestone 6, and why adding a fourth path in milestone 16 left
+it bit-comparable to milestone 15 at every operating point where the starter is
+not in mesh, which is all of them but a start.
 
 **The gain follows the level rather than the sample.** When the mix needs less
 gain than it is getting it gets exactly what it needs, on that sample: an
@@ -1074,13 +1285,13 @@ with a steady one.
 
 | File | What it is |
 |---|---|
-| `mix.wav` | the three paths added up: the raw listening stage |
+| `mix.wav` | every path added up: the raw listening stage |
 | `exhaust.wav`, `block.wav`, `body.wav` | each radiating path on its own |
 | `*-unsaturated.wav` | the same paths with the limiter's gain divided out |
 | `mix-unsaturated.wav` | those paths summed: the mix before the limiter |
 
 **The unsaturated set is exact, because the solver reports the gain it applied.**
-The limiter derives one gain from the mix and scales all three paths by it, so
+The limiter derives one gain from the mix and scales all four paths by it, so
 dividing each sample by the gain its frame carried recovers what the solver
 produced before the limiter touched it. The gain rides alongside the frames in
 `Acoustics`, indexed off the same cursors so it cannot slide out of step with
@@ -1175,7 +1386,7 @@ drives it at **both** common device rates. Neither divides the solver's 40 kHz,
 which is the whole reason there is a resampler to audit.
 
 Eleven properties, at 48 kHz and at 44.1 kHz: silence until the cushion fills; a
-300 Hz tone in is a 300 Hz tone out; the three paths stay sample-aligned through
+300 Hz tone in is a 300 Hz tone out; every path stays sample-aligned through
 the resampling; imaging stays below −38 dBc; a dry ring outputs silence rather
 than repeating itself, and counts it; both ends of a dry spell fade rather than
 cut; an overrun drops whole frames and stays aligned; a block with the wrong path
@@ -1459,6 +1670,63 @@ model, and hypotheses can be measured.
   contains**. It is the deficit behind the milestone 13 balance request, and it
   is why turning the body path up made the sound boomy rather than fuller.
 
+**Milestone 16, an absence rather than a judgement.** The report was that a start
+has **no starter motor in it**, along with a preference for which one it should
+be. This is the easiest kind of report to act on and the least ambiguous in this
+section: it is not a claim about balance or timbre, it is a claim that a mechanism
+is missing, and either it is or it is not.
+
+It was, in the sense that mattered. There *was* a starter torque term — cranking
+was audible as compression through the block and body paths — but nothing in the
+model radiated from the starter, and nothing in it had a pinion, a ring gear or a
+tooth-mesh rate. So the report was right about the sound and about the mechanism
+at once.
+
+What it turned into is worth recording, because it is the same pattern as
+milestone 14. Building the machine properly cost the placeholder's 1500 N·m and
+put a real torque-speed curve in its place, and the *measurement* that came with
+it says the cranking speed is 262 rpm where heavy-duty practice is 150 to 250 —
+which is a finding about the engine's friction model, not about the starter. A
+listener asking for a missing part found a defect two subsystems away. See
+**Known deficits**.
+
+**Milestone 16, on the first build of the starter, in four reports.** This is the
+first time this document records a listening pass that *rejected* something built
+for a listener, and all four reports turned out to be measurable:
+
+| Report | What the measurement said |
+|---|---|
+| "Overall volume too quiet" | Idle peaked at 0.105 of full scale against a 0.85 knee. On the cockpit stage a quiet passage also lost 4.7 dB in the cab chain — its input trim and makeup multiply to 0.584 and its compressor is inert below −18 dBFS — and another 4.4 dB to a default volume of 0.6 |
+| "The starter sounds like a screeching belt" | The bank started at 850 Hz with nothing below it: 94.7% of the path's energy sat between 300 Hz and 2 kHz and 2.9% below 300 |
+| "…short bark, not a heavy truck starter" | The engagement impact was **thirteen times** the whine. The mesh drive is normalised by stall torque and cranking transmits an eighth of stall; the seating term is the derivative of a ramp and arrives at `pi/2` |
+| "Only the starter made a sound, but it should drive the engine to make a very loud sound too" | Measured over the cranking window alone — 0.10 to 0.58 s, before the engine catches — the starter led the exhaust by **17.6 dB**, the body by 24.3 and the block by 27.5. The mix over that window *was* the starter |
+
+The fourth is the one worth dwelling on, because it caught a mistake made while
+acting on the second and third. Raising the level to fix "too quiet" and
+reshaping the bank to fix "screeching" both worked, and between them they made
+the starter the loudest thing in the model — louder than full load. The report
+that followed was correct and the instrument agreed with it: measuring the
+*cranking window* rather than the whole scenario is what made the error obvious,
+because the pinion is in mesh for 0.48 s of a 4 s capture and any average over
+the whole thing is mostly idle.
+
+**And the fifth report is the best idea in this section so far.** Asked why the
+cranking engine could not simply be made louder, the answer was that its thump is
+at 13 Hz — 262 rpm, three events a revolution — and every radiating bank in the
+model starts at 60 Hz, so the low end has nowhere to go. The suggestion back was:
+*if the speaker cannot make bass, use the harmonic series of the bass to make
+people hear it.* That is the missing-fundamental effect, it is exactly right, and
+it is already the reasoning behind the cab's small-speaker provision. It also
+supersedes a decision taken minutes earlier — extending the body bank down to
+40 Hz, which was tried, measured and reverted: it lifted the cranking body path
+by 5.5 dB and took governed idle's audible band from 37.8% to **27.5%**, failing
+the ≥ 35% criterion, which is to say it made the engine measurably *harder* to
+hear on ordinary hardware while adding content no ordinary speaker reproduces.
+
+The harmonic route is a source change and it is the one **What the drive
+contains** has been asking for since milestone 14: a drive that has harmonics and
+a path that passes them. It is not attempted here. See **Known deficits**.
+
 Worth noting what this does to the weight of the earlier reports. A listener
 saying *too much treble, not enough bass* was consistent with two instruments,
 which was reassuring but not informative. A listener saying *the bass has no
@@ -1683,6 +1951,20 @@ aftertreatment**, Mercedes-Benz service literature, technical status 2011-09-01,
 order number 6517 1260 02. Scope: engine series 471.9 in model 963/964, power
 code M3D, plus documented M5Z Euro VI subsystems where the document states them.
 
+Second source, for the starter only: the **Bosch parts catalogue entry for
+HEF109-M 24 V, part number 0 001 330 050**, plus Bosch Off-Highway product
+literature for the HEF/HEP 109 family. Scope: nominal voltage, nominal power,
+pinion tooth count, flange diameter, rotation, and the two-stage engagement
+sequence. It publishes **no torque-speed curve, no circuit resistance and no
+current figures**, so every electrical parameter in the `starter` section is
+calibrated rather than read — and neither source publishes the engine-side ring
+gear, which is the dominant lever on both cranking speed and the mesh frequency.
+
+The two documents do not overlap. The engine manual says nothing about the
+starter and the starter catalogue says nothing about the engine, so nothing in
+the `starter` section can be cross-checked against anything in the rest of the
+configuration.
+
 ### Published parameters
 
 | Parameter | Published | Internal |
@@ -1775,7 +2057,10 @@ none of it supplies these numbers.
 | Friction | Chen-Flynn style FMEP: constant, peak-pressure and piston-speed terms |
 | Fuel | 42.7 MJ/kg, 832 kg/m³; 350 mg/cycle pedal ceiling |
 | Idle governor | PI gains; **the 560 rpm target itself is published** |
-| Starter | 1500 N·m at the crank, tapering to zero at 300 rpm |
+| **Starter machine** | Bosch HEF109-M 24 V, 7.8 kW, 12 pinion teeth are **published**; everything else is assumed. A 145-tooth ring gear, 0.01263 Ω of total circuit resistance, 9.9752e-5 N·m/A² of torque constant, a 620 A field saturation knee and 0.063 N·m per (rad/s) of windage. The last two are fitted together so peak output lands on the published 7.8 kW, and the resistance is chosen for a 1900 A stall — the right order for a 24 V heavy-duty starter. The catalogue publishes no curve, no resistance and no current, so the *shape* of the machine is the series-wound topology and nothing more |
+| **Starter engagement** | 8 ms for the pinion to seat, main contacts 60 ms later, relay drop-out at 420 rpm, 0.15 of a tooth pitch per contact. The two-stage sequence is published for this starter family; the four numbers are not |
+| **Starter acoustics** | Four modes at 210, 430, 850 and 1750 Hz at Q 4.5, 5.5, 6.0 and 7.0, weighted 1.0, 1.0, 0.55 and 0.22, at a gain of 0.25, with the engagement impact scaled 0.12 against the running mesh. The structure is not only the starter: the pinion drives a ring gear bolted to the flywheel inside a large steel housing, and that casting rings far below 850 Hz. The weights **descend** rather than ascend — unlike the block bank there is no shortfall in the drive to compensate for, because a tooth contact is already a sharp edge. **The first version of this bank started at 850 Hz with Q 8 to 14 and no engagement scaling, and a listener heard a screeching belt with a short bark**; see **What listening has said so far** |
+| **Output level** | `audio.output_gain` 1.41, a common +3.0 dB on all four paths. Says how loud, where the four path gains say the balance; measured, it is the most a common raise can give before `rated-1800` crest falls under its 9 dB floor |
 | Governed speed | fuelling tapers from 1900 rpm to zero at 2100 rpm |
 | Solver step | 25 µs fixed |
 | Exhaust acoustics | 20 Hz rumble filter, soft-clip knee 0.85, exhaust gain 9.5, structural gain 0.40 and body gain 0.09, set so the start transient approaches the knee without saturating and so the exhaust leads the block by 6 to 10 dB across the range. The pipe mouth's radiation transfer is a one-pole high pass at `exhaust_system.radiation_cutoff_hz` rather than a bare difference — the same corner the duct uses on the reflected wave, because it is the same physical corner. There is no muffler roll-off parameter: a two-pole low pass standing in for an entire exhaust system is a tone control, and the duct below replaced it |
@@ -1827,11 +2112,27 @@ none of it supplies these numbers.
   cannot raise exhaust above intake. Real behaviour for a fixed-geometry
   high-pressure loop, but it means the scheduled rate is a target the hardware
   cannot always meet.
-- **Audio covers the exhaust, the engine's structure and its reaction against
-  its mounts, not everything that radiates.** There is no turbocharger whine and
-  no intake noise. Blade-pass at the modelled shaft speeds is ultrasonic, so
-  audible intake content would be low-order shaft harmonics and diffuser noise —
-  the least grounded thing on the list, and deliberately excluded.
+- **Audio covers the exhaust, the engine's structure, its reaction against its
+  mounts and the starter's tooth mesh, not everything that radiates.** There is
+  no turbocharger whine and no intake noise. Blade-pass at the modelled shaft
+  speeds is ultrasonic, so audible intake content would be low-order shaft
+  harmonics and diffuser noise — the least grounded thing on the list, and
+  deliberately excluded. The starter's commutator and brushes are excluded on the
+  same grounds.
+- **The starter's electrical side neglects armature inductance.** The loop
+  equation is therefore algebraic — a quadratic in current with exactly one
+  positive root at every speed — rather than another state variable, so the first
+  few milliseconds of current rise are instantaneous instead of taking an `L/R`
+  of some milliseconds. What this *keeps* is the part that matters acoustically:
+  the current follows the crank slowing under compression immediately, which is
+  the labouring. Battery state of charge and temperature are also absent, so
+  `circuit_resistance_ohm` is one number standing for a warm battery on short
+  cables.
+- **The starter's tooth mesh is a lumped contact model**, in the same spirit as
+  the body path being a lumped vehicle response. One contact per ring gear tooth,
+  with a fast rise over a fraction of the pitch and an amplitude proportional to
+  transmitted torque; the alternative is contact mechanics on a gear pair, and
+  neither source publishes so much as a flywheel housing dimension.
 - **The body path is a lumped vehicle response, not a structural model.** Four
   damped resonators stand for everything between the engine mounts and the cab
   panels. The forcing is engine state and genuinely belongs in `sim-core`; the
@@ -1862,7 +2163,7 @@ none of it supplies these numbers.
   mechanism, and `tests/acoustics.rs` now asserts both halves separately — that
   the engine varies with the knob at zero, and that the knob still does something —
   because only the second of those used to be true.
-- **The three paths are aligned by construction, not by agreement.** They share
+- **The paths are aligned by construction, not by agreement.** They share
   one ring buffer and one fractional read position from the solver through to the
   worklet's resampler, interleaved a frame at a time. Three buffers with three
   sets of cursors could be filled or drained unevenly and slide apart, and a
@@ -1952,13 +2253,15 @@ repeating its last block, so a stall is audible rather than disguised.
   loading at both a domain root and a configurable subpath.
 - Any calibration target not directly published is visible in source metadata and
   in this document.
-- Audio: exactly one **frame** per solver step, three paths interleaved;
+- Audio: exactly one **frame** per solver step, four paths interleaved;
   bit-identical across batch boundaries in every path; every sample of every path
   finite and inside `[−1, 1]`, and their **sum** inside the limiter's knee; a
   reset engine silent and a reset click-free; the note at the firing frequency for
   any cylinder count; a standing torque and a standing cylinder pressure both
-  radiating nothing; the figures in **Results → Sound** met, except those recorded
-  there as **Known deficits**.
+  radiating nothing; **the starter path exactly zero whenever the pinion is
+  retracted**, and the whine at the ring gear's tooth rate whenever it is not;
+  the figures in **Results → Sound** met, except those recorded there as
+  **Known deficits**.
 - **The ceiling changes the level, not the shape.** Below the knee it is exactly
   transparent; above it, twenty times the gain on the same signal changes its
   crest factor by less than 1 dB, and the gain does not swing by more than 10%
@@ -2000,7 +2303,7 @@ repeating its last block, so a stall is audible rather than disguised.
   phases and not the settling before them; a held phase holds; nothing is dropped
   on the way out.
 - **Playback is arithmetically correct at 44.1 and 48 kHz**: the resampled pitch
-  is right, the three paths stay sample-aligned through it, imaging stays below
+  is right, every path stays sample-aligned through it, imaging stays below
   −38 dBc in band, an underrun outputs silence and is counted, an overrun drops
   whole frames, a malformed block is refused, and the drift trim moves towards the
   buffer target by no more than 1%.
@@ -2080,10 +2383,11 @@ pnpm install --frozen-lockfile
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 309 tests: geometry, provenance, catalog,
+cargo test --workspace          # 327 tests: geometry, provenance, catalog,
                                 # determinism, limits, combustion, heat transfer,
                                 # turbo, EGR, acoustics, the limiter, brake,
-                                # driveline, dyno calibration, ID-branch guard,
+                                # starter, driveline, dyno calibration,
+                                # ID-branch guard, the published-anchor guards,
                                 # the metric library against known signals,
                                 # the firing-rate estimator against its octave
                                 # traps, the jump detector against continuous
@@ -2092,7 +2396,7 @@ cargo test --workspace          # 309 tests: geometry, provenance, catalog,
 pnpm wasm:build                 # wasm-pack -> web/src/wasm (generated, gitignored)
 pnpm wasm:test                  # wasm-pack test --node: WASM API smoke test
 pnpm check                      # svelte-check
-pnpm test                       # wasm smoke + vitest units (83) + Playwright browser suite
+pnpm test                       # wasm smoke + vitest units (86) + Playwright browser suite
 pnpm build                      # wasm + vite build + verify-dist
 pnpm build:subpath              # the same build under an absolute /diesel-hifi/ base
 ```
@@ -2178,6 +2482,104 @@ checked against a real fix, it turned out to predict one to within half a
 percentage point.
 
 [`analysis::jumps`]: crates/sim-core/src/analysis.rs
+
+### Verification, milestone 16
+
+Run on Windows 11. A source addition and a schema change, so everything was
+re-run: the configuration gained a `starter` section and lost two fields from
+`load`, and the acoustic boundary went from three interleaved paths to four.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --workspace` | **327 passed**, 0 failed (310 before) |
+| `cargo run --release -p sim-core --example starter_sweep` | passed; peak output 7.80 kW against the published 7.8 kW, **−0.0%**; cranking 262 rpm; catches at 0.60 s |
+| `cargo run --release -p sim-core --example sweep` | passed; **Results → Calibration** unchanged |
+| `cargo run --release -p sim-core --example brake_sweep` | passed; **Results → Engine brake** unchanged |
+| `cargo run --release -p sim-core --example audio_probe` | passed; every steady figure identical to the digit before the listening pass, and only `Level`, `Peak` and `Crest factor` moved after it |
+| `cargo run --release -p sim-core --example trace_probe` | passed; the starter drive carries **0 blind steps**, largest single-step move 0.044 against a peak of 0.935 |
+| `cargo run --release -p sim-core --example audio_capture` | passed; 10 scenarios, `starter.wav` written for `start` alone and the manifest recording `silentPaths` for the other nine |
+| `pnpm wasm:build` | passed; the blob carries schema 6 and reports `audioPathCount()` of 4 |
+| `pnpm wasm:test` | 17 passed, 0 failed |
+| `pnpm check` | 0 errors, 0 warnings |
+| `pnpm test` | 86 unit passed, 34 browser passed at root and subpath, 0 failed |
+| `pnpm build` | passed; `verify-dist` OK, 6 files, 619 KiB |
+| `pnpm build:subpath` | passed; `verify-dist` OK under an absolute base, 619 KiB |
+
+**The regression check that matters is a diff, not a table.** `audio_probe` was
+captured before the change and again after, and the two outputs differ by exactly
+six lines — one `starter: silent (not engaged at this operating point)` per
+scenario. Every level, band share, crest factor, modulation depth, octave and
+balance figure is byte-identical. That is what a fourth path emitting exactly
+`0.0` buys, and it is the reason this milestone could add a radiating source
+without re-litigating any acceptance criterion.
+
+**Five tests changed and one existing measurement was found to be printing
+nothing.** The last is the one worth reading:
+
+| Test | Was | Now | Why |
+|---|---|---|---|
+| `provenance_is_reachable_through_the_catalog_api` | asserted exactly one source record | asserts both sources by **id**, and that each carries a title and a scope | The count was never the claim. The starter arrived with a Bosch catalogue entry, and a test that counts documents fails whenever a second one is cited |
+| `exposes_provenance_across_the_boundary` (WASM) | `sources.length() == 1` | at least one, each with a non-empty id, title and scope | Same defect on the other side of the boundary |
+| `batching_does_not_change_the_result` | 2000 steps | 4000 steps | 2000 steps is 50 ms, and a real solenoid does not close the main contacts until 60 ms. Its own guard — *the batching test must actually turn the engine* — caught that, which is precisely what the guard is for. The bit-identity claims never failed |
+| `the_paths_come_out_interleaved_and_sum_to_the_mix` | destructured three named paths | sums over `run.paths`, **and** asserts the starter path is exactly zero | It had to change for the count; what was added is the property the whole design rests on, asserted in the harness every acoustic figure is measured through |
+| `keeps the three paths sample-aligned through the resampler` | compared two named channels against the first | loops over every path | A named three cannot cover a fourth |
+| `each radiating path can be heard on its own` (browser) | muted three paths and called it silence | mutes four | It passed unchanged, because the starter is silent at a running operating point — which means it would have gone on passing while quietly no longer testing what it says |
+
+**And one measurement was silently not being printed.** `audio_probe` reported
+the exhaust-over-block balance through `if let [exhaust, block, body] =
+levels_db[..]`, which stops matching the moment a fourth path exists — and stops
+printing the line *without failing*. It was caught by reading the output rather
+than by a test, which is the wrong way round; it now indexes by path name, and
+the balance row is joined by an `Exhaust over body` row that had been computed
+and discarded all along.
+
+**Two figures in Results moved that this milestone did not move.** The
+**Results → Sound** table was carrying milestone 12's numbers: milestone 15
+reshaped the block modal bank, which moved every column, and the table was not
+re-run. It has been now, from the same `audio_probe` output the diff above was
+taken from. `light-900` reads 6.4 dB of exhaust over block and clears a floor
+recorded as failing for three milestones.
+
+**Then it was listened to, and the listening pass changed five calibrated
+values.** The reports and what they measured as are in **What listening has said
+so far**; what they cost in verification terms is this:
+
+| Value | Was | Now |
+|---|---:|---:|
+| `audio.starter_modes` | 850 / 1750 / 3100 Hz, Q 8–12 | **210 / 430 / 850 / 1750 Hz, Q 4.5–7** |
+| `audio.starter_gain` | 0.35 | **0.25** |
+| `starter.seating_impulse` | — (implicitly 1.0) | **0.12** |
+| `audio.output_gain` | — (implicitly 1.0) | **1.41**, a common +3.0 dB |
+| default playback volume | 0.6 | **1.0** |
+
+`audio.output_gain` and `starter.seating_impulse` are both new parameters, and
+both exist to separate two things that had been sharing one number. The output
+gain separates *level* from *balance*, so 3 dB could be added without
+re-deriving four calibrations that are each about a ratio. The seating impulse
+separates the engagement impact from the running mesh, which were normalised
+against different quantities and so could not be traded against each other at
+all.
+
+**One test changed because of the level raise, and it is worth reading.**
+`the_turbine_insertion_loss_reaches_the_output` compares the top end of the
+exhaust note with 0 dB and 30 dB of turbine loss and requires a factor of two
+between them. At the new level and half pedal it read **1.93**, because both runs
+now sit on the limiter knee and the louder of the two is turned down more — so
+the ratio between them is compressed by the ceiling rather than by the turbine.
+The claim is about a transfer function and a transfer function does not depend on
+load, so the test now measures at quarter pedal, where neither run reaches the
+knee. Nothing about the duct changed, and the failure was a correct report about
+where the measurement was being taken.
+
+**And one experiment was reverted rather than shipped.** Extending the body modal
+bank down to 40 Hz, to give the cranking thump somewhere to radiate, lifted the
+cranking body path 5.5 dB and took governed idle's `150 Hz–15 kHz` share from
+37.8% to 27.5% — failing the ≥ 35% criterion, and making the engine measurably
+harder to hear on ordinary hardware while adding content no ordinary speaker
+reproduces. The weight sweep is under **Known deficits**, along with what to do
+instead.
 
 ### Verification, milestone 15
 
@@ -2501,11 +2903,14 @@ HTML.
 root *and* under any subpath. Set `VITE_BASE`, or pass Vite's own `--base`, for
 hosts needing an absolute prefix.
 
-Four probes sit behind the figures above:
+Five probes sit behind the figures above:
 
 ```bash
 cargo run --release -p sim-core --example sweep         # the fuelled peaks
 cargo run --release -p sim-core --example brake_sweep   # the brake's published anchors
+cargo run --release -p sim-core --example starter_sweep # the starter's published power,
+                                                        # and the cranking speed it
+                                                        # reaches against the engine
 cargo run --release -p sim-core --example audio_probe   # every steady scenario, measured
 cargo run --release -p sim-core --example audio_capture # every scenario, as WAV files
 
@@ -2514,7 +2919,7 @@ cargo run --release -p sim-core --example audio_capture -- --only idle,brake-130
 ```
 
 `audio_probe` reports levels, where the energy sits, how much of it is in the
-firing orders, whether it is a pulse train or a tone, and which of the three paths
+firing orders, whether it is a pulse train or a tone, and which of the four paths
 is in front — and prints the metrics' readings for a tone, a modulated tone and a
 pulse train first, so the scale the engine figures sit on is visible. It reads the
 paths as channels of one run rather than re-running the engine with gains zeroed,

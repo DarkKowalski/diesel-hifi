@@ -39,6 +39,7 @@ import processorUrl from '../audio/exhaust-processor.js?url';
 import {
   AUDIO_PATHS,
   CABIN_SPEC,
+  allPathsEnabled,
   generateImpulseResponse,
   type AudioPath,
   type AudioStage,
@@ -363,13 +364,12 @@ export class AudioEngine {
   private waveform: Float32Array | null = null;
   private status: AudioStatus = { ...SILENT };
   private listener: AudioStatusListener | null = null;
-  private volume = 0.6;
+  // Unity, matching `SimStore.audioVolume`. The store sets it before the graph
+  // is built, so this is only the value between construction and that call; it
+  // used to be 0.6 in both places, which meant two literals for one default.
+  private volume = 1.0;
   private stage: AudioStage = 'cockpit';
-  private pathEnabled: Record<AudioPath, boolean> = {
-    exhaust: true,
-    block: true,
-    body: true,
-  };
+  private pathEnabled: Record<AudioPath, boolean> = allPathsEnabled();
 
   /**
    * Gain the whole engine chain passes through, for the A/B switch.

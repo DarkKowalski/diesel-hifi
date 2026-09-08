@@ -7,7 +7,7 @@
  */
 
 import { AudioEngine, type AudioPath, type AudioStage, type AudioStatus } from './audioEngine';
-import { AUDIO_PATHS } from './cabin';
+import { AUDIO_PATHS, allPathsEnabled } from './cabin';
 import { initialCompareState, type ClipSlot, type CompareSource, type CompareState } from './compare';
 import { SimClient, SimClientError, type ReadyInfo } from './simClient';
 import {
@@ -51,7 +51,22 @@ class SimStore {
   audioReceived = $state(0);
   audioDeviceRateHz = $state(0);
   audioSampleRateHz = $state(0);
-  audioVolume = $state(0.6);
+  /**
+   * Master output level, applied to whichever stage is selected.
+   *
+   * 1.0 rather than 0.6, on a listening report that everything was too quiet.
+   * 0.6 was throwing away 4.4 dB before anything reached the device, on top of
+   * the 4.7 dB the cab chain costs a quiet passage — its input trim and makeup
+   * multiply to 0.584, and its compressor is inert below −18 dBFS, which is
+   * every operating point below cruise. A start measured −29.7 dBFS at the
+   * boundary and arrived at −38.8.
+   *
+   * Safe at unity because the boundary contract already bounds every sample to
+   * `[−1, 1]` and the limiter holds the summed mix to the 0.85 knee, so the raw
+   * stage peaks at 0.85 and the cab stage at about 0.50. It applies to both
+   * stages equally, which is what keeps it out of the level match between them.
+   */
+  audioVolume = $state(1.0);
   audioStarting = $state(false);
   /**
    * Listening position. `raw` is the tailpipe signal the solver produces;
@@ -62,18 +77,17 @@ class SimStore {
   /**
    * Which radiating paths are audible.
    *
-   * A listening control, like the stage: the solver produces all three whatever
+   * A listening control, like the stage: the solver produces every path whatever
    * this says, and muting one changes no state. It is here because the balance
    * between the paths is what decides whether the engine sounds like a truck,
    * and before they crossed the boundary separately the only way to hear one was
    * to edit the engine configuration and rebuild. The balance itself is still
    * calibrated against `audio_probe` rather than by ear.
+   *
+   * The starter is the one path that is silent at every steady operating point,
+   * so soloing it is only informative during a start or a stop.
    */
-  audioPaths = $state<Record<AudioPath, boolean>>({
-    exhaust: true,
-    block: true,
-    body: true,
-  });
+  audioPaths = $state<Record<AudioPath, boolean>>(allPathsEnabled());
   /**
    * Level-matched A/B against local recordings.
    *

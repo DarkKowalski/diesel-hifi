@@ -124,16 +124,26 @@ fn a_held_phase_holds_and_a_free_one_does_not_have_to() {
 fn the_paths_come_out_interleaved_and_sum_to_the_mix() {
     let config = config();
     let run = scenario::run(&config, &brief(Some(1_200.0))).expect("runs");
-    assert_eq!(run.paths, 3, "exhaust, block, body");
+    assert_eq!(run.paths, 4, "exhaust, block, body, starter");
     let mix = run.summed();
-    let (exhaust, block, body) = (run.path(0), run.path(1), run.path(2));
+    let tracks: Vec<Vec<f32>> = (0..run.paths).map(|p| run.path(p)).collect();
     assert_eq!(mix.len(), run.frame_count());
     for i in 0..mix.len() {
-        assert!(
-            (mix[i] - (exhaust[i] + block[i] + body[i])).abs() < 1e-6,
-            "frame {i} does not add up"
-        );
+        let summed: f32 = tracks.iter().map(|t| t[i]).sum();
+        assert!((mix[i] - summed).abs() < 1e-6, "frame {i} does not add up");
     }
+
+    // This scenario is a held speed with the pinion out, so the starter path
+    // must be *exactly* silent rather than merely quiet. It is the property the
+    // whole fourth path rests on: the mix at every fuelled operating point is
+    // bit-identical to the three-path model, because adding zero is adding
+    // nothing. `tests/acoustics.rs` asserts the consequence; this asserts the
+    // cause, in the harness every acoustic figure is measured through.
+    let starter = &tracks[3];
+    assert!(
+        starter.iter().all(|s| *s == 0.0),
+        "the starter path must be exactly zero with the pinion retracted"
+    );
 }
 
 #[test]

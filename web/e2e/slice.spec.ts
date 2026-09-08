@@ -639,14 +639,22 @@ test('each radiating path can be heard on its own', async ({ page }) => {
   expect(bodyOnly.low, 'and it should still be carrying the low end').toBeGreaterThan(0);
 
   // Everything muted is silence, which is the check that these are really the
-  // whole signal between them and not three views of something else.
+  // whole signal between them and not several views of something else.
+  //
+  // The starter is muted too, and it is worth saying why it changes nothing: its
+  // pinion is retracted at any running operating point, so it emits exactly zero
+  // and this assertion would hold whether it were muted or not. Muting it
+  // anyway keeps the claim honest — "every path" has to mean every path, or the
+  // day the starter stops being silent here this test starts lying rather than
+  // failing.
   await page.getByTestId('audio-path-body').click();
+  await page.getByTestId('audio-path-starter').click();
   await page.waitForTimeout(700);
   const muted = await measureOutput(page);
   expect(muted.levelDb, 'muting every path must leave silence').toBeLessThan(all.levelDb - 20);
 
   // And it comes back.
-  for (const path of ['exhaust', 'block', 'body']) {
+  for (const path of ['exhaust', 'block', 'body', 'starter']) {
     await page.getByTestId(`audio-path-${path}`).click();
     await expect(page.getByTestId(`audio-path-${path}`)).toHaveAttribute('aria-pressed', 'true');
   }

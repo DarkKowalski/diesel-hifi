@@ -24,6 +24,7 @@ pub mod heat_transfer;
 pub mod ignition_delay;
 pub mod injection;
 pub mod manifold;
+pub mod starter;
 pub mod step;
 pub mod torque;
 pub mod turbo;
@@ -177,27 +178,14 @@ fn rest_exhaust(cfg: &crate::config::EngineConfig) -> manifold::State {
     }
 }
 
-/// The three quantities the radiating paths were driven by on the last step.
+/// The quantities the radiating paths were driven by on the last step.
 ///
-/// Cached the way [`brake::Command`] and [`driveline::Output`] are: resolved
-/// fresh every step and kept only so something outside the loop can read it.
-/// Three stores per step, no allocation, nothing branched on.
-///
-/// It exists because **a source cannot be inspected through its own filters.**
-/// Each path is a resonator bank or a duct away from the sample that leaves the
-/// boundary, and both smear a one-step defect across tens of milliseconds — so
-/// asking whether the drive is continuous has to be asked of the drive.
-/// `examples/trace_probe.rs` is what asks it.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct AcousticForcing {
-    /// Volume velocity at the tailpipe mouth: what the exhaust path radiates.
-    pub mouth_volume_velocity: f64,
-    /// Summed cylinder pressure over ambient: what shakes the block.
-    pub pressure_sum: f64,
-    /// Gas plus pumping torque over rated torque: what the engine does to its
-    /// mounts.
-    pub torque_fraction: f64,
-}
+/// **This is the same type `Acoustics::push` takes**, and that is deliberate
+/// rather than tidy: it used to be a parallel set of loose arguments, and a
+/// probe reading a second description of the drive is a probe that can report
+/// discontinuities in the copy. Now there is one description and the reported
+/// value *is* the argument. See [`acoustics::Forcing`].
+pub use acoustics::Forcing as AcousticForcing;
 
 /// Instantaneous torque terms, refreshed every step.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -368,6 +356,14 @@ pub struct SimState {
     pub(crate) brake: brake::Command,
     pub(crate) driveline: driveline::Output,
 
+    /// Where the starter pinion is, and what it did last step.
+    ///
+    /// The state is genuinely integrated — the engagement ramps over
+    /// milliseconds — unlike `brake` and `driveline` above, which are cached
+    /// only so the snapshot can report them.
+    pub(crate) starter: starter::StarterState,
+    pub(crate) starter_out: starter::StarterOutput,
+
     pub(crate) fuel_demand_mg: f64,
     pub(crate) last_fuel_charge_mg: f64,
     pub(crate) last_variant: injection::Variant,
@@ -436,6 +432,8 @@ impl Simulation {
             ),
             brake: brake::Command::default(),
             driveline: driveline::Output::default(),
+            starter: starter::StarterState::default(),
+            starter_out: starter::StarterOutput::default(),
             fuel_demand_mg: 0.0,
             last_fuel_charge_mg: 0.0,
             last_variant: injection::Variant::Standard,
@@ -511,6 +509,11 @@ impl Simulation {
         state.exhaust_system.reset();
         state.brake = brake::Command::default();
         state.driveline = driveline::Output::default();
+        // A reset engine has its pinion out. Carrying an engagement across a
+        // reset would hand the acoustic path a standing mesh force in a freshly
+        // reset engine, which is the click `Acoustics::reset` exists to avoid.
+        state.starter.reset();
+        state.starter_out = starter::StarterOutput::default();
         state.fuel_demand_mg = 0.0;
         state.last_fuel_charge_mg = 0.0;
         state.last_variant = injection::Variant::Standard;
@@ -776,13 +779,28 @@ impl Simulation {
             return RunState::Fault;
         }
         let rpm = self.rpm();
-        if self.state.controls.ignition && rpm >= self.config.config().load.starter_cutout_rpm {
+        // `Cranking` now means the pinion is in mesh, which is what the word
+        // means. It used to mean "below the starter taper's cut-out speed", and
+        // because that speed was also where the taper reached zero it could not
+        // be moved without changing the torque: the result was that `run-state`
+        // read `running` while the starter was still dragging the crank through
+        // a few hundred rpm. Loading an engine there very nearly stalls it, and
+        // the browser suite spent six tests finding that out.
+        if self.state.starter.is_engaged() {
+            RunState::Cranking
+        } else if self.state.controls.ignition && rpm >= self.config.config().starter.disengage_rpm
+        {
             RunState::Running
-        } else if self.state.controls.starter || rpm > 1.0 {
+        } else if rpm > 1.0 {
             RunState::Cranking
         } else {
             RunState::Stopped
         }
+    }
+
+    /// What the starter is doing: torque, current, terminal volts, engagement.
+    pub fn starter(&self) -> starter::StarterOutput {
+        self.state.starter_out
     }
 
     /// Mean fresh air trapped per cylinder at the last intake valve closing, kg.
@@ -849,6 +867,9 @@ impl Simulation {
             torque_friction_nm: state.report.torque_friction_nm,
             torque_accessory_nm: state.report.torque_accessory_nm,
             torque_starter_nm: state.report.torque_starter_nm,
+            starter_current_a: state.starter_out.current_a,
+            starter_terminal_voltage_v: state.starter_out.terminal_voltage_v,
+            starter_engagement: state.starter_out.engagement,
             torque_load_nm: state.report.torque_load_nm,
             torque_net_nm: state.report.torque_net_nm,
 

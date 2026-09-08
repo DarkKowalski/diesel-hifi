@@ -68,7 +68,7 @@ use sim_core::{EngineConfig, ValidatedConfig};
 /// particular working tree, not something to commit and compare by eye later.
 const DEFAULT_OUT: &str = "target/audio-capture";
 
-const PATH_NAMES: [&str; 3] = ["exhaust", "block", "body"];
+const PATH_NAMES: [&str; 4] = ["exhaust", "block", "body", "starter"];
 
 /// Bands the acceptance criteria are written against, and which the manifest
 /// records for every track so a comparison has them without re-analysing.
@@ -232,8 +232,18 @@ fn capture(
 
     let mut tracks = serde_json::Map::new();
     tracks.insert("mix".into(), measure(&mix, rate, f0));
+    let mut silent: Vec<&str> = Vec::new();
     for (index, name) in PATH_NAMES.iter().enumerate().take(run.paths) {
         let samples = run.path(index);
+        // No file for a path that is exactly silent, on the same grounds the
+        // unsaturated set is conditional below: a `starter.wav` full of zeros in
+        // every steady capture directory is a file someone will open and draw a
+        // conclusion from. The manifest says which paths were silent instead,
+        // which is the information without the artefact.
+        if samples.iter().all(|s| *s == 0.0) {
+            silent.push(name);
+            continue;
+        }
         write_wav(&dir.join(format!("{name}.wav")), &samples, rate)?;
         tracks.insert((*name).to_string(), measure(&samples, rate, f0));
     }
@@ -246,6 +256,9 @@ fn capture(
     let saturated = smallest_gain < 0.999;
     if saturated {
         for (index, name) in PATH_NAMES.iter().enumerate().take(run.paths) {
+            if silent.contains(name) {
+                continue;
+            }
             write_wav(
                 &dir.join(format!("{name}-unsaturated.wav")),
                 &recovered.tracks[index],
@@ -312,6 +325,9 @@ fn capture(
         "seed": run.seed,
         "sampleRateHz": rate,
         "paths": PATH_NAMES[..run.paths].to_vec(),
+        // Which paths had nothing in them at all, so a missing WAV is a
+        // statement rather than an omission.
+        "silentPaths": silent,
         "chunkSteps": scenario::CHUNK_STEPS,
         "frames": run.frame_count(),
         "durationS": round(run.frame_count() as f64 / rate, 4),

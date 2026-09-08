@@ -59,7 +59,7 @@ const OCTAVES: [(&str, f64, f64); 10] = [
     ("10k-20k", 10_000.0, f64::INFINITY),
 ];
 
-const PATH_NAMES: [&str; 3] = ["exhaust", "block", "body"];
+const PATH_NAMES: [&str; 4] = ["exhaust", "block", "body", "starter"];
 
 /// Report one scenario run.
 fn report(run: &ScenarioRun, cylinders: usize) {
@@ -163,6 +163,15 @@ fn report(run: &ScenarioRun, cylinders: usize) {
     let mut levels_db: Vec<f64> = Vec::new();
     for (index, name) in PATH_NAMES.iter().enumerate() {
         let trace = run.path(index);
+        // A path that is exactly silent is reported as silent rather than as
+        // `-inf dBFS` beside a row of NaN band shares. The starter is silent at
+        // every steady operating point by construction — its pinion is out —
+        // and a share of nothing is not a small share, it is undefined.
+        if trace.iter().all(|s| *s == 0.0) {
+            levels_db.push(f64::NEG_INFINITY);
+            println!("             {name:>8}: silent (not engaged at this operating point)");
+            continue;
+        }
         let spectrum = Spectrum::of(&trace, run.sample_rate_hz);
         let bands: Vec<String> = BANDS
             .iter()
@@ -176,11 +185,24 @@ fn report(run: &ScenarioRun, cylinders: usize) {
             spectrum.comb_share(f0, 4),
         );
     }
-    // The balance as a signed number rather than as two lines to subtract in
-    // your head. The exhaust carries the firing orders and the block carries the
+    // The balance as a signed number rather than as lines to subtract in your
+    // head. The exhaust carries the firing orders and the block carries the
     // clatter, so a block sitting in front of the exhaust is a small engine
     // however the bands come out.
-    if let [exhaust, block, body] = levels_db[..] {
+    //
+    // Indexed rather than destructured. This used to be `if let [exhaust,
+    // block, body] = levels_db[..]`, which stops matching the moment a fourth
+    // path exists — and stops printing the line without failing, which is the
+    // worst way for a measurement to go missing.
+    let named = |name: &str| {
+        PATH_NAMES
+            .iter()
+            .position(|p| *p == name)
+            .and_then(|i| levels_db.get(i).copied())
+    };
+    if let (Some(exhaust), Some(block), Some(body)) =
+        (named("exhaust"), named("block"), named("body"))
+    {
         println!(
             "             {:>8}: exhaust leads block by {:>5.1} dB, body by {:>5.1} dB",
             "balance",

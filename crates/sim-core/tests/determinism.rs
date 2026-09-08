@@ -131,7 +131,15 @@ fn a_different_seed_is_accepted_and_still_reproducible() {
 
 #[test]
 fn batching_does_not_change_the_result() {
-    // advance(2000) must equal 20 x advance(100) must equal 2000 x advance(1).
+    // advance(4000) must equal 40 x advance(100) must equal 4000 x advance(1).
+    //
+    // 4000 steps is 100 ms, and the length is load-bearing rather than
+    // arbitrary. It used to be 2000, which is 50 ms, and that was long enough
+    // only while the starter delivered its full torque on the step the key was
+    // turned. A real solenoid seats the pinion first and closes the main
+    // contacts 60 ms later, so at 50 ms the crank has not moved and the guard
+    // below — which exists precisely so this comparison cannot pass on an
+    // engine that never turned — was reporting exactly what it is for.
     fn advance_in_batches(batch: u32, total: u32) -> Snapshot {
         let mut engine = Engine::builtin().expect("catalog builds");
         engine.reset(ResetOptions::default()).expect("reset");
@@ -155,12 +163,15 @@ fn batching_does_not_change_the_result() {
         snapshot
     }
 
-    let single = advance_in_batches(2_000, 2_000);
-    assert_eq!(single, advance_in_batches(100, 2_000));
-    assert_eq!(single, advance_in_batches(1, 2_000));
+    let single = advance_in_batches(4_000, 4_000);
+    assert_eq!(single, advance_in_batches(100, 4_000));
+    assert_eq!(single, advance_in_batches(1, 4_000));
     assert!(
         single.rpm > 0.0,
-        "the batching test must actually turn the engine"
+        "the batching test must actually turn the engine, and it read {:.2} rpm \
+         with the starter drawing {:.0} A",
+        single.rpm,
+        single.starter_current_a
     );
 }
 

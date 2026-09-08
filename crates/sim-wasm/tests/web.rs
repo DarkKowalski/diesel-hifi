@@ -113,8 +113,18 @@ fn exposes_provenance_across_the_boundary() {
     assert!(number(&report, "calibrated_count") > 0.0);
     let entries = js_sys::Array::from(&get(&report, "entries"));
     assert!(entries.length() > 40);
+    // At least one source, and every one carrying a title and a scope across the
+    // boundary — rather than a fixed count. The engine's manual was the only
+    // source until the starter arrived with a Bosch catalogue entry of its own,
+    // and a count was never what this was checking.
     let sources = js_sys::Array::from(&get(&report, "sources"));
-    assert_eq!(sources.length(), 1);
+    assert!(sources.length() >= 1);
+    for index in 0..sources.length() {
+        let source = sources.get(index);
+        assert!(!get(&source, "id").as_string().unwrap().is_empty());
+        assert!(!get(&source, "title").as_string().unwrap().is_empty());
+        assert!(!get(&source, "scope").as_string().unwrap().is_empty());
+    }
 }
 
 #[wasm_bindgen_test]
@@ -267,11 +277,11 @@ fn audio_crosses_the_boundary_one_frame_per_step() {
     // 25 us per step is a 40 kHz sample rate.
     assert!((handle.audio_sample_rate() - 40_000.0).abs() < 1.0e-6);
 
-    // Three radiating paths interleaved into every frame: exhaust, block, body.
-    // They cross separately because they do not reach a listener by the same
-    // route, and the browser gives each its own cab transfer.
+    // Four radiating paths interleaved into every frame: exhaust, block, body,
+    // starter. They cross separately because they do not reach a listener by the
+    // same route, and the browser gives each its own cab transfer.
     let paths = handle.audio_path_count() as usize;
-    assert_eq!(paths, 3, "exhaust, block and body");
+    assert_eq!(paths, 4, "exhaust, block, body and starter");
 
     handle
         .set_controls(controls(0.5, 0.0, true, true))

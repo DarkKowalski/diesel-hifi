@@ -721,7 +721,27 @@ pub(super) fn step(
             .clamp(0.0, 1.0);
     }
 
-    // --- acoustic sample, one per step, all three radiating paths ---
+    // --- the starter ---
+    //
+    // Evaluated here, above the acoustic sample, because it is a radiating
+    // source and not only a torque. It used to sit below with the other torque
+    // terms, where nothing acoustic could reach it.
+    //
+    // `theta_new` rather than the old angle: the mesh phase has to be the angle
+    // this step arrives at, so that the tooth contacts line up with the crank
+    // motion the same step integrates.
+    let starter_out = state.starter.advance(
+        &cfg.starter,
+        state.controls.starter,
+        rpm,
+        state.omega_rad_per_s,
+        theta_new,
+        dt,
+    );
+    state.starter_out = starter_out;
+    let torque_starter_nm = starter_out.crank_torque_nm;
+
+    // --- acoustic sample, one per step, all four radiating paths ---
     //
     // Normalising by ambient makes the structural forcing dimensionless and
     // keeps the calibrated gain from carrying a unit conversion inside it. The
@@ -765,23 +785,24 @@ pub(super) fn step(
         state.exhaust.temperature_k,
         dt,
     );
-    state.acoustics.push(
-        &cfg.audio,
-        radiated,
-        structural_forcing,
-        torque_fraction,
-        cfg.exhaust_system.radiation_cutoff_hz,
-        dt,
-    );
-    // The same three arguments, kept where something outside the loop can read
-    // them. Three stores, no branch, no allocation. What they are for is asking
-    // whether the *drive* is continuous — a question the emitted sample cannot
-    // answer, because every path filters before it gets there.
+    // Built once and used twice: pushed into the acoustic stage, and kept where
+    // something outside the loop can read it. One store, no branch, no
+    // allocation — and, more to the point, one *description*. What it is for is
+    // asking whether the drive is continuous, which the emitted sample cannot
+    // answer because every path filters before it gets there, and a probe
+    // reading a mirrored copy of the drive could only ever answer for the copy.
     state.forcing = AcousticForcing {
         mouth_volume_velocity: radiated,
         pressure_sum: structural_forcing,
         torque_fraction,
+        starter_mesh: starter_out.mesh_forcing,
     };
+    state.acoustics.push(
+        &cfg.audio,
+        &state.forcing,
+        cfg.exhaust_system.radiation_cutoff_hz,
+        dt,
+    );
 
     state.peak_pressure_pa_cycle = state.peak_pressure_pa_cycle.max(step_peak_pressure_pa);
     state.peak_pressure_pa_session = state.peak_pressure_pa_session.max(step_peak_pressure_pa);
@@ -796,7 +817,6 @@ pub(super) fn step(
         derived.total_displacement_m3,
     );
     let torque_accessory_nm = torque::accessory_torque_nm(&cfg.load, state.omega_rad_per_s);
-    let torque_starter_nm = torque::starter_torque_nm(&cfg.load, state.controls.starter, rpm);
     let torque_load_nm = state.controls.load_torque_nm;
 
     // --- driveline ---

@@ -31,3 +31,15 @@ export function degrees(radians: number): string {
 export function kelvin(value: number): string {
   return value.toFixed(0);
 }
+
+export function amps(value: number): string {
+  return value.toFixed(0);
+}
+
+export function volts(value: number): string {
+  return value.toFixed(1);
+}
+
+export function percent(fraction: number): string {
+  return (fraction * 100).toFixed(0);
+}

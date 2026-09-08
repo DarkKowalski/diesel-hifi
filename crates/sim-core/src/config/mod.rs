@@ -3,40 +3,6 @@
 //! All simulation inputs live here. The solver reads only [`ValidatedConfig`];
 //! it never embeds engine-specific calibration and never branches on an engine
 //! ID (README "Configuration and provenance").
-//!
-//! # Schema history
-//!
-//! - **v1** (Milestone 1) — placeholder combustion: a single cosine burn with
-//!   lumped polytropic exponents.
-//! - **v2** (Milestone 2) — injection, ignition delay, double-Wiebe heat release,
-//!   Woschni wall heat transfer, temperature-dependent specific heats, and a
-//!   prescribed boost schedule. The placeholder combustion fields were removed
-//!   rather than extended, which is why the version was bumped rather than the
-//!   sections grown additively.
-//! - **v3** (Milestone 3) — wastegate turbocharger and cooled EGR dynamics, plus
-//!   the exhaust acoustic source. Boost stops being an input: the prescribed
-//!   response, charge-temperature fit, and back-pressure fit are removed because
-//!   a compressor, an intercooler, and a turbine now compute them.
-//!   `boost_target_schedule` survives with a more honest meaning — it is the
-//!   ECU's wastegate setpoint, which is what the manual describes the MCM
-//!   regulating to.
-//!
-//! - **v4** (Milestone 4) — the staged decompression engine brake and a rigid
-//!   truck driveline, as two new sections. Nothing is removed this time, but a v3
-//!   document has neither section and `serde` rejects it, so this is still a
-//!   breaking change to the document.
-//!
-//!   The v3 header predicted Milestone 4 would only grow existing sections and
-//!   need no bump. That was wrong in one respect: the brake and the driveline are
-//!   subsystems in their own right, and folding a brake cam contour into
-//!   `valvetrain` or a vehicle mass into `load` would have made both sections
-//!   describe two unrelated things.
-//!
-//! The *shape* of the document has not changed across any of these: same
-//! versioned sections, same provenance rules, same [`Schedule`] type, and an
-//! additive snapshot. What changes is which calibration fields exist, because a
-//! field that no longer describes anything should not sit in a provenance table
-//! that claims to describe the model.
 
 pub mod paths;
 pub mod provenance;
@@ -50,7 +16,7 @@ pub use schedule::Schedule;
 pub use validate::ValidatedConfig;
 
 /// The only configuration schema version understood by this build.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Identity and display metadata. Manufacturer names are factual references only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -475,14 +441,129 @@ pub struct Governor {
     pub overspeed_cutoff_rpm: f64,
 }
 
-/// Accessory, external load, and starter torque.
+/// Accessory and external load torque.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Load {
     pub accessory_torque_constant_nm: f64,
     pub accessory_torque_per_rad_s: f64,
     pub max_external_load_nm: f64,
-    pub starter_torque_nm: f64,
-    pub starter_cutout_rpm: f64,
+}
+
+/// The starter motor: a series-wound DC machine geared to the flywheel.
+///
+/// This section describes a specific piece of hardware, which is why it names a
+/// voltage and a tooth count rather than a torque. It used to be two fields in
+/// [`Load`] — a stall torque at the crank and a speed for it to taper to — and
+/// that shape could not express a starter at all. It had no gearing, so the
+/// tooth-mesh rate a starter whines at was nowhere in the model; and its
+/// 1500 N m tapering to zero at 300 rpm peaks at 11.8 kW of mechanical output at
+/// the crank, which is more than the largest machine in this family can deliver.
+///
+/// ## Why a series machine and not a torque curve
+///
+/// A linear torque-speed line is the right *shape* — a series motor's very
+/// nearly is — and it is what the two old fields described. What it cannot do is
+/// sag. A starter dragging a 12.8 litre six draws around a thousand amps, and a
+/// battery with real internal resistance answers that by dropping its terminal
+/// voltage; as each cylinder comes up on compression the crank slows, back-EMF
+/// falls, current rises, the terminals sag further. That is the labouring you
+/// hear in a heavy diesel start, and it is a consequence of the circuit rather
+/// than a shape anything schedules.
+///
+/// Armature inductance is neglected, which makes the circuit algebraic — see
+/// `sim::starter`, where it solves as a quadratic rather than as another state
+/// variable.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Starter {
+    /// Nominal system voltage, before any droop under load.
+    pub system_voltage_v: f64,
+    /// The machine's published maximum mechanical output.
+    ///
+    /// **A validation target, never a solver input.** Nothing in the solver reads
+    /// it: the electrical parameters below produce whatever power they produce,
+    /// and `starter_sweep` measures whether that lands on this figure. The engine
+    /// brake's published anchors are treated the same way and for the same
+    /// reason — a model allowed to read its own answer proves nothing.
+    pub rated_power_w: f64,
+    /// Teeth on the starter pinion.
+    pub pinion_teeth: u32,
+    /// Teeth on the flywheel ring gear.
+    pub ring_gear_teeth: u32,
+    /// Total circuit resistance: battery internal, cables, brushes and armature.
+    ///
+    /// The single most important calibrated value here. It sets stall current,
+    /// and with it both the stall torque and how far the terminals sag.
+    pub circuit_resistance_ohm: f64,
+    /// Torque per ampere at low current, before the field saturates.
+    pub torque_constant_nm_per_a2: f64,
+    /// Current at which the field is half its unsaturated value.
+    ///
+    /// A series machine's flux grows with its own current, so torque would go as
+    /// the square of current for ever. Iron saturates instead, and without this
+    /// the stall torque comes out several times what the machine can make.
+    pub field_saturation_a: f64,
+    /// Armature windage and brush drag, per rad/s of motor speed.
+    ///
+    /// Small, and load-bearing out of proportion to its size: a series machine
+    /// with no internal drag has no finite no-load speed. This is what makes the
+    /// cranking speed an outcome rather than a parameter.
+    pub internal_drag_nm_per_rad_s: f64,
+    /// Efficiency of the pinion-to-ring-gear mesh.
+    pub mesh_efficiency: f64,
+    /// How long the pinion takes to seat in the ring gear.
+    ///
+    /// The fast end of the engagement, and what a start clunks with.
+    pub mesh_contact_time_s: f64,
+    /// Delay between the pinion seating and the main current being released.
+    ///
+    /// The solenoid engages in two stages so that the pinion is already in mesh
+    /// and turning slightly before full current arrives; doing it the other way
+    /// round is what wears ring gears out.
+    pub pre_engage_time_s: f64,
+    /// Speed at which the solenoid drops out and the pinion retracts.
+    ///
+    /// Set above cranking speed and below idle, so a start relay releases when
+    /// the engine catches. Also the threshold between `Cranking` and `Running`:
+    /// that used to be the old starter taper's cut-out speed, so `run-state`
+    /// read `running` while the starter was still dragging the crank.
+    pub disengage_rpm: f64,
+    /// Fraction of a tooth pitch over which one tooth comes into contact.
+    ///
+    /// The acoustic counterpart of a valve's ramp width, and it matters for the
+    /// same reason: spread the contact over the whole pitch and the mesh force is
+    /// a smooth hum with no harmonic content, which is not what a starter sounds
+    /// like. A tooth meshes quickly and the whine is buzzy.
+    pub mesh_contact_fraction: f64,
+    /// Size of the seating impact against the running tooth mesh.
+    ///
+    /// The clunk, and it needs its own number because the two halves of the
+    /// starter's sound are normalised against different things. The mesh drive
+    /// is transmitted torque over *stall* torque, and stall is a locked-rotor
+    /// figure the machine never sees in service: cranking transmits about 114 of
+    /// 964 N·m, so the mesh term runs at about 0.12. The seating bump is the
+    /// derivative of a ramp and arrives at `pi/2`. Left to itself that makes the
+    /// engagement **thirteen times** the whine, which a listener hears as a short
+    /// bark with no starter behind it.
+    ///
+    /// Physically it should be the smaller of the two anyway. At first contact
+    /// the crank is stationary and the main contacts have not closed, so the
+    /// pinion slides into mesh barely turning — there is very little energy in
+    /// the impact. A loud clunk there is the arithmetic, not the hardware.
+    pub seating_impulse: f64,
+}
+
+impl Starter {
+    /// Reduction from the pinion shaft to the crankshaft.
+    ///
+    /// Derived from the two tooth counts rather than configured, so it cannot
+    /// disagree with the mesh rate the acoustic path uses.
+    #[inline]
+    pub fn gear_ratio(&self) -> f64 {
+        if self.pinion_teeth == 0 {
+            return 0.0;
+        }
+        f64::from(self.ring_gear_teeth) / f64::from(self.pinion_teeth)
+    }
 }
 
 /// Chen-Flynn style friction mean effective pressure terms.
@@ -622,6 +703,20 @@ pub struct StructuralMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioCalibration {
     pub reference_spl_db: f64,
+    /// Common level on every path, ahead of the limiter.
+    ///
+    /// The four path gains below say the **balance**; this says how loud the
+    /// result is. They were one and the same until a listening report that
+    /// everything was too quiet, and separating them is what let the level move
+    /// without re-deriving four calibrations that are each about a ratio.
+    ///
+    /// It is exactly equivalent to scaling all four by the same factor, and that
+    /// is the point: applied in common it cannot change any balance, any band
+    /// share or any comb share. What it does change is where the limiter
+    /// engages, so it is not free — the loud end of the range already sits on
+    /// the knee and gains almost nothing, while the quiet end gains all of it.
+    /// See the provenance note for what that costs.
+    pub output_gain: f64,
     pub exhaust_gain: f64,
     /// Rumble filter below the audible band, protecting output headroom.
     pub highpass_cutoff_hz: f64,
@@ -644,6 +739,18 @@ pub struct AudioCalibration {
     pub body_gain: f64,
     /// Modal bank the fluctuating crank torque shakes through the mounts.
     pub body_modes: Vec<StructuralMode>,
+    /// Level of the starter's mesh path against the exhaust path.
+    ///
+    /// Only ever audible while the pinion is in mesh. With it retracted the path
+    /// emits exactly zero, which is what keeps every steady operating point
+    /// bit-identical to the three-path model this replaced.
+    pub starter_gain: f64,
+    /// Modal bank the pinion's tooth-mesh force rings.
+    ///
+    /// The starter nose cone and the bell housing it bolts to: aluminium, much
+    /// smaller and much less massive than the block, so these sit above the
+    /// structural bank rather than among it.
+    pub starter_modes: Vec<StructuralMode>,
 }
 
 /// Published rated output.
@@ -677,6 +784,7 @@ pub struct EngineConfig {
     pub driveline: Driveline,
     pub governor: Governor,
     pub load: Load,
+    pub starter: Starter,
     pub inertia: Inertia,
     pub limits: Limits,
     pub solver: Solver,
@@ -861,8 +969,21 @@ impl EngineConfig {
             "load.accessory_torque_constant_nm" => self.load.accessory_torque_constant_nm,
             "load.accessory_torque_per_rad_s" => self.load.accessory_torque_per_rad_s,
             "load.max_external_load_nm" => self.load.max_external_load_nm,
-            "load.starter_torque_nm" => self.load.starter_torque_nm,
-            "load.starter_cutout_rpm" => self.load.starter_cutout_rpm,
+
+            "starter.system_voltage_v" => self.starter.system_voltage_v,
+            "starter.rated_power_w" => self.starter.rated_power_w,
+            "starter.pinion_teeth" => f64::from(self.starter.pinion_teeth),
+            "starter.ring_gear_teeth" => f64::from(self.starter.ring_gear_teeth),
+            "starter.circuit_resistance_ohm" => self.starter.circuit_resistance_ohm,
+            "starter.torque_constant_nm_per_a2" => self.starter.torque_constant_nm_per_a2,
+            "starter.field_saturation_a" => self.starter.field_saturation_a,
+            "starter.internal_drag_nm_per_rad_s" => self.starter.internal_drag_nm_per_rad_s,
+            "starter.mesh_efficiency" => self.starter.mesh_efficiency,
+            "starter.mesh_contact_time_s" => self.starter.mesh_contact_time_s,
+            "starter.pre_engage_time_s" => self.starter.pre_engage_time_s,
+            "starter.disengage_rpm" => self.starter.disengage_rpm,
+            "starter.mesh_contact_fraction" => self.starter.mesh_contact_fraction,
+            "starter.seating_impulse" => self.starter.seating_impulse,
 
             "inertia.rotating_inertia_kg_m2" => self.inertia.rotating_inertia_kg_m2,
             "inertia.complete_engine_mass_kg" => self.inertia.complete_engine_mass_kg,
@@ -889,6 +1010,7 @@ impl EngineConfig {
             "exhaust_system.runner_length_max_m" => self.exhaust_system.runner_length_max_m,
 
             "audio.reference_spl_db" => self.audio.reference_spl_db,
+            "audio.output_gain" => self.audio.output_gain,
             "audio.exhaust_gain" => self.audio.exhaust_gain,
             "audio.highpass_cutoff_hz" => self.audio.highpass_cutoff_hz,
             "audio.soft_clip_knee" => self.audio.soft_clip_knee,
@@ -897,6 +1019,8 @@ impl EngineConfig {
             "audio.structural_modes" => return None,
             "audio.body_gain" => self.audio.body_gain,
             "audio.body_modes" => return None,
+            "audio.starter_gain" => self.audio.starter_gain,
+            "audio.starter_modes" => return None,
 
             "rated.max_power_w" => self.rated.max_power_w,
             "rated.max_power_hp" => self.rated.max_power_hp,

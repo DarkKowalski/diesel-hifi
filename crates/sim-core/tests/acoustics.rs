@@ -72,8 +72,8 @@ fn samples_at(
     summed(&frames_at(config, rpm, pedal, coolant_temp_k, steps))
 }
 
-/// Radiating paths interleaved into each frame: exhaust, block, body.
-const PATHS: usize = 3;
+/// Radiating paths interleaved into each frame: exhaust, block, body, starter.
+const PATHS: usize = 4;
 
 /// Run at a held speed and return `steps` interleaved frames.
 ///
@@ -153,6 +153,7 @@ fn path_of(frames: &[f32], path: usize) -> Vec<f32> {
 const EXHAUST: usize = 0;
 const BLOCK: usize = 1;
 const BODY: usize = 2;
+const STARTER: usize = 3;
 
 /// Fundamental frequency of a signal, by autocorrelation.
 ///
@@ -1533,17 +1534,29 @@ fn the_tailpipe_length_reaches_the_output() {
 #[test]
 fn the_turbine_insertion_loss_reaches_the_output() {
     // The term that makes the engine read as turbocharged rather than open-piped.
+    //
+    // Measured at 25% pedal rather than 50%, and the reason is the limiter
+    // rather than the duct. At half pedal and 1200 rpm the summed mix sits on
+    // the 0.85 knee, so the *louder* of the two configurations is turned down
+    // more than the quieter one and the ratio between them is compressed toward
+    // one — measured, it read 1.93 against the 2.0 this asserts, having read
+    // comfortably above it before `audio.output_gain` raised the whole range by
+    // 3 dB. Nothing about the turbine changed.
+    //
+    // The claim here is about a transfer function, and a transfer function does
+    // not depend on load, so the fix is to measure it where the ceiling is not
+    // also in the signal path.
     let muted = samples_at(
         config_with_exhaust(|ex| ex["turbine_insertion_loss_db"] = serde_json::json!(30.0)),
         1_200.0,
-        0.5,
+        0.25,
         293.15,
         40_000,
     );
     let open = samples_at(
         config_with_exhaust(|ex| ex["turbine_insertion_loss_db"] = serde_json::json!(0.0)),
         1_200.0,
-        0.5,
+        0.25,
         293.15,
         40_000,
     );
@@ -2162,4 +2175,384 @@ fn no_gas_exchange_transition_steps_the_radiated_pressure_trace() {
              is white. See Results -> Sound -> What the traces contain"
         );
     }
+}
+
+// --- the starter -------------------------------------------------------------
+//
+// The fourth radiating path, and the odd one out: a separate machine in mesh
+// with the flywheel for a second or two and exactly silent the rest of the
+// time. That silence is the property everything else here depends on, so it is
+// the first thing asserted.
+
+/// The shipped configuration with the `starter` section mutated.
+fn config_with_starter(mutate: impl FnOnce(&mut serde_json::Value)) -> ValidatedConfig {
+    let mut document: serde_json::Value =
+        serde_json::from_str(OM471_9_M3D_JSON).expect("config parses as json");
+    mutate(&mut document["starter"]);
+    EngineConfig::from_json(&document.to_string())
+        .expect("mutated config parses")
+        .validate()
+        .expect("mutated config validates")
+}
+
+#[test]
+fn the_starter_path_is_exactly_silent_when_the_pinion_is_retracted() {
+    // Not "quiet": *exactly* zero, at every sample. Every acceptance figure in
+    // README's Results -> Sound is measured on the mix, and the mix at each of
+    // those operating points has to be bit-identical to the three-path model
+    // that preceded the starter. Adding zero is the only way to add nothing, and
+    // a tolerance here would let a denormal or a settling tail through.
+    //
+    // The bank is linear with zero state and zero input, so this is a property
+    // of the construction rather than a coincidence — and exactly the kind of
+    // property a later change breaks quietly.
+    for rpm in [800.0, 1_400.0] {
+        let frames = frames_at(config(), rpm, 1.0, 293.15, 32_768);
+        let starter = path_of(&frames, STARTER);
+        assert!(
+            starter.iter().all(|s| *s == 0.0),
+            "the starter path must be exactly zero at {rpm} rpm with the pinion \
+             out; it peaked at {}",
+            starter.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+        );
+    }
+}
+
+#[test]
+fn a_running_engine_does_not_carry_the_starter_in_its_mix() {
+    // The consequence of the test above, stated on the *sum* rather than on the
+    // path — because the sum is what every figure in README is measured from,
+    // and because adding four numbers is not the same operation as adding three
+    // even when one of them is zero.
+    let frames = frames_at(config(), 1_400.0, 1.0, 293.15, 8_192);
+    for frame in frames.chunks(PATHS) {
+        let with_starter: f32 = frame.iter().sum();
+        let without: f32 = frame[..STARTER].iter().sum();
+        assert_eq!(
+            with_starter, without,
+            "the four-path mix must equal the three-path mix exactly"
+        );
+    }
+}
+
+#[test]
+fn the_starter_whine_sits_at_the_ring_gear_tooth_rate() {
+    // The whole reason the starter has a gear ratio rather than a torque at the
+    // crank. A pinion driving a ring gear makes one contact per tooth, so the
+    // whine is at `teeth * revolutions per second` and nowhere else.
+    //
+    // The crank is **pinned**, for the same reason `frames_at` pins it: free
+    // cranking speed ripples by tens of rpm over a firing cycle, so the mesh
+    // rate sweeps across the capture and a fundamental measured over it is an
+    // average of every rate the engine passed through. That smearing is real —
+    // it is most of what a starter sounds like — but it makes a poor assertion.
+    // Pinning states the mesh rate exactly and asks whether the path is at it.
+    for pinned_rpm in [150.0, 250.0] {
+        let (teeth, measured, rate) = pinned_mesh(config(), pinned_rpm);
+        let expected = pinned_rpm / 60.0 * teeth;
+        let error = (measured - expected).abs() / expected;
+        assert!(
+            error < 0.05,
+            "at a pinned {pinned_rpm:.0} rpm with {teeth:.0} ring gear teeth the \
+             starter path should whine at {expected:.0} Hz, measured \
+             {measured:.0} Hz (sample rate {rate:.0} Hz)"
+        );
+    }
+}
+
+/// Tooth count, measured mesh fundamental and sample rate at a pinned speed.
+fn pinned_mesh(config: ValidatedConfig, rpm: f64) -> (f64, f64, f64) {
+    let teeth = f64::from(config.config().starter.ring_gear_teeth);
+    let rate = 1.0 / config.config().solver.fixed_step_s;
+
+    let mut sim = Simulation::new(
+        config,
+        ResetOptions {
+            seed: 0,
+            initial_rpm: rpm,
+            initial_crank_rad: 0.0,
+            coolant_temp_k: 293.15,
+        },
+    )
+    .expect("simulation builds");
+    sim.set_controls(controls(0.0, true, false))
+        .expect("controls accepted");
+
+    // Past the engagement, so what is left is the steady mesh.
+    for _ in 0..24 {
+        sim.advance(PIN_CHUNK).expect("advance");
+        sim.pin_speed_rpm(rpm).expect("pin");
+        discard_audio(&mut sim, PIN_CHUNK as usize);
+    }
+
+    let frames = 16_384;
+    let mut out = vec![0.0f32; frames * PATHS];
+    let mut written = 0;
+    while written < frames {
+        let batch = PIN_CHUNK.min((frames - written) as u32);
+        sim.advance(batch).expect("advance");
+        sim.pin_speed_rpm(rpm).expect("pin");
+        written += sim.drain_audio(&mut out[written * PATHS..]);
+    }
+
+    let starter = path_of(&out, STARTER);
+    let peak = starter.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(
+        peak > 0.0,
+        "the starter path must be producing something at a pinned {rpm} rpm"
+    );
+    let expected = rpm / 60.0 * teeth;
+    (
+        teeth,
+        fundamental_hz(&starter, rate, expected * 0.3, expected * 3.0),
+        rate,
+    )
+}
+
+#[test]
+fn a_coarser_ring_gear_moves_the_whine() {
+    // The companion to the test above, and what makes it a statement about the
+    // tooth count rather than about whatever frequency the modal bank happens to
+    // favour. Fewer teeth must lower the whine in proportion.
+    //
+    // The bank is left alone, so if the pitch came from the resonators rather
+    // than from the mesh this would not move at all. Both runs are pinned at the
+    // same speed, so the tooth count is the only thing that differs.
+    const PINNED: f64 = 200.0;
+
+    // 110 rather than something more dramatic because the shipped
+    // `ring_gear_teeth` declares a safe range of 100 to 200, and validation
+    // enforces it — a first attempt at 96 was rejected, correctly.
+    let coarse = config_with_starter(|s| {
+        s["ring_gear_teeth"] = serde_json::json!(110);
+    });
+
+    let (fine_teeth, fine_hz, _) = pinned_mesh(config(), PINNED);
+    let (coarse_teeth, coarse_hz, _) = pinned_mesh(coarse, PINNED);
+
+    assert!(
+        coarse_hz < fine_hz,
+        "{coarse_teeth:.0} teeth must whine lower than {fine_teeth:.0}: got \
+         {coarse_hz:.0} Hz against {fine_hz:.0} Hz"
+    );
+    // At a pinned speed the whine is exactly proportional to the tooth count, so
+    // this is a tight comparison rather than a directional one.
+    let ratio = coarse_hz / fine_hz;
+    let teeth_ratio = coarse_teeth / fine_teeth;
+    assert!(
+        (ratio / teeth_ratio - 1.0).abs() < 0.08,
+        "the whine must track the tooth count: frequency ratio {ratio:.3} \
+         against tooth ratio {teeth_ratio:.3}"
+    );
+}
+
+#[test]
+fn the_starter_labours_as_each_cylinder_comes_up_on_compression() {
+    // The reason for solving a circuit instead of drawing a torque-speed line.
+    //
+    // A line makes torque a function of speed alone, so it falls a little as the
+    // crank speeds up and that is all it does. A real starter is fed by a
+    // battery with internal resistance: the crank slows against compression,
+    // back-EMF falls with it, current rises, the terminals sag and the torque
+    // sags with them. That is the rur-rur-rur of a heavy diesel start, and it
+    // has to arrive at the firing rate rather than at some rate of its own.
+    let config = config();
+    let cylinders = config.config().geometry.cylinders;
+    let rate = 1.0 / config.config().solver.fixed_step_s;
+
+    let mut sim = Simulation::new(
+        config.clone(),
+        ResetOptions {
+            seed: 0,
+            initial_rpm: 0.0,
+            initial_crank_rad: 0.0,
+            coolant_temp_k: 293.15,
+        },
+    )
+    .expect("simulation builds");
+    sim.set_controls(controls(0.0, true, false))
+        .expect("controls accepted");
+    for _ in 0..28 {
+        sim.advance(1_000).expect("advance");
+        discard_audio(&mut sim, 1_000);
+    }
+
+    // Sample the machine's electrical state step by step over several cycles.
+    let mut current = Vec::new();
+    let mut rpm = Vec::new();
+    for _ in 0..24_000 {
+        sim.advance(1).expect("advance");
+        let snapshot = sim.snapshot();
+        current.push(snapshot.starter_current_a as f32);
+        rpm.push(snapshot.rpm);
+    }
+    discard_audio(&mut sim, 24_000);
+
+    let mean_rpm = rpm.iter().sum::<f64>() / rpm.len() as f64;
+    let low = rpm.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = rpm.iter().copied().fold(0.0f64, f64::max);
+    assert!(
+        high - low > 0.05 * mean_rpm,
+        "cranking speed must swing over the firing cycle: {low:.0} to {high:.0} \
+         rpm about a mean of {mean_rpm:.0}"
+    );
+
+    // The current has to swing with it, and by a real amount. A torque-speed
+    // line has no current at all, so this is the assertion that distinguishes
+    // the two models rather than merely describing this one.
+    let mean_a = rms_of(&current);
+    let min_a = current.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_a = current.iter().copied().fold(0.0f32, f32::max);
+    assert!(
+        f64::from(max_a - min_a) > 0.05 * mean_a,
+        "armature current must labour with the compression events: {min_a:.0} to \
+         {max_a:.0} A about {mean_a:.0} A"
+    );
+
+    // And it must labour at the *firing* rate. Anything else would be an
+    // artefact of the engagement or of the mesh rather than of compression.
+    let f0 = firing_hz(mean_rpm, cylinders);
+    let measured = fundamental_hz(&current, rate, f0 * 0.4, f0 * 4.0);
+    assert!(
+        (measured - f0).abs() / f0 < 0.15,
+        "the current should swing at the {f0:.1} Hz firing rate for {mean_rpm:.0} \
+         rpm, measured {measured:.1} Hz"
+    );
+}
+
+#[test]
+fn engaging_and_releasing_the_starter_steps_neither_the_torque_nor_the_drive() {
+    // The defect the previous starter had, and the one milestones 11 and 12 were
+    // about, seen on the torque side: it went from nothing to 1500 N m in a
+    // single 25 us step. A step in a radiated quantity is an impulse, and an
+    // impulse is white.
+    //
+    // Both ends are checked. First contact is the obvious one; the relay
+    // dropping out is the one that is easy to get wrong, because the natural way
+    // to write it is simply to stop applying torque.
+    let config = config();
+    let stall = sim_core::sim::starter::stall_crank_torque_nm(&config.config().starter);
+
+    let mut sim = Simulation::new(
+        config.clone(),
+        ResetOptions {
+            seed: 0,
+            initial_rpm: 0.0,
+            initial_crank_rad: 0.0,
+            coolant_temp_k: 293.15,
+        },
+    )
+    .expect("simulation builds");
+    // Ignition on, so the engine catches and the relay releases on its own:
+    // engagement, cranking and release in one run.
+    sim.set_controls(controls(0.0, true, true))
+        .expect("controls accepted");
+
+    let mut previous_torque = 0.0;
+    let mut previous_drive = 0.0;
+    let mut worst_torque: f64 = 0.0;
+    let mut worst_drive: f64 = 0.0;
+    let mut saw_mesh = false;
+    let mut saw_release = false;
+
+    for _ in 0..80_000 {
+        sim.advance(1).expect("advance");
+        let snapshot = sim.snapshot();
+        let torque = snapshot.torque_starter_nm;
+        let drive = sim.acoustic_forcing().starter_mesh;
+        if torque > 0.0 {
+            saw_mesh = true;
+        }
+        if saw_mesh && snapshot.starter_engagement == 0.0 {
+            saw_release = true;
+        }
+        worst_torque = worst_torque.max((torque - previous_torque).abs());
+        worst_drive = worst_drive.max((drive - previous_drive).abs());
+        previous_torque = torque;
+        previous_drive = drive;
+    }
+    discard_audio(&mut sim, 80_000);
+
+    assert!(saw_mesh, "the starter must have engaged");
+    assert!(saw_release, "the relay must have released");
+    assert!(
+        worst_torque < stall * 0.02,
+        "starter torque moved {worst_torque:.1} N m in one 25 us step against a \
+         stall torque of {stall:.0} N m, which is an edge and not a ramp"
+    );
+    assert!(
+        worst_drive < 0.2,
+        "the mesh drive moved {worst_drive:.4} in one step, which the modal bank \
+         would differentiate into an impulse"
+    );
+}
+
+#[test]
+fn the_published_starter_power_is_reached_and_not_read() {
+    // The same discipline the engine brake's published anchors carry: the
+    // machine's rated power is a *target*, and the solver must not be able to
+    // read its own answer.
+    //
+    // Two halves. First, the circuit has to actually reach it, out of the
+    // calibrated resistance, torque constant, saturation knee and drag alone.
+    let config = config();
+    let starter = &config.config().starter;
+    let ratio = starter.gear_ratio();
+
+    let mut peak_w: f64 = 0.0;
+    for i in 0..=8_000 {
+        let crank_rpm = 600.0 * f64::from(i) / 8_000.0;
+        let omega_motor = crank_rpm / 60.0 * std::f64::consts::TAU * ratio;
+        peak_w = peak_w.max(sim_core::sim::starter::shaft_power_w(starter, omega_motor));
+    }
+    let error = (peak_w - starter.rated_power_w).abs() / starter.rated_power_w;
+    assert!(
+        error < 0.03,
+        "the machine should reach its published {:.0} W, peaked at {peak_w:.0} W",
+        starter.rated_power_w
+    );
+
+    // And second, no solver source may read the figure. It is named by its own
+    // declaration in `config`, and by `starter.rs` in a doc comment explaining
+    // that it is a target; what must not exist is a *use* of it under `sim`.
+    let sim_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sim");
+    let mut offenders = Vec::new();
+    let mut stack = vec![sim_dir];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("source tree is readable") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("source is readable");
+            // Only the shipping half of each file. A module's own `#[cfg(test)]`
+            // block builds `Starter` literals and so has to name every field,
+            // including this one, and a test is allowed to know the target — it
+            // is a test *of* the target. What must not exist is a use in code
+            // that runs when the simulation steps.
+            let shipping = match text.find("#[cfg(test)]") {
+                Some(at) => &text[..at],
+                None => &text[..],
+            };
+            for (number, line) in shipping.lines().enumerate() {
+                // Doc comments and ordinary comments are allowed to discuss it;
+                // code is not.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains("rated_power_w") {
+                    offenders.push(format!("{}:{}", path.display(), number + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "the published starter power must not be read by solver code, found it at \
+         {offenders:?}"
+    );
 }

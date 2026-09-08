@@ -79,6 +79,14 @@ pub struct Snapshot {
     pub torque_load_nm: f64,
     pub torque_net_nm: f64,
 
+    // The starter as a machine rather than as a torque.
+    /// Armature current. Hundreds of amps cranking, around 2000 at stall.
+    pub starter_current_a: f64,
+    /// Terminal voltage after the supply's droop. Well under 24 V under load.
+    pub starter_terminal_voltage_v: f64,
+    /// How far the pinion is into mesh, zero to one.
+    pub starter_engagement: f64,
+
     // Whole-cycle averages from the most recently completed cycle.
     pub cycle_valid: bool,
     pub cycles_completed: u64,

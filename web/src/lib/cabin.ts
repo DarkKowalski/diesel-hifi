@@ -128,9 +128,33 @@ export interface CabinDynamics {
   makeupGain: number;
 }
 
-/** Which radiating path a per-path stage describes. Order matches the solver. */
-export const AUDIO_PATHS = ['exhaust', 'block', 'body'] as const;
+/**
+ * Which radiating path a per-path stage describes. Order matches the solver.
+ *
+ * The fourth is the odd one out and is meant to be: it is a separate machine
+ * bolted to the outside of the engine, in mesh for a second or two at a time and
+ * exactly silent otherwise. It gets a stage of its own for the same reason the
+ * other three do — it reaches the driver by its own route — and not because the
+ * engine has a fourth thing to say.
+ */
+export const AUDIO_PATHS = ['exhaust', 'block', 'body', 'starter'] as const;
 export type AudioPath = (typeof AUDIO_PATHS)[number];
+
+/**
+ * Every path audible, which is the default everywhere a solo control exists.
+ *
+ * Derived from [`AUDIO_PATHS`] rather than written out. It used to be an object
+ * literal in two separate files, and adding the starter path broke both — which
+ * the type checker caught, but only because `Record<AudioPath, boolean>` demands
+ * every key. A literal that has to be updated in step with a list is a literal
+ * that will one day not be.
+ */
+export function allPathsEnabled(): Record<AudioPath, boolean> {
+  return Object.fromEntries(AUDIO_PATHS.map((path) => [path, true])) as Record<
+    AudioPath,
+    boolean
+  >;
+}
 
 /**
  * How one radiating path reaches the driver.
@@ -361,6 +385,31 @@ export const CABIN_SPEC: CabinSpec = {
       ],
       delayS: 0,
       roomSend: 0,
+    },
+    // Bolted low on the block, a metre or so from the driver's feet, through
+    // the bulkhead. Closer than the tailpipe and brighter than either the
+    // block or the body: a starter whine is a mechanical mesh in an aluminium
+    // housing, so it keeps far more of its top end than a combustion event
+    // arriving through iron.
+    //
+    // A shallow low pass rather than a steep one, because the mesh comb runs
+    // from a few hundred hertz to several kilohertz and the whole comb is the
+    // sound. The 1.2 kHz lift is the bulkhead panel it radiates through, and
+    // the room send is modest: it is a small source close to the listener, so
+    // most of what arrives is direct.
+    // 3.8 kHz rather than 4: the cab test requires every path to roll its top
+    // end off below 4 kHz, and this is the brightest path in the model, so it is
+    // the one that would sit on the bound. Meeting the criterion was cheaper
+    // than widening it, and it costs nothing — the starter modal bank's highest
+    // mode is at 3.1 kHz, so the whole bank still gets through.
+    starter: {
+      levelDb: -1,
+      filters: [
+        { type: 'lowpass', frequencyHz: 3800, q: 0.7, gainDb: 0 },
+        { type: 'peaking', frequencyHz: 1200, q: 0.9, gainDb: 2 },
+      ],
+      delayS: 0.003,
+      roomSend: 0.3,
     },
   },
   filters: [
