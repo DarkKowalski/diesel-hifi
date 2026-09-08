@@ -4,6 +4,8 @@ An experimental diesel truck engine and sound simulator for the browser.
 The current engine is a 12.8 L, six-cylinder Mercedes-Benz OM 471.9 M3D
 reference model, rated at 375 kW and 2500 N·m in the published specifications.
 
+[Open Diesel HiFi](https://darkkowalski.github.io/diesel-hifi/)
+
 ## Current features
 
 - **Drive:** start/stop, accelerator, 12-speed gearbox, engine brake, external
@@ -53,8 +55,8 @@ build for another hosting path.
 
 The latest application verification (2026-09-08) passed 18 WASM, 93 unit and
 52 browser tests, frontend checks, and static builds at both root and subpath.
-The manual [GitHub Pages workflow](.github/workflows/pages.yml) is configured;
-the site has not yet been published.
+The site is deployed through the manual
+[GitHub Pages workflow](.github/workflows/pages.yml).
 
 ## Known limitations
 
