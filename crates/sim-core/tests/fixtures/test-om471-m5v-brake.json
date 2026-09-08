@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 8,
   "identity": {
     "id": "test-om471-m5v-brake",
     "display_name": "OM 471.9 M3D with M5V high performance brake (test fixture)",
@@ -135,6 +135,7 @@
     "coolant_temperature_k": 358.15,
     "exhaust_restriction_pa_per_kg2_s2": 120000.0,
     "crankcase_pressure_pa": 101325.0,
+    "ring_leakage_area_m2": 1e-7,
     "volumetric_efficiency": 0.92
   },
   "turbo": {
@@ -240,6 +241,11 @@
     "max_external_load_nm": 5000.0
   },
   "starter": {
+    "commutator_segments": 24,
+    "drive_damping_nm_per_rad_s": 1,
+    "drive_stiffness_nm_per_rad": 500,
+    "rotor_inertia_kg_m2": 0.004,
+    "supply_resistance_ohm": 0.0035,
     "system_voltage_v": 24.0,
     "rated_power_w": 7800.0,
     "pinion_teeth": 12,
@@ -281,6 +287,9 @@
     "runner_length_max_m": 0.7
   },
   "audio": {
+    "starter_rotor_gain": 0.12,
+    "body_pressure_weights": [1,0.35,0.7,0.5,0.25,0.9],
+    "body_pressure_rate_gain_s": 0.000016,
     "reference_spl_db": 94.0,
     "output_gain": 1.41,
     "exhaust_gain": 9.5,
@@ -318,23 +327,28 @@
     "body_gain": 0.09,
     "body_modes": [
       {
-        "frequency_hz": 60.0,
-        "q": 4.0,
-        "gain": 1.0
+        "frequency_hz": 60,
+        "q": 2,
+        "gain": 0.65
       },
       {
-        "frequency_hz": 95.0,
-        "q": 4.0,
-        "gain": 1.0
+        "frequency_hz": 100,
+        "q": 2,
+        "gain": 1
       },
       {
-        "frequency_hz": 150.0,
-        "q": 4.5,
-        "gain": 0.8
+        "frequency_hz": 160,
+        "q": 2.2,
+        "gain": 1.1
       },
       {
-        "frequency_hz": 220.0,
-        "q": 5.0,
+        "frequency_hz": 240,
+        "q": 2.4,
+        "gain": 0.9
+      },
+      {
+        "frequency_hz": 340,
+        "q": 2.5,
         "gain": 0.5
       }
     ],
@@ -379,6 +393,86 @@
     }
   ],
   "provenance": [
+    {
+      "path": "audio.starter_rotor_gain",
+      "status": "calibrated",
+      "value_note": "0.12. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Motor rotation relative to the loaded mesh, including the coast-down after release.",
+      "safe_range": [
+        0,
+        1
+      ]
+    },
+    {
+      "path": "audio.body_pressure_weights",
+      "status": "calibrated",
+      "value_note": "[1,0.35,0.7,0.5,0.25,0.9]. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Relative pressure-to-body coupling by cylinder index; audio only, not measured mount geometry.",
+      "safe_range": [
+        0,
+        1
+      ]
+    },
+    {
+      "path": "audio.body_pressure_rate_gain_s",
+      "status": "calibrated",
+      "value_note": "0.000016 seconds. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Ambient-normalised pressure rise per second to body drive, alongside crank-torque reaction; audio only.",
+      "safe_range": [
+        0,
+        1
+      ]
+    },
+    {
+      "path": "starter.commutator_segments",
+      "status": "calibrated",
+      "value_note": "24. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Contacts per rotor revolution for motor-order sound; not an OEM tooth count.",
+      "safe_range": [
+        1,
+        128
+      ]
+    },
+    {
+      "path": "starter.drive_damping_nm_per_rad_s",
+      "status": "calibrated",
+      "value_note": "1. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Effective torsional damping of the one-way drive at the rotor.",
+      "safe_range": [
+        0.01,
+        100
+      ]
+    },
+    {
+      "path": "starter.drive_stiffness_nm_per_rad",
+      "status": "calibrated",
+      "value_note": "500. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Effective torsional stiffness of the one-way drive at the rotor.",
+      "safe_range": [
+        1,
+        10000
+      ]
+    },
+    {
+      "path": "starter.rotor_inertia_kg_m2",
+      "status": "calibrated",
+      "value_note": "0.004. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Rotating mass at the motor shaft, for acceleration and coast-down.",
+      "safe_range": [
+        0.0001,
+        1
+      ]
+    },
+    {
+      "path": "starter.supply_resistance_ohm",
+      "status": "calibrated",
+      "value_note": "0.0035. Initial sound calibration; no OEM measurement available.",
+      "purpose": "Battery and cable share of total circuit resistance; the remainder is inside the motor.",
+      "safe_range": [
+        0,
+        0.01263
+      ]
+    },
     {
       "path": "geometry.cylinders",
       "status": "published",
@@ -964,6 +1058,16 @@
       "safe_range": [
         0.0,
         1000000.0
+      ]
+    },
+    {
+      "path": "air_path.ring_leakage_area_m2",
+      "status": "calibrated",
+      "value_note": "0.10 mm² equivalent leakage area per cylinder, including discharge loss; estimated, not an OEM ring clearance.",
+      "purpose": "Pressure-driven mass and enthalpy exchange with the vented crankcase at every speed, including rest.",
+      "safe_range": [
+        0,
+        0.000001
       ]
     },
     {
@@ -1968,7 +2072,7 @@
     {
       "path": "audio.body_modes",
       "status": "calibrated",
-      "value_note": "invented test values for `audio.body_modes`",
+      "value_note": "60, 100, 160, 240 and 340 Hz, Q 2 to 2.5. Broad, damped body response; listening calibration, not measured vehicle modes.",
       "purpose": "The modal bank the fluctuating crank torque shakes through the engine mounts. Each mode is one two-pole resonator standing for a frame or cab panel resonance. The Q values are deliberately far lower than the structural bank's: a panel on a trimmed cab is heavily damped, and a sharp bank here would be a tonal drone that jumped in level as the firing frequency swept past each mode rather than a roar that tracks engine speed smoothly. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
       "safe_range": [
         0.0,

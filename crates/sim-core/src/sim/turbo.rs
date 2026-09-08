@@ -287,6 +287,7 @@ mod tests {
             coolant_temperature_k: 358.15,
             exhaust_restriction_pa_per_kg2_s2: 40_000.0,
             crankcase_pressure_pa: 101_325.0,
+            ring_leakage_area_m2: 0.0,
             volumetric_efficiency: 0.92,
         }
     }

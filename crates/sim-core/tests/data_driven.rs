@@ -34,7 +34,7 @@ fn a_different_engine_runs_through_the_same_solver() {
     engine
         .set_controls(Controls {
             pedal: 0.5,
-            load_torque_nm: 200.0,
+            load_torque_nm: 0.0,
             starter: true,
             ignition: true,
             egr_enabled: true,
@@ -42,8 +42,25 @@ fn a_different_engine_runs_through_the_same_solver() {
         })
         .expect("controls accepted");
 
+    let mut loaded = false;
     for _ in 0..40 {
         let snapshot = engine.advance(4_000).expect("the fixture must run cleanly");
+        // Apply the dynamometer load once the engine has started. A starter
+        // carrying a constant 200 Nm load through its drop-out speed can stall;
+        // this test measures configuration-driven running, not loaded starting.
+        if !loaded && snapshot.rpm > 600.0 {
+            engine
+                .set_controls(Controls {
+                    pedal: 0.5,
+                    load_torque_nm: 200.0,
+                    starter: false,
+                    ignition: true,
+                    egr_enabled: true,
+                    ..Controls::default()
+                })
+                .expect("running load accepted");
+            loaded = true;
+        }
         assert!(snapshot.fault.is_none());
         assert_eq!(snapshot.cylinder_pressure_pa.len(), 4);
         for pressure in &snapshot.cylinder_pressure_pa {
@@ -53,6 +70,7 @@ fn a_different_engine_runs_through_the_same_solver() {
     }
 
     let final_snapshot = engine.snapshot();
+    assert!(loaded, "the fixture must start and accept the running load");
     assert!(
         final_snapshot.rpm > 100.0,
         "the four-cylinder fixture should be turning, saw {} rpm",

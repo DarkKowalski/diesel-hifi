@@ -1128,7 +1128,7 @@ fn the_four_cylinder_fixture_drives_its_own_modal_bank() {
         "the fixture defines its own number of modes"
     );
 
-    let with = samples_at(fixture.clone(), 1_000.0, 0.4, 293.15, 40_000);
+    let with = path_of(&frames_at(fixture.clone(), 1_000.0, 0.4, 293.15, 40_000), 1);
     let share = high_band_share(&with, 500.0);
     assert!(
         share > 0.05,
@@ -1425,6 +1425,9 @@ fn collapsing_the_runner_span_makes_the_firing_order_inert_again() {
         document["valvetrain"]["exhaust_area_spread"] = serde_json::json!(0.0);
         document["injection"]["cylinder_delivery_spread"] = serde_json::json!(0.0);
         document["exhaust_system"]["runner_length_min_m"] = serde_json::json!(0.30);
+        // Isolate the runners from cylinder-specific body coupling.
+        document["audio"]["body_pressure_weights"] =
+            serde_json::json!([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
         document["exhaust_system"]["runner_length_max_m"] = serde_json::json!(0.3001);
         EngineConfig::from_json(&document.to_string())
             .expect("config parses")
@@ -1684,7 +1687,12 @@ fn the_exhaust_path_leads_the_clatter_path() {
     // boundary separately, so a path is a slice of the output instead of a
     // configuration with the other gains zeroed and the whole simulation run
     // again — and it is the *same* run, so nothing can drift between them.
-    for (rpm, pedal) in [(600.0, 0.15), (1_200.0, 0.60), (1_400.0, 1.0)] {
+    for (rpm, pedal) in [
+        (600.0, 0.15),
+        (1_200.0, 0.60),
+        (1_400.0, 1.0),
+        (1_800.0, 1.0),
+    ] {
         let frames = frames_at(config(), rpm, pedal, 293.15, 32_768);
         let exhaust = rms_of(&path_of(&frames, EXHAUST));
         let block = rms_of(&path_of(&frames, BLOCK));

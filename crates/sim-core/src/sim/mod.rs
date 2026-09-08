@@ -363,6 +363,7 @@ pub struct SimState {
     /// only so the snapshot can report them.
     pub(crate) starter: starter::StarterState,
     pub(crate) starter_out: starter::StarterOutput,
+    pub(crate) first_combustion_time_s: Option<f64>,
 
     pub(crate) fuel_demand_mg: f64,
     pub(crate) last_fuel_charge_mg: f64,
@@ -434,6 +435,7 @@ impl Simulation {
             driveline: driveline::Output::default(),
             starter: starter::StarterState::default(),
             starter_out: starter::StarterOutput::default(),
+            first_combustion_time_s: None,
             fuel_demand_mg: 0.0,
             last_fuel_charge_mg: 0.0,
             last_variant: injection::Variant::Standard,
@@ -514,6 +516,7 @@ impl Simulation {
         // reset engine, which is the click `Acoustics::reset` exists to avoid.
         state.starter.reset();
         state.starter_out = starter::StarterOutput::default();
+        state.first_combustion_time_s = None;
         state.fuel_demand_mg = 0.0;
         state.last_fuel_charge_mg = 0.0;
         state.last_variant = injection::Variant::Standard;
@@ -801,6 +804,11 @@ impl Simulation {
     /// What the starter is doing: torque, current, terminal volts, engagement.
     pub fn starter(&self) -> starter::StarterOutput {
         self.state.starter_out
+    }
+
+    /// Time of the first positive combustion heat release since reset.
+    pub fn first_combustion_time_s(&self) -> Option<f64> {
+        self.state.first_combustion_time_s
     }
 
     /// Mean fresh air trapped per cylinder at the last intake valve closing, kg.

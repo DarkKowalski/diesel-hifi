@@ -1,39 +1,15 @@
-//! Engine acoustic sources: the exhaust, the engine's structure, and its body.
+//! Four aligned acoustic paths from resolved engine and starter motion.
 //!
-//! The solver's fixed step is 25 us, which is a sample rate of 40 kHz. That is
-//! already an audio rate, so the sound does not need a synthesiser: one sample
-//! per step, taken from quantities the solver already integrates, *is* the
-//! signal. What you hear is the same cylinder pressure that drives the crank.
+//! Exhaust radiates tailpipe mouth flow through the exhaust duct and radiation
+//! filters. Cylinder-pressure rise excites the block. Crank-torque reaction and
+//! cylinder-weighted pressure rise excite the body. Loaded tooth contact,
+//! seating and integrated motor rotation excite the starter housing.
 //!
-//! Four paths radiate, and they are summed at the end rather than in series:
-//!
-//! ```text
-//! source     = the volume velocity at the tailpipe mouth, from `exhaust.rs`
-//! exhaust    = highpass_20(radiation(source))              out of the pipe
-//! p_forcing  = d( sum over cylinders of p_cyl / p_ambient )/dt
-//! structural = sum over modes of  gain_k * resonator_k(p_forcing)  off the iron
-//! t_forcing  = (gas + pumping torque) / rated torque
-//! body       = sum over modes of  gain_k * resonator_k(t_forcing)  off the frame
-//! m_forcing  = tooth contact * (starter torque / stall torque), from `starter.rs`
-//! starter    = sum over modes of  gain_k * resonator_k(m_forcing)  off the housing
-//! mix        = g_exh*exhaust + g_str*structural + g_body*body + g_st*starter
-//! gain       = level follower on |mix| against the knee: drop at once, recover slowly
-//! frame      = [g_exh*exhaust, g_str*structural, g_body*body, g_st*starter] * gain
-//! ```
-//!
-//! The fourth is the odd one out, and deliberately so: it is not the engine
-//! radiating, it is a separate machine in mesh with the flywheel for a second or
-//! two. `m_forcing` is exactly zero with the pinion retracted, so that path
-//! contributes exactly `0.0` at every fuelled operating point and the mix there
-//! is bit-identical to the three-path model that preceded it.
-//!
-//! The paths leave here **separately**, one interleaved frame per step,
-//! and are summed at the listener rather than here. They do not reach a driver
-//! by the same route — see the note on the frame ring below — so
-//! `web/src/lib/cabin.ts` gives each its own transfer, which it cannot do to a
-//! signal that has already been added up. The saturation is still decided on the
-//! mix and applied as a common gain, so they still sum to exactly the one
-//! sample this used to emit.
+//! One common limiter gain bounds both the sum and each individual path. The
+//! four channels leave interleaved and remain aligned through the worker and
+//! worklet; Web Audio applies the separate cockpit transfers downstream.
+//! A resting, unexcited starter is silent. Release stops mesh forcing while
+//! motor rotation and the housing may continue to decay.
 //!
 //! ## Why the ceiling is a follower and not a clipper
 //!
@@ -217,6 +193,10 @@ pub struct Forcing {
     /// Gas plus pumping torque over rated torque: what the engine does to its
     /// mounts.
     pub torque_fraction: f64,
+    /// Cylinder-weighted pressure over ambient, for body vibration.
+    pub body_pressure: f64,
+    /// Rotation-driven force from the independent starter motor.
+    pub starter_rotation: f64,
     /// Tooth-mesh force over the starter's stall torque: what the starter rings.
     ///
     /// Exactly zero with the pinion retracted, which is most of the time, and
@@ -525,9 +505,10 @@ pub struct Acoustics {
 
     /// Previous normalised cylinder-pressure sum, for the structural forcing.
     previous_pressure_sum: f64,
+    previous_body_pressure: f64,
     /// Modal bank, sized and tuned once at construction.
     resonators: Vec<Resonator>,
-    /// Body modal bank, driven by torque rather than by pressure.
+    /// Body modal bank, driven by torque reaction and local pressure rise.
     body: Vec<Resonator>,
     /// Starter modal bank: the nose cone and the flywheel housing.
     starter: Vec<Resonator>,
@@ -581,6 +562,7 @@ impl Acoustics {
             highpass_previous_input: 0.0,
             highpass_previous_output: 0.0,
             previous_pressure_sum: 0.0,
+            previous_body_pressure: 0.0,
             resonators: audio
                 .structural_modes
                 .iter()
@@ -616,6 +598,7 @@ impl Acoustics {
         self.highpass_previous_input = 0.0;
         self.highpass_previous_output = 0.0;
         self.previous_pressure_sum = 0.0;
+        self.previous_body_pressure = 0.0;
         // The modes keep their tuning but lose their ringing. A bank still
         // carrying the last burn across a reset would sound it out into a
         // freshly reset engine, which is the click this method exists to avoid.
@@ -692,8 +675,18 @@ impl Acoustics {
             mouth_volume_velocity: source,
             pressure_sum,
             torque_fraction,
+            body_pressure,
+            starter_rotation,
             starter_mesh,
         } = *forcing;
+        let pressure_rate = if self.primed_steps == 0 {
+            0.0
+        } else {
+            (body_pressure - self.previous_body_pressure) / dt
+        };
+        self.previous_body_pressure = body_pressure;
+        let body_drive = torque_fraction + audio.body_pressure_rate_gain_s * pressure_rate;
+        let starter_drive = starter_mesh + audio.starter_rotor_gain * starter_rotation;
         // What an open pipe radiates into the far field is proportional to the
         // *rate of change* of the flow leaving it, not to the flow itself: it is
         // an acoustic monopole, and a monopole radiates `d(volume flow)/dt`.
@@ -736,7 +729,7 @@ impl Acoustics {
             // hand it that value as an edge and it would ring it — which is a
             // frame struck by the simulation starting rather than by the engine.
             for resonator in &mut self.body {
-                resonator.seed_input(torque_fraction);
+                resonator.seed_input(body_drive);
             }
             // The starter bank is seeded on the same terms, and for a reset
             // engine it is seeding with zero — a pinion cannot already be in
@@ -744,7 +737,7 @@ impl Acoustics {
             // "the forcing happens to be zero here" is not the invariant; the
             // invariant is that a bank never sees its first value as an edge.
             for resonator in &mut self.starter {
-                resonator.seed_input(starter_mesh);
+                resonator.seed_input(starter_drive);
             }
             self.primed_steps = 1;
         }
@@ -784,6 +777,9 @@ impl Acoustics {
             for resonator in &mut self.resonators {
                 resonator.seed_input(forcing);
             }
+            for resonator in &mut self.body {
+                resonator.seed_input(body_drive);
+            }
             self.primed_steps = 2;
         }
         let mut structural = 0.0;
@@ -801,7 +797,7 @@ impl Acoustics {
         // nothing from it, which is what the null at DC says.
         let mut body = 0.0;
         for resonator in &mut self.body {
-            body += resonator.tick(torque_fraction);
+            body += resonator.tick(body_drive);
         }
 
         // --- starter path ---
@@ -817,14 +813,11 @@ impl Acoustics {
         // mesh — so the whine rises in pitch with cranking speed and dips as
         // each cylinder comes up on compression, and neither is scheduled.
         //
-        // With the pinion retracted `starter_mesh` is exactly zero, the bank is
-        // linear and its state is zero, so this path contributes exactly 0.0 to
-        // the mix. That is not a nicety: it is what makes the mix at every
-        // fuelled operating point bit-identical to the three-path model, and a
-        // test asserts it.
+        // Mesh stops on retraction; motor rotation and the housing can decay.
+        // A resting, never-excited starter remains exactly silent.
         let mut starter = 0.0;
         for resonator in &mut self.starter {
-            starter += resonator.tick(starter_mesh);
+            starter += resonator.tick(starter_drive);
         }
 
         // --- the four paths, kept apart ---
@@ -883,7 +876,12 @@ impl Acoustics {
         // the single sample this emits, and the paths remain a routing detail
         // rather than a change in the sound.
         let knee = audio.soft_clip_knee;
-        let magnitude = mix.abs();
+        // Cancellation in the mix must not hide an overloaded individual path.
+        // One common gain preserves every path's waveform and relative phase,
+        // including when it is soloed or filtered differently in the cockpit.
+        let magnitude = paths
+            .iter()
+            .fold(mix.abs(), |peak, path| peak.max(path.abs()));
         let required = if magnitude > knee && magnitude > 0.0 {
             knee / magnitude
         } else {
@@ -999,6 +997,41 @@ impl Acoustics {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancellation_cannot_hide_an_overloaded_path_from_the_common_limiter() {
+        let mut calibration = audio();
+        calibration.body_gain = 1.0;
+        calibration.starter_gain = 1.0;
+        calibration.body_modes = calibration.starter_modes.clone();
+        let mut ac = Acoustics::new(4096, &calibration, DT);
+        for step in 0..4096 {
+            let force = if step < 3 {
+                0.0
+            } else {
+                20.0 * (std::f64::consts::TAU * 1200.0 * step as f64 * DT).sin()
+            };
+            ac.push(
+                &calibration,
+                &drive(0.0, 6.0, force, -0.95 * force),
+                RADIATION_HZ,
+                DT,
+            );
+        }
+        let mut frames = vec![0.0; 4096 * PATHS];
+        ac.drain(&mut frames);
+        let mut peak: f32 = 0.0;
+        for frame in frames.chunks_exact(PATHS) {
+            peak = peak.max(frame[2].abs());
+            assert!(frame
+                .iter()
+                .all(|sample| sample.abs() <= calibration.soft_clip_knee as f32));
+            assert!(
+                (frame[3] + 0.95 * frame[2]).abs() < 1e-6,
+                "common limiting must preserve opposing paths' amplitude ratio"
+            );
+        }
+        assert!(peak > 0.8, "the test must exercise limiting");
+    }
     use super::*;
 
     /// 35 degrees, the calibrated ramp width.
@@ -1051,8 +1084,11 @@ mod tests {
             structural_gain: 0.02,
             structural_modes: modes(),
             body_gain: 0.02,
+            body_pressure_rate_gain_s: 0.000016,
+            body_pressure_weights: vec![1.0; 6],
             body_modes: body_modes(),
             starter_gain: 0.02,
+            starter_rotor_gain: 0.12,
             starter_modes: starter_modes(),
         }
     }
@@ -1081,6 +1117,7 @@ mod tests {
             pressure_sum,
             torque_fraction,
             starter_mesh,
+            ..Forcing::default()
         }
     }
 

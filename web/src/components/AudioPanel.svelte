@@ -126,7 +126,7 @@
         aria-pressed={sim.audioStage === 'raw'}
         onclick={() => sim.setAudioStage('raw')}
       >
-        Raw tailpipe
+        Raw engine mix
       </button>
       <button
         type="button"

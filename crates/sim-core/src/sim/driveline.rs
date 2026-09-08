@@ -154,6 +154,7 @@ mod tests {
             "ambient_pressure_pa": 101325.0,
             "ambient_temperature_k": 293.15,
             "crankcase_pressure_pa": 101325.0,
+            "ring_leakage_area_m2": 0.0,
             "volumetric_efficiency": 0.92,
             "intake_manifold_volume_m3": 0.02,
             "exhaust_manifold_volume_m3": 0.01,

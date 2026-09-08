@@ -381,6 +381,10 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
     )?;
     finite_positive(a.crankcase_pressure_pa, "air_path.crankcase_pressure_pa")?;
     require(
+        a.ring_leakage_area_m2.is_finite() && (0.0..=1.0e-6).contains(&a.ring_leakage_area_m2),
+        "air_path.ring_leakage_area_m2 must be finite and in [0, 1e-6] m² per cylinder",
+    )?;
+    require(
         a.volumetric_efficiency > 0.0 && a.volumetric_efficiency <= 1.5,
         "air_path.volumetric_efficiency must fall in (0, 1.5]",
     )?;
@@ -666,6 +670,24 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
         "audio.body_gain must be finite and not negative",
     )?;
 
+    require(
+        au.body_pressure_rate_gain_s.is_finite()
+            && (0.0..=1.0).contains(&au.body_pressure_rate_gain_s),
+        "audio.body_pressure_rate_gain_s must fall in [0, 1]",
+    )?;
+    require(
+        au.body_pressure_weights.len() == config.geometry.cylinders
+            && au
+                .body_pressure_weights
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+        "audio.body_pressure_weights must contain one finite weight in [0, 1] per cylinder",
+    )?;
+    require(
+        au.starter_rotor_gain.is_finite() && (0.0..=1.0).contains(&au.starter_rotor_gain),
+        "audio.starter_rotor_gain must fall in [0, 1]",
+    )?;
+
     // Build scatter. Zero is legal and means a perfect engine; the upper bound
     // is what keeps a "realism" knob from quietly becoming a calibration
     // change, since a spread wide enough to move peak power is a spread that is
@@ -785,6 +807,34 @@ fn validate_ranges(config: &EngineConfig) -> Result<()> {
          reduces towards the crank, it does not overdrive it",
     )?;
     finite_positive(st.circuit_resistance_ohm, "starter.circuit_resistance_ohm")?;
+    require(
+        st.supply_resistance_ohm.is_finite()
+            && st.supply_resistance_ohm >= 0.0
+            && st.supply_resistance_ohm < st.circuit_resistance_ohm,
+        "starter.supply_resistance_ohm must be nonnegative and below total circuit resistance",
+    )?;
+    require(
+        (0.0001..=1.0).contains(&st.rotor_inertia_kg_m2),
+        "starter.rotor_inertia_kg_m2 must fall in [0.0001, 1]",
+    )?;
+    require(
+        (1.0..=10_000.0).contains(&st.drive_stiffness_nm_per_rad)
+            && (0.01..=100.0).contains(&st.drive_damping_nm_per_rad_s),
+        "starter drive stiffness must fall in [1, 10000] and damping in [0.01, 100]",
+    )?;
+    let reflected_step = config.solver.fixed_step_s * st.gear_ratio().powi(2) * st.mesh_efficiency
+        / config.inertia.rotating_inertia_kg_m2;
+    require(
+        reflected_step
+            * (st.drive_damping_nm_per_rad_s
+                + config.solver.fixed_step_s * st.drive_stiffness_nm_per_rad)
+            < 0.5,
+        "starter drive requires a smaller solver step for the crank inertia and gear ratio",
+    )?;
+    require(
+        (1..=128).contains(&st.commutator_segments),
+        "starter.commutator_segments must fall in [1, 128]",
+    )?;
     finite_positive(
         st.torque_constant_nm_per_a2,
         "starter.torque_constant_nm_per_a2",

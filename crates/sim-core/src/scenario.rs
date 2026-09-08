@@ -127,6 +127,22 @@ pub struct PhaseResult {
     pub rpm_mean: f64,
     /// Mean cycle brake torque over the phase, sampled once per chunk.
     pub brake_torque_nm: f64,
+    pub ignition: bool,
+    pub starter_requested: bool,
+    pub starter_current_mean_a: f64,
+    pub starter_current_max_a: f64,
+    pub starter_terminal_min_v: f64,
+    pub starter_rotor_max_rad_per_s: f64,
+}
+
+/// Observed transition. Frame indices refer to the concatenated captured audio.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScenarioEvent {
+    pub name: &'static str,
+    pub time_s: f64,
+    /// None when the event falls in an excluded settling phase.
+    pub captured_frame: Option<usize>,
 }
 
 /// A completed scenario: its audio, and the conditions it ran under.
@@ -148,6 +164,7 @@ pub struct ScenarioRun {
     /// on the sample it was applied to.
     pub limiter_gains: Vec<f32>,
     pub phases: Vec<PhaseResult>,
+    pub events: Vec<ScenarioEvent>,
     /// Frames the ring dropped because this harness fell behind.
     ///
     /// Must be zero. A capture with a hole in it is not a capture, and a
@@ -169,7 +186,7 @@ impl ScenarioRun {
         self.frames.chunks(self.paths).map(|f| f[index]).collect()
     }
 
-    /// The three paths added up: what a listener hears before the cab stage.
+    /// The four paths added up: what a listener hears before the cab stage.
     #[must_use]
     pub fn summed(&self) -> Vec<f32> {
         self.frames
@@ -260,6 +277,22 @@ pub fn all() -> Vec<Scenario> {
         brake_stage: 3,
         ..fuelled(0.0, 0.0)
     };
+    let crank_only = Controls {
+        starter: true,
+        ignition: false,
+        ..idle_controls
+    };
+    let key_off = Controls {
+        ignition: false,
+        ..idle_controls
+    };
+    let capture_phase = |label, duration_s, controls| Phase {
+        label,
+        duration_s,
+        controls,
+        hold_rpm: None,
+        capture: true,
+    };
     // The two free-running transients are driven **in gear**, and that is not a
     // detail. The engine's own rotating inertia is 3.5 kg·m²; a full-pedal
     // release from idle against a resisting torque either stalls the engine or
@@ -330,6 +363,47 @@ pub fn all() -> Vec<Scenario> {
             3.0,
             1.2,
         ),
+        // Unfuelled compression, early release and a retry without resetting state.
+        Scenario {
+            id: "crank",
+            summary:
+                "Ignition disabled: starter turns the engine under compression, then coasts down.",
+            steady: false,
+            reset: warm_start(0, 0.0),
+            phases: vec![
+                capture_phase("motored", 1.2, crank_only),
+                capture_phase("key-release", 0.8, key_off),
+            ],
+        },
+        Scenario {
+            id: "crank-release",
+            summary: "Key released early during an unfuelled crank, before the engine can catch.",
+            steady: false,
+            reset: warm_start(0, 0.0),
+            phases: vec![
+                capture_phase("brief-crank", 0.15, crank_only),
+                capture_phase("key-release", 0.85, key_off),
+            ],
+        },
+        Scenario {
+            id: "restart",
+            summary: "Aborted unfuelled crank, key released, then a fuelled retry; reports any stall without resetting the engine.",
+            steady: false,
+            reset: warm_start(0, 0.0),
+            phases: vec![
+                capture_phase("aborted-crank", 0.35, crank_only),
+                capture_phase("key-release", 0.65, key_off),
+                capture_phase(
+                    "retry",
+                    1.2,
+                    Controls {
+                        starter: true,
+                        ..idle_controls
+                    },
+                ),
+                capture_phase("after-retry", 1.8, idle_controls),
+            ],
+        },
         // Cranking and catching. Captured from the first step, because the
         // question is what starting sounds like.
         Scenario {
@@ -481,6 +555,11 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
     let mut frames: Vec<f32> = Vec::new();
     let mut limiter_gains: Vec<f32> = Vec::new();
     let mut results: Vec<PhaseResult> = Vec::new();
+    let mut events = Vec::new();
+    let mut previous_engaged = false;
+    let mut previous_powered = false;
+    let mut previous_rotating = false;
+    let mut combustion_recorded = false;
 
     for phase in &scenario.phases {
         sim.set_controls(phase.controls)?;
@@ -495,6 +574,10 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
         let mut rpm_sum = 0.0;
         let mut torque_sum = 0.0;
         let mut captured = 0usize;
+        let mut current_sum = 0.0;
+        let mut current_max: f64 = 0.0;
+        let mut terminal_min = config.config().starter.system_voltage_v;
+        let mut rotor_max: f64 = 0.0;
 
         for _ in 0..chunks {
             sim.advance(CHUNK_STEPS)?;
@@ -509,6 +592,46 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
             }
 
             let snapshot = sim.snapshot();
+            let starter = sim.starter();
+            current_sum += starter.current_a;
+            current_max = current_max.max(starter.current_a);
+            terminal_min = terminal_min.min(starter.terminal_voltage_v);
+            rotor_max = rotor_max.max(starter.rotor_rad_per_s.abs());
+            let engaged = starter.engagement > 0.0;
+            let powered = starter.current_a > 0.0;
+            let rotating = starter.rotor_rad_per_s != 0.0;
+            for (changed, name) in [
+                (engaged && !previous_engaged, "pinion-engaged"),
+                (!engaged && previous_engaged, "pinion-retracted"),
+                (powered && !previous_powered, "main-current-on"),
+                (!powered && previous_powered, "main-current-off"),
+                (!rotating && previous_rotating, "rotor-stopped"),
+            ] {
+                if changed {
+                    events.push(ScenarioEvent {
+                        name,
+                        time_s: snapshot.sim_time_s,
+                        captured_frame: phase.capture.then_some(frames.len() / paths),
+                    });
+                }
+            }
+            if let Some(time_s) = sim
+                .first_combustion_time_s()
+                .filter(|_| !combustion_recorded)
+            {
+                let frames_ago = ((snapshot.sim_time_s - time_s) / dt).round() as usize;
+                events.push(ScenarioEvent {
+                    name: "first-combustion",
+                    time_s,
+                    captured_frame: phase
+                        .capture
+                        .then_some((frames.len() / paths).saturating_sub(frames_ago)),
+                });
+                combustion_recorded = true;
+            }
+            previous_engaged = engaged;
+            previous_powered = powered;
+            previous_rotating = rotating;
             rpm_min = rpm_min.min(snapshot.rpm);
             rpm_max = rpm_max.max(snapshot.rpm);
             rpm_sum += snapshot.rpm;
@@ -530,9 +653,16 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
             rpm_max,
             rpm_mean: rpm_sum / divisor,
             brake_torque_nm: torque_sum / divisor,
+            ignition: phase.controls.ignition,
+            starter_requested: phase.controls.starter,
+            starter_current_mean_a: current_sum / divisor,
+            starter_current_max_a: current_max,
+            starter_terminal_min_v: terminal_min,
+            starter_rotor_max_rad_per_s: rotor_max,
         });
     }
 
+    events.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
     Ok(ScenarioRun {
         id: scenario.id.to_string(),
         config_id: config.config().identity.id.clone(),
@@ -543,6 +673,7 @@ pub fn run(config: &ValidatedConfig, scenario: &Scenario) -> Result<ScenarioRun>
         frames,
         limiter_gains,
         phases: results,
+        events,
         dropped_frames: sim.audio_dropped(),
     })
 }

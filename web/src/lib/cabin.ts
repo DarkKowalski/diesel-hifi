@@ -1,7 +1,7 @@
 /**
  * The truck cockpit as a filter.
  *
- * Everything the solver produces is a tailpipe signal: `Acoustics::push` radiates
+ * The solver produces four aligned mechanical sound paths: `Acoustics::push` radiates
  * the flow leaving the duct and the cylinder pressure ringing the block. That is
  * roughly what a microphone beside the truck would hear, and it is deliberately
  * flat, because the spectrum view has to be able to prove the energy is where a
@@ -133,7 +133,7 @@ export interface CabinDynamics {
  *
  * The fourth is the odd one out and is meant to be: it is a separate machine
  * bolted to the outside of the engine, in mesh for a second or two at a time and
- * exactly silent otherwise. It gets a stage of its own for the same reason the
+ * with a short motor coast-down after release. It gets a stage of its own for the same reason the
  * other three do — it reaches the driver by its own route — and not because the
  * engine has a fourth thing to say.
  */
@@ -380,7 +380,7 @@ export const CABIN_SPEC: CabinSpec = {
     body: {
       levelDb: 1.5,
       filters: [
-        { type: 'lowpass', frequencyHz: 250, q: 0.7, gainDb: 0 },
+        { type: 'lowpass', frequencyHz: 450, q: 0.7, gainDb: 0 },
         { type: 'peaking', frequencyHz: 120, q: 0.9, gainDb: 1 },
       ],
       delayS: 0,
@@ -413,7 +413,7 @@ export const CABIN_SPEC: CabinSpec = {
     },
   },
   filters: [
-    { type: 'highpass', frequencyHz: 30, q: 0.7, gainDb: 0 },
+    { type: 'highpass', frequencyHz: 35, q: 0.7, gainDb: 0 },
     { type: 'lowshelf', frequencyHz: 150, q: 0.7, gainDb: 5 },
     { type: 'peaking', frequencyHz: 200, q: 0.9, gainDb: 2.5 },
     { type: 'peaking', frequencyHz: 600, q: 1.0, gainDb: -2 },
@@ -442,7 +442,7 @@ export const CABIN_SPEC: CabinSpec = {
     seedRight: 0x1d5e_a5e7,
   },
   dynamics: {
-    inputGain: 0.42,
+    inputGain: 0.30,
     thresholdDb: -18,
     kneeDb: 12,
     // Ratio 2 and a 25 ms attack, where these were 3 and 6 ms.
@@ -457,25 +457,9 @@ export const CABIN_SPEC: CabinSpec = {
     ratio: 2,
     attackS: 0.025,
     releaseS: 0.18,
-    // Measured through the output analyser, landing +2.5 dB against raw at idle
-    // and −2.6 dB under load. A measurement rather than a derivation: it depends
-    // on the source spectrum, so the browser suite measures both ends rather
-    // than trusting the pair, and now prints them.
-    //
-    // It was 1.41, landing +1.7 and −1.6, and it came down to re-centre a spread
-    // the per-path level trims widened from 3.3 dB to 5.1 dB. That widening is
-    // not sloppiness and cannot be tuned out here: a trim on the body path moves
-    // idle much further than load because the body is 43% of the idle mix and 5%
-    // of the loaded one. See the note on the path levels above.
-    //
-    // That spread was ±0.8 dB before the paths were split, and it widened for a
-    // real reason rather than through sloppiness. Each path now has its own
-    // filters, and the two operating points put their energy in different places
-    // — 90% of full load sits in 80–300 Hz against 66% at idle — so the cab
-    // removes different amounts at the two ends. The pair is centred on the
-    // spread rather than zeroed at one end, because zeroing idle put load at
-    // −3.3 dB: chasing one end is what the input trim was introduced to stop.
-    makeupGain: 1.39,
+    // Calibrated with inputGain at both browser test points; README records
+    // the measured stage spread and the limits of that comparison.
+    makeupGain: 2.15,
   },
   crossfadeS: 0.04,
 };

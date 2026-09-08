@@ -293,6 +293,7 @@ pub(super) fn step(
     // pressure inside it whether or not a valve happens to be off its seat.
     // That is exactly what distinguishes this path from the exhaust one.
     let mut cylinder_pressure_sum_pa = 0.0;
+    let mut body_pressure_pa = 0.0;
 
     // Indexed rather than iterated: the body reads and writes `state.cylinders`
     // and writes `cylinder_flow_kg_per_s`, and borrowing two collections through
@@ -480,6 +481,9 @@ pub(super) fn step(
                     (0.0, c.burned_fraction)
                 };
                 c.burned_fraction = burned_fraction;
+                if heat_j > 0.0 && state.first_combustion_time_s.is_none() {
+                    state.first_combustion_time_s = Some(state.sim_time_s + dt);
+                }
 
                 let velocity = heat_transfer::gas_velocity_m_per_s(
                     &cfg.heat_transfer,
@@ -643,6 +647,56 @@ pub(super) fn step(
                 cylinder_flow_kg_per_s[index] += after.net_out_kg / dt;
             }
         }
+        // Ring leakage runs in time, including when the crank is stationary.
+        // Mass and its enthalpy cross into the vented crankcase; piston work
+        // has already been integrated above. It is not exhaust-port flow.
+        if air.ring_leakage_area_m2 > 0.0 {
+            let crankcase = flow::PortState {
+                area_m2: air.ring_leakage_area_m2,
+                pressure_pa: air.crankcase_pressure_pa,
+                temperature_k: air.ambient_temperature_k,
+            };
+            let after = flow::exchange(
+                gas_props,
+                flow::Charge {
+                    mass_kg: c.mass_kg,
+                    temperature_k: c.temperature_k,
+                    pressure_pa: c.pressure_pa,
+                },
+                &crankcase,
+                volume_new_m3,
+                0.0,
+                dt,
+            );
+            let retained = (1.0 - after.net_out_kg.max(0.0) / c.mass_kg).clamp(0.0, 1.0);
+            c.trapped_air_kg = c.trapped_air_kg * retained + (-after.net_out_kg).max(0.0);
+            c.residual_kg *= retained;
+            c.mass_kg = after.charge.mass_kg;
+            c.temperature_k = after.charge.temperature_k;
+            c.pressure_pa = after.charge.pressure_pa;
+
+            // The no-combustion reference must lose gas too, or leakage alone
+            // would appear as a combustion-driven Woschni velocity difference.
+            let motored = flow::exchange(
+                gas_props,
+                flow::Charge {
+                    mass_kg: gas::mass_kg(
+                        gas_props,
+                        c.motored_pressure_pa,
+                        c.motored_temperature_k,
+                        volume_new_m3,
+                    ),
+                    temperature_k: c.motored_temperature_k,
+                    pressure_pa: c.motored_pressure_pa,
+                },
+                &crankcase,
+                volume_new_m3,
+                0.0,
+                dt,
+            );
+            c.motored_pressure_pa = motored.charge.pressure_pa;
+            c.motored_temperature_k = motored.charge.temperature_k;
+        }
         c.phase = phase_new;
 
         if !c.pressure_pa.is_finite() || !c.temperature_k.is_finite() || !c.mass_kg.is_finite() {
@@ -684,6 +738,7 @@ pub(super) fn step(
         }
 
         cylinder_pressure_sum_pa += c.pressure_pa;
+        body_pressure_pa += cfg.audio.body_pressure_weights[index] * c.pressure_pa;
 
         if phase_new == Phase::Exhaust {
             let weight = exhaust_port.area_m2(psi_new);
@@ -795,6 +850,8 @@ pub(super) fn step(
         mouth_volume_velocity: radiated,
         pressure_sum: structural_forcing,
         torque_fraction,
+        body_pressure: body_pressure_pa / ambient_pa,
+        starter_rotation: starter_out.rotation_forcing,
         starter_mesh: starter_out.mesh_forcing,
     };
     state.acoustics.push(
@@ -898,4 +955,70 @@ pub(super) fn step(
     state.steps_advanced += 1;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Controls, EngineConfig, ResetOptions, Simulation};
+
+    #[test]
+    fn stationary_ring_flow_carries_mass_and_enthalpy_in_both_directions() {
+        for pressure in [50_000.0, 3_000_000.0] {
+            let mut cfg =
+                EngineConfig::from_json(include_str!("../../tests/fixtures/test-inline-four.json"))
+                    .unwrap();
+            // Constant specific heat makes the integrated energy balance exact.
+            cfg.gas.cv_slope_j_per_kg_k2 = 0.0;
+            let props = cfg.gas;
+            let ambient_k = cfg.air_path.ambient_temperature_k;
+            let mut sim =
+                Simulation::new(cfg.validate().unwrap(), ResetOptions::default()).unwrap();
+            sim.set_controls(Controls {
+                ignition: false,
+                ..Controls::default()
+            })
+            .unwrap();
+            let volume = sim.slider.volume_m3(0.0);
+            let c = &mut sim.state.cylinders[0];
+            c.phase = Phase::Closed;
+            c.pressure_pa = pressure;
+            c.temperature_k = 700.0;
+            c.mass_kg = gas::mass_kg(&props, pressure, c.temperature_k, volume);
+            c.trapped_air_kg = c.mass_kg;
+            c.motored_pressure_pa = pressure;
+            c.motored_temperature_k = c.temperature_k;
+            let initial = *c;
+            let cv = props.cv_reference_j_per_kg_k;
+            let cp = cv + props.gas_constant_j_per_kg_k;
+            let mut enthalpy_out = 0.0;
+            for _ in 0..4000 {
+                sim.pin_speed_rpm(0.0).unwrap();
+                let before = sim.state.cylinders[0];
+                sim.advance(1).unwrap();
+                let after = sim.state.cylinders[0];
+                let out = before.mass_kg - after.mass_kg;
+                let donor_k = if out > 0.0 {
+                    before.temperature_k
+                } else {
+                    ambient_k
+                };
+                enthalpy_out += out * cp * donor_k;
+                assert!((after.pressure_pa - after.motored_pressure_pa).abs() < 1e-6);
+            }
+            let after = sim.state.cylinders[0];
+            let energy_loss = cv
+                * (initial.mass_kg * initial.temperature_k - after.mass_kg * after.temperature_k);
+            assert!((energy_loss - enthalpy_out).abs() < 1e-8);
+            assert!((after.trapped_air_kg - after.mass_kg).abs() < 1e-12);
+            assert_eq!(sim.first_combustion_time_s(), None);
+            if pressure > 101_325.0 {
+                assert!(
+                    after.mass_kg < initial.mass_kg && after.temperature_k < initial.temperature_k
+                );
+            } else {
+                assert!(after.mass_kg > initial.mass_kg);
+            }
+        }
+    }
 }

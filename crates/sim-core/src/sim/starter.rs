@@ -1,154 +1,44 @@
-//! The starter motor: a series-wound DC machine geared to the flywheel.
+//! Series-wound starter with a rotating armature and a compliant one-way drive.
 //!
-//! Modelled on a Bosch HEF109-M 24 V, 7.8 kW unit with a 12-tooth pinion. What
-//! is published about it is a voltage, a power and a tooth count; everything
-//! electrical below is calibrated, and `starter_sweep` is what it is calibrated
-//! against.
+//! The circuit uses V = I R + k phi(I) omega, phi(I) = I I_sat / (I + I_sat).
+//! Motor torque accelerates the rotor; the seated drive transfers positive torque
+//! through the pinion and flywheel ring gear to the crankshaft. An overrunning
+//! engine cannot back-drive the armature. After release the armature coasts under
+//! drag, and its rotation continues to excite the starter housing.
 //!
-//! ## Why a circuit and not a torque curve
-//!
-//! This replaces two fields — a stall torque written straight at the crank and a
-//! speed for it to taper to. That shape is not wrong about the *shape*: a series
-//! machine's torque really does fall very nearly linearly with speed, so a line
-//! from stall to no-load is a fair description of one. Three things it cannot do:
-//!
-//! - **Gear.** Torque applied directly at the crank has no pinion and no ring
-//!   gear, so the tooth-mesh rate — which is the frequency a starter whines at,
-//!   and the only frequency it whines at — does not exist anywhere in the model.
-//! - **Sag.** A starter dragging a 12.8 litre six pulls on the order of a
-//!   thousand amps through a battery with real internal resistance, and the
-//!   terminals drop several volts answering it. As a cylinder comes up on
-//!   compression the crank slows, back-EMF falls with it, current rises, the
-//!   terminals sag further and the torque with them. That is the labouring in a
-//!   heavy diesel start. It is a property of the circuit, and a torque-speed
-//!   line has no circuit to have it.
-//! - **Be a real machine.** The line it replaces peaks at 750 N m at 150 rpm,
-//!   which is 11.8 kW of mechanical output at the crank. The largest starter in
-//!   this family is rated 9.2 kW.
-//!
-//! ## The circuit solves in closed form
-//!
-//! Armature inductance is neglected — see the note at the bottom — which leaves
-//! the electrical side algebraic rather than another state variable. A series
-//! machine's field winding carries the armature current, so its flux *rises*
-//! with that current and saturates:
-//!
-//! ```text
-//! phi(I) = I I_sat / (I_sat + I)   flux: proportional to I, saturating at I_sat
-//! T_e    = k phi(I) I              so torque goes as I^2 until the iron gives up
-//! E      = k phi(I) w_m            back-EMF through the same constant
-//! V      = I R + E                 one loop, one resistance
-//! ```
-//!
-//! Substituting `E` and multiplying out by `(I_sat + I)` gives a quadratic in
-//! `I`:
-//!
-//! ```text
-//! R I^2 + (I_sat (R + k w_m) - V) I - V I_sat = 0
-//! ```
-//!
-//! The leading coefficient is positive and the constant term is negative, so it
-//! has **exactly one positive root** at every speed and the current falls
-//! smoothly to zero as speed rises. No iteration, no history, no allocation, and
-//! no branch to choose between roots.
-//!
-//! That last property is not a convenience, it is the reason for this flux law
-//! rather than a simpler one. A field that *falls* with current — `phi = I_sat /
-//! (I_sat + I)`, which is the obvious way to write "saturating" and is wrong for
-//! a series machine — makes the back-EMF fall with current too, and then the loop
-//! equation folds: two roots below one speed, none above it, and the torque steps
-//! to zero at the fold. Measured, it stepped 260 N m in one solver step at
-//! 340 crank rpm. It also made torque very nearly independent of speed, which is
-//! a shunt machine and not this one.
-//!
-//! The labouring survives the algebra intact. What makes the current swing is
-//! `w_m` moving under compression, which it does at the firing rate, and
-//! neglecting inductance means the current follows that *immediately* rather than
-//! not at all.
-//!
-//! ## Why the same constant appears in both equations
-//!
-//! `k` multiplies flux in the torque equation and in the back-EMF equation, and
-//! it has to be the same number in both or the machine generates or destroys
-//! energy. `T_e w_m` and `E I` are the same product written twice; using two
-//! constants would make a starter that is not a motor.
-//!
-//! ## Why there is no finite no-load speed without the drag term
-//!
-//! A series machine's torque goes to zero only as its current does, and its
-//! current goes to zero only as its speed goes to infinity. That is the classic
-//! series-motor runaway, and it is real: an unloaded series motor destroys
-//! itself. `internal_drag_nm_per_rad_s` is what makes the no-load speed finite
-//! here, so the cranking speed is where two curves cross rather than a number
-//! anybody chose.
-//!
-//! ## The overrun clutch is why the engine catching does not destroy it
-//!
-//! Output torque is clamped at zero. A meshed pinion turning slower than the
-//! ring gear would otherwise be driven *by* the engine, which at idle would spin
-//! this machine to several times its no-load speed. Real starters put a one-way
-//! clutch in the drive for exactly that, and the clamp is that clutch. It is also
-//! why the relay dropping out at `disengage_rpm` is a tidiness rather than a
-//! rescue.
-//!
-//! ## What is not modelled
-//!
-//! Armature inductance, so the first few milliseconds of current rise are
-//! instantaneous rather than taking an `L/R` of some milliseconds. Battery state
-//! of charge and temperature, so `circuit_resistance_ohm` is one number standing
-//! for a warm battery on short cables. Commutator and brush noise, which is a
-//! separate source from the mesh and a much quieter one. And the solenoid's
-//! slight pre-turn of the pinion before the main contacts close: the pinion here
-//! seats, and then current arrives.
+//! Resistance, inertia, compliance and sound are calibrated estimates. Armature
+//! inductance, battery temperature/state of charge and detailed brush contact
+//! mechanics are not resolved. The published power is a sweep target only.
 
 use crate::config::Starter;
 use crate::sim::acoustics::{ramp, valve_area_fraction};
 
-/// How far through engaging or retracting the pinion is.
-///
-/// Two raw ramp phases in `[0, 1]`, shaped through [`ramp`] on the way out so
-/// that neither the torque nor the acoustic drive has a corner in it, let alone
-/// a step. The old two-field starter went from nothing to 1500 N m in a single
-/// solver step; milestones 11 and 12 were about what a step in a radiated
-/// quantity does, and this is the same defect on the torque side.
+/// Mechanical and electrical engagement plus independent motor rotation.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct StarterState {
-    /// Mechanical seating of the pinion in the ring gear.
     seat_phase: f64,
-    /// Main current, released once the pinion has seated.
     power_phase: f64,
-    /// Seconds the solenoid has been energised, for the two-stage sequence.
     energised_s: f64,
-    /// Whether the relay has dropped out and is latched out until the key is
-    /// released.
-    ///
-    /// A real start relay latches: once the engine has caught you cannot
-    /// re-engage without letting go of the key and turning it again. Modelling
-    /// it as a bare speed comparison instead makes the relay *chatter*, because
-    /// crank speed ripples by tens of rpm over a firing cycle and the drop-out
-    /// threshold sits inside that ripple. Measured, it flipped several times
-    /// while the engine accelerated through 420 rpm, and each flip reversed the
-    /// direction of the engagement ramp — which put a 1.52 step into the mesh
-    /// drive, an edge of exactly the kind this module is careful not to make.
     released: bool,
+    rotor_rad_per_s: f64,
+    rotor_angle_rad: f64,
+    drive_twist_rad: f64,
 }
 
-/// What the starter did this step.
+/// Starter telemetry and the two motion-driven acoustic sources.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct StarterOutput {
-    /// Torque delivered at the crankshaft. Never negative.
+    /// Torque delivered through the flywheel ring gear, never negative.
     pub crank_torque_nm: f64,
-    /// Armature current.
     pub current_a: f64,
-    /// Terminal voltage after the supply's own droop.
+    /// Voltage at the motor terminals, after battery and cable losses.
     pub terminal_voltage_v: f64,
-    /// How far the pinion is into mesh, zero to one.
     pub engagement: f64,
-    /// Dimensionless tooth-mesh force, driving the starter acoustic path.
-    ///
-    /// Exactly zero whenever the pinion is out, which is what keeps every steady
-    /// operating point bit-identical to the model that had no starter path.
+    pub rotor_rad_per_s: f64,
+    /// Loaded tooth contact and the seating/retraction impact.
     pub mesh_forcing: f64,
+    /// Motor-order force from commutation and rotating drag, including coast-down.
+    pub rotation_forcing: f64,
 }
 
 impl StarterState {
@@ -218,37 +108,63 @@ impl StarterState {
         let engagement = ramp(self.seat_phase);
         let current_factor = ramp(self.power_phase);
 
-        // A retracted pinion is not a quiet starter, it is no starter. Return
-        // exact zeros rather than something small: the acoustic path's silence
-        // when disengaged is what every steady acceptance figure rests on, and
-        // "small" is not "zero".
-        if self.seat_phase <= 0.0 && self.power_phase <= 0.0 {
-            return StarterOutput {
-                crank_torque_nm: 0.0,
-                current_a: 0.0,
-                terminal_voltage_v: cfg.system_voltage_v,
-                engagement: 0.0,
-                mesh_forcing: 0.0,
-            };
-        }
-
         let ratio = cfg.gear_ratio();
-        let omega_motor = omega_crank_rad_per_s * ratio;
-
-        let current_a = armature_current_a(cfg, omega_motor) * current_factor;
+        let current_a = armature_current_a(cfg, self.rotor_rad_per_s) * current_factor;
         let electromagnetic_nm = electromagnetic_torque_nm(cfg, current_a);
+        let inertia = cfg.rotor_inertia_kg_m2;
+        let drag = cfg.internal_drag_nm_per_rad_s;
+        let target = omega_crank_rad_per_s.max(0.0) * ratio;
+        let stiffness = cfg.drive_stiffness_nm_per_rad * engagement;
+        let damping = cfg.drive_damping_nm_per_rad_s * engagement;
 
-        // Windage and brush drag, and then the one-way clutch. The clamp is the
-        // clutch: a pinion cannot be driven by the ring gear.
-        let shaft_nm = (electromagnetic_nm - cfg.internal_drag_nm_per_rad_s * omega_motor).max(0.0);
-        let crank_torque_nm = shaft_nm * ratio * cfg.mesh_efficiency * engagement;
+        // Backward Euler for the rotor, spring and damper. The engine receives
+        // the equal drive reaction through the gear ratio and mesh efficiency.
+        let coupled = (inertia * self.rotor_rad_per_s
+            + dt * (electromagnetic_nm + (damping + dt * stiffness) * target
+                - stiffness * self.drive_twist_rad))
+            / (inertia + dt * (drag + damping + dt * stiffness));
+        let twist = self.drive_twist_rad + dt * (coupled - target);
+        let contact_nm = stiffness * twist + damping * (coupled - target);
+        let shaft_nm = if engagement > 0.0 && contact_nm > 0.0 {
+            self.rotor_rad_per_s = coupled;
+            self.drive_twist_rad = twist;
+            contact_nm
+        } else {
+            // The overrunning clutch opens instead of dragging the rotor with
+            // the engine. Its lost elastic energy is dissipated in the drive.
+            self.rotor_rad_per_s =
+                (inertia * self.rotor_rad_per_s + dt * electromagnetic_nm) / (inertia + dt * drag);
+            self.drive_twist_rad = 0.0;
+            0.0
+        };
+        // End an inaudible numerical decay at rest, without an audible gate.
+        if current_factor == 0.0 && self.rotor_rad_per_s.abs() < 1.0e-6 {
+            self.rotor_rad_per_s = 0.0;
+        }
+        self.rotor_angle_rad =
+            (self.rotor_angle_rad + dt * self.rotor_rad_per_s).rem_euclid(std::f64::consts::TAU);
+        let crank_torque_nm = shaft_nm * ratio * cfg.mesh_efficiency;
+        let stall_motor_nm = stall_crank_torque_nm(cfg) / (ratio * cfg.mesh_efficiency);
+        // Periodic contact follows the integrated rotor angle, not a scheduled
+        // audio oscillator. Suppress unresolved motor orders before Nyquist.
+        let motor_order = f64::from(cfg.commutator_segments);
+        let order_hz = motor_order * self.rotor_rad_per_s.abs() / std::f64::consts::TAU;
+        let bandwidth = ramp((0.5 - order_hz * dt) / 0.1);
+        let rotation_forcing = if self.rotor_rad_per_s != 0.0 {
+            bandwidth * (electromagnetic_nm + drag * self.rotor_rad_per_s.abs()) / stall_motor_nm
+                * (motor_order * self.rotor_angle_rad).sin()
+        } else {
+            0.0
+        };
 
         StarterOutput {
             crank_torque_nm,
             current_a,
-            terminal_voltage_v: cfg.system_voltage_v - current_a * cfg.circuit_resistance_ohm,
+            terminal_voltage_v: cfg.system_voltage_v - current_a * cfg.supply_resistance_ohm,
             engagement,
+            rotor_rad_per_s: self.rotor_rad_per_s,
             mesh_forcing: self.mesh_forcing(cfg, crank_torque_nm, crank_angle_rad),
+            rotation_forcing,
         }
     }
 
@@ -344,7 +260,7 @@ fn armature_current_a(cfg: &Starter, omega_motor_rad_per_s: f64) -> f64 {
     }
     let v = cfg.system_voltage_v;
     let sat = cfg.field_saturation_a;
-    let omega = omega_motor_rad_per_s.max(0.0);
+    let omega = omega_motor_rad_per_s;
 
     let b = sat * (r + cfg.torque_constant_nm_per_a2 * omega) - v;
     let c = -v * sat;
@@ -404,6 +320,11 @@ mod tests {
             pinion_teeth: 12,
             ring_gear_teeth: 145,
             circuit_resistance_ohm: 0.01263,
+            supply_resistance_ohm: 0.0035,
+            rotor_inertia_kg_m2: 0.004,
+            drive_stiffness_nm_per_rad: 500.0,
+            drive_damping_nm_per_rad_s: 1.0,
+            commutator_segments: 24,
             torque_constant_nm_per_a2: 9.9752e-5,
             field_saturation_a: 620.0,
             internal_drag_nm_per_rad_s: 0.063,
@@ -439,7 +360,7 @@ mod tests {
         let cfg = hef109m();
         let cranking_motor_rad_per_s = 200.0 / 60.0 * std::f64::consts::TAU * cfg.gear_ratio();
         let current = armature_current_a(&cfg, cranking_motor_rad_per_s);
-        let terminal = cfg.system_voltage_v - current * cfg.circuit_resistance_ohm;
+        let terminal = cfg.system_voltage_v - current * cfg.supply_resistance_ohm;
         assert!(
             current > 400.0,
             "cranking a 12.8 litre six should draw hundreds of amps, drew {current:.0} A"

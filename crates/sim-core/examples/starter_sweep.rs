@@ -1,28 +1,7 @@
-//! Calibration probe: the starter as a machine, and the speed it cranks at.
-//!
-//! `cargo run --release -p sim-core --example starter_sweep`
-//!
-//! This is the working tool behind the starter calibration, and it exists for
-//! the same reason `brake_sweep` does: the machine has one published number to
-//! hit and several calibrated values to hit it with, so the fit has to be
-//! *measured* rather than asserted.
-//!
-//! Two anchors, and they are different in kind:
-//!
-//! - **Maximum mechanical output against the published `rated_power_w`.** The
-//!   solver does not read that figure anywhere — the circuit produces whatever
-//!   power the calibrated resistance, torque constant and saturation knee give
-//!   it, and this prints the error. The engine brake's published anchors are
-//!   handled the same way and for the same reason: a model permitted to read its
-//!   own answer proves nothing.
-//! - **Cranking speed against heavy-duty practice**, which is 150 to 250 rpm and
-//!   is *not* published by anybody. It is reported as an outcome, because it is
-//!   one: it is where the starter's torque-speed curve crosses the engine's own
-//!   demand, and neither side of that crossing was chosen to produce it.
-//!
-//! The second is the honest one to watch. The old two-field starter cranked this
-//! engine at about 270 rpm on 1500 N m, which is faster than a loaded 12.8 litre
-//! six turns over on any real hardware.
+//! Sweep the calibrated starter circuit against its published peak-power anchor.
+//! Also report unfuelled cranking and a fuelled start. Cranking speed, motor
+//! torque, current and sound are model outcomes, not OEM acceptance targets.
+//! Coolant starts at 293.15 K; friction and wall temperature are not a cold-start model.
 
 use sim_core::sim::starter;
 use sim_core::{Catalog, Controls, ResetOptions, Simulation};
@@ -82,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "{rpm:6.0} {:8.0} {amps:8.0} {:7.1} {pinion_nm:10.1} {:10.1} {:9.2}",
             omega_motor * 60.0 / std::f64::consts::TAU,
-            st.system_voltage_v - amps * st.circuit_resistance_ohm,
+            st.system_voltage_v - amps * st.supply_resistance_ohm,
             pinion_nm * ratio * st.mesh_efficiency,
             power_w / 1000.0,
         );
@@ -113,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "stall: {:.0} A pulling {:.1} V, {:.0} N m at the crank",
         starter::sweep_current_a(st, 0.0),
-        st.system_voltage_v - starter::sweep_current_a(st, 0.0) * st.circuit_resistance_ohm,
+        st.system_voltage_v - starter::sweep_current_a(st, 0.0) * st.supply_resistance_ohm,
         starter::stall_crank_torque_nm(st),
     );
 
@@ -122,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ignition off, so this is the machine against friction, accessories and
     // pumping alone. With fuelling it stops being a cranking speed and becomes
     // a start.
-    println!("\ncranking a cold engine, ignition off:");
+    println!("\ncranking from rest, ignition off (293.15 K coolant, fixed wall temperature):");
     let mut sim = Simulation::new(
         config.clone(),
         ResetOptions {
@@ -163,17 +142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         mean / 60.0 * f64::from(st.ring_gear_teeth),
         st.ring_gear_teeth,
     );
-    let verdict = if (150.0..=250.0).contains(&mean) {
-        "inside the 150-250 rpm heavy-duty range"
-    } else if mean < 150.0 {
-        "BELOW the 150-250 rpm heavy-duty range: too slow"
-    } else {
-        "ABOVE the 150-250 rpm heavy-duty range: too fast"
-    };
-    println!("  {verdict}");
+    println!("  cranking speed is a model outcome; no OEM cranking-speed target is configured");
 
     // --- and does it actually start ---
-    println!("\nstarting from cold, ignition on, no pedal:");
+    println!("\nstarting from rest, ignition on, no pedal:");
     let mut sim = Simulation::new(
         config.clone(),
         ResetOptions {

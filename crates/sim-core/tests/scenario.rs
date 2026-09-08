@@ -19,6 +19,70 @@ fn config() -> ValidatedConfig {
         .expect("config validates")
 }
 
+#[test]
+fn crank_captures_separate_compression_from_combustion_and_record_release() {
+    let config = config();
+    for id in ["crank", "crank-release"] {
+        let run = scenario::run(&config, &scenario::find(id).unwrap()).unwrap();
+        assert!(run.phases.iter().all(|phase| !phase.ignition));
+        assert!(!run
+            .events
+            .iter()
+            .any(|event| event.name == "first-combustion"));
+        assert!(run
+            .events
+            .iter()
+            .any(|event| event.name == "main-current-on"));
+        assert!(run
+            .events
+            .iter()
+            .any(|event| event.name == "pinion-retracted"));
+        assert!(run.phases[0].rpm_max > 10.0);
+        assert!(run.phases[0].starter_current_max_a > 1000.0);
+        assert_eq!(run.dropped_frames, 0);
+    }
+    let start = scenario::run(&config, &scenario::find("start").unwrap()).unwrap();
+    let burn = start
+        .events
+        .iter()
+        .find(|event| event.name == "first-combustion")
+        .unwrap();
+    let release = start
+        .events
+        .iter()
+        .find(|event| event.name == "pinion-retracted")
+        .unwrap();
+    assert!(burn.time_s > config.config().starter.pre_engage_time_s);
+    assert!(burn.time_s < release.time_s);
+    assert!(
+        (burn.captured_frame.unwrap() as f64 / start.sample_rate_hz - burn.time_s).abs() < 1e-8
+    );
+    assert!(start.phases.last().unwrap().rpm_end > 500.0);
+}
+
+#[test]
+fn a_retry_rearms_the_starter_without_resetting_the_engine() {
+    let run = scenario::run(&config(), &scenario::find("restart").unwrap()).unwrap();
+    let starts: Vec<_> = run
+        .events
+        .iter()
+        .filter(|event| event.name == "main-current-on")
+        .collect();
+    assert_eq!(starts.len(), 2);
+    assert!(starts[1].time_s > 1.0);
+    assert!(run.phases[2].starter_current_max_a > 1000.0);
+    assert_eq!(run.phases[2].rpm_start, run.phases[1].rpm_end);
+    assert_eq!(run.phases[2].rpm_start, 0.0);
+    let burn = run
+        .events
+        .iter()
+        .find(|event| event.name == "first-combustion")
+        .unwrap();
+    assert!((1.0..2.2).contains(&burn.time_s));
+    assert!(run.phases.last().unwrap().rpm_end > 500.0);
+    assert_eq!(run.phases.last().unwrap().starter_current_max_a, 0.0);
+}
+
 fn running(pedal: f64) -> Controls {
     Controls {
         pedal,

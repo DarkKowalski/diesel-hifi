@@ -1,56 +1,8 @@
-//! Export named scenarios as WAV files, with a manifest of the conditions.
-//!
-//! ```bash
-//! cargo run --release -p sim-core --example audio_capture
-//! cargo run --release -p sim-core --example audio_capture -- --out captures --only idle,full-1400
-//! ```
-//!
-//! This is the tool a listening comparison is made *from*. Without it, comparing
-//! two versions of the sound means reproducing a pedal movement by hand twice
-//! and trusting that they matched; with it, `idle` is a file, regenerated from a
-//! seed and a script, and two of them differ only where the model does.
-//!
-//! Writing files is why this is an example rather than library code. `sim-core`
-//! touches no filesystem API; [`sim_core::scenario`] runs the engine and hands
-//! back samples, and everything below turns those into bytes.
-//!
-//! ## What gets written
-//!
-//! Per scenario, into `<out>/<id>/`:
-//!
-//! | File | What it is |
-//! |---|---|
-//! | `mix.wav` | the three paths added up: the raw listening stage |
-//! | `exhaust.wav`, `block.wav`, `body.wav` | each radiating path on its own |
-//! | `*-unsaturated.wav` | the same paths with the limiter's gain divided out |
-//! | `mix-unsaturated.wav` | those paths summed: the mix before the limiter |
-//! | `manifest.json` (at the root) | conditions, and every metric, for every run |
-//!
-//! The unsaturated set is written only for scenarios where the limiter actually
-//! engaged, and the manifest says how far it engaged and what it cost. It exists
-//! because a pulse shape is the timbre: comparing sources through a stage that is
-//! reducing them differently in the two runs compares the stage.
-//!
-//! **The pair is also how the limiter itself is measured.** How far the gain
-//! fell says nothing about whether the waveform survived — a slow gain is a
-//! level change and a per-sample one is a waveshaper, and both report the same
-//! minimum. The crest factor of the two mixes is the difference. That comparison
-//! is what found the memoryless soft clipper this stage replaced: it was costing
-//! `brake-1300` 5.5 dB of crest, which was the whole of that scenario's
-//! acceptance failure.
-//!
-//! **There is no cockpit-stage file.** The cab is a Web Audio graph in
-//! `web/src/lib/cabin.ts`, and reimplementing it here to export it would be a
-//! second copy of a listening stage that would immediately start drifting from
-//! the one people actually hear. Cockpit comparison happens in the browser,
-//! against these files, through the comparison controls in the sound panel.
-//!
-//! ## Float WAV, not 16-bit
-//!
-//! The samples are `f32` in `[-1, 1]` and are written as IEEE float, because
-//! quantising to 16 bits would put a dither decision — or a truncation
-//! artefact — between the solver and the comparison. Every ordinary audio tool
-//! reads float WAV.
+//! Export repeatable scenarios as float WAVs with configuration and event metadata.
+//! Each scenario contains mix.wav, four-channel paths.wav and non-silent mono paths.
+//! When limiting occurs, gain-recovered tracks are also exported.
+//! `pnpm audio:render <capture directory>` renders the raw/cockpit comparison
+//! through the shipped browser graph at a common output rate.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -84,8 +36,16 @@ const BANDS: [(&str, f64, f64); 4] = [
 /// Hand-rolled because it is a 44-byte header and this crate takes no
 /// dependencies beyond serialization.
 fn write_wav(path: &Path, samples: &[f32], sample_rate_hz: f64) -> std::io::Result<()> {
+    write_multichannel_wav(path, samples, sample_rate_hz, 1)
+}
+
+fn write_multichannel_wav(
+    path: &Path,
+    samples: &[f32],
+    sample_rate_hz: f64,
+    channels: u16,
+) -> std::io::Result<()> {
     let rate = sample_rate_hz.round() as u32;
-    let channels: u16 = 1;
     let bits: u16 = 32;
     let block_align = channels * bits / 8;
     let byte_rate = rate * u32::from(block_align);
@@ -165,7 +125,7 @@ struct Unsaturated {
 
 /// Divide the limiter's common gain back out of every path.
 ///
-/// The limiter decides one gain from the mix and applies it to all three paths,
+/// The limiter decides one gain from the mix and largest individual path and applies it to all four paths,
 /// so dividing each sample by the gain its frame carries recovers exactly what
 /// the solver produced before the limiter engaged. The gains come from the run
 /// rather than from arithmetic on the output: the follower has a release time,
@@ -229,6 +189,7 @@ fn capture(
 
     let mix = run.summed();
     write_wav(&dir.join("mix.wav"), &mix, rate)?;
+    write_multichannel_wav(&dir.join("paths.wav"), &run.frames, rate, run.paths as u16)?;
 
     let mut tracks = serde_json::Map::new();
     tracks.insert("mix".into(), measure(&mix, rate, f0));
@@ -287,6 +248,12 @@ fn capture(
                 "rpmMax": round(p.rpm_max, 1),
                 "rpmMean": round(p.rpm_mean, 1),
                 "brakeTorqueNm": round(p.brake_torque_nm, 1),
+                "ignition": p.ignition,
+                "starterRequested": p.starter_requested,
+                "starterCurrentMeanA": round(p.starter_current_mean_a, 1),
+                "starterCurrentMaxA": round(p.starter_current_max_a, 1),
+                "starterTerminalMinV": round(p.starter_terminal_min_v, 2),
+                "starterRotorMaxRadPerS": round(p.starter_rotor_max_rad_per_s, 2),
             })
         })
         .collect();
@@ -337,6 +304,8 @@ fn capture(
         "limiterMinimumGain": round(smallest_gain, 4),
         "unsaturatedTracksWritten": saturated,
         "phases": phases,
+        "events": run.events,
+        "eventResolutionS": { "first-combustion": config.config().solver.fixed_step_s, "starter": scenario::CHUNK_STEPS as f64 / rate },
         "tracks": tracks,
     }))
 }
@@ -344,12 +313,16 @@ fn capture(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = PathBuf::from(DEFAULT_OUT);
     let mut only: Option<Vec<String>> = None;
+    let mut config_json = OM471_9_M3D_JSON.to_string();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--out" => {
                 out = PathBuf::from(args.next().ok_or("--out needs a directory")?);
+            }
+            "--config" => {
+                config_json = fs::read_to_string(args.next().ok_or("--config needs a JSON path")?)?;
             }
             "--only" => {
                 only = Some(
@@ -376,7 +349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let config: ValidatedConfig = EngineConfig::from_json(OM471_9_M3D_JSON)?.validate()?;
+    let config: ValidatedConfig = EngineConfig::from_json(&config_json)?.validate()?;
     fs::create_dir_all(&out)?;
 
     let scenarios: Vec<Scenario> = scenario::all()
@@ -404,6 +377,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut manifest = BTreeMap::new();
     manifest.insert("configId", serde_json::json!(config.config().identity.id));
     manifest.insert("apiVersion", serde_json::json!(sim_core::API_VERSION));
+    manifest.insert(
+        "configSchemaVersion",
+        serde_json::json!(config.config().schema_version),
+    );
+    // Explicit stable checksum of the exact configuration bytes, not a security hash.
+    let checksum = config_json
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    manifest.insert(
+        "configFnv1a64",
+        serde_json::json!(format!("{checksum:016x}")),
+    );
+    fs::write(out.join("config.json"), &config_json)?;
     manifest.insert("scenarios", serde_json::json!(runs));
     let path = out.join("manifest.json");
     fs::write(&path, serde_json::to_string_pretty(&manifest)?)?;

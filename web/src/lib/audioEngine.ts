@@ -133,6 +133,9 @@ export function buildStageGraph(
 
   const input = keep(context.createGain());
   const mix = keep(context.createGain());
+  // Common playback headroom for filter/reverb peaks; applies to both stages.
+  // Calibrated against the scenario exports, separately from source balance.
+  mix.gain.value = 0.8;
 
   /** Build a biquad chain onto `from`, returning its far end. */
   const chain = (from: AudioNode, stages: readonly FilterStage[]): AudioNode => {

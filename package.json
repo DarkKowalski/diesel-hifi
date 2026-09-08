@@ -16,6 +16,7 @@
     "check": "pnpm --filter web check",
     "test": "pnpm wasm:build && pnpm wasm:test && pnpm --filter web test",
     "test:unit": "pnpm --filter web test:unit",
+    "audio:render": "node web/scripts/render-cockpit.mjs",
     "test:e2e": "pnpm --filter web test:e2e",
     "build": "pnpm wasm:build && pnpm --filter web build && node scripts/verify-dist.mjs web/dist",
     "build:subpath": "pnpm wasm:build && pnpm --filter web build:subpath && node scripts/verify-dist.mjs web/dist-subpath",

@@ -16,7 +16,7 @@ pub use schedule::Schedule;
 pub use validate::ValidatedConfig;
 
 /// The only configuration schema version understood by this build.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Identity and display metadata. Manufacturer names are factual references only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +223,10 @@ pub struct AirPath {
     pub exhaust_restriction_pa_per_kg2_s2: f64,
     /// Pressure on the underside of the piston, used for the net gas force.
     pub crankcase_pressure_pa: f64,
+    /// Effective ring-pack leakage area per cylinder, including discharge loss.
+    /// Exchanges gas with a vented crankcase at ambient temperature. Zero is a
+    /// perfectly sealed diagnostic case, not a restart-specific control.
+    pub ring_leakage_area_m2: f64,
     pub volumetric_efficiency: f64,
 }
 
@@ -494,6 +498,15 @@ pub struct Starter {
     /// The single most important calibrated value here. It sets stall current,
     /// and with it both the stall torque and how far the terminals sag.
     pub circuit_resistance_ohm: f64,
+    /// Battery and cable resistance, included in the total circuit resistance.
+    pub supply_resistance_ohm: f64,
+    /// Motor rotor inertia, on the pinion side of the reduction.
+    pub rotor_inertia_kg_m2: f64,
+    /// Torsional stiffness and damping of the engaged drive, at the rotor.
+    pub drive_stiffness_nm_per_rad: f64,
+    pub drive_damping_nm_per_rad_s: f64,
+    /// Commutator contacts per rotor revolution; an acoustic calibration.
+    pub commutator_segments: u32,
     /// Torque per ampere at low current, before the field saturates.
     pub torque_constant_nm_per_a2: f64,
     /// Current at which the field is half its unsaturated value.
@@ -720,7 +733,7 @@ pub struct AudioCalibration {
     pub exhaust_gain: f64,
     /// Rumble filter below the audible band, protecting output headroom.
     pub highpass_cutoff_hz: f64,
-    /// Ceiling the limiter holds the summed mix to, inside [-1, 1].
+    /// Ceiling the limiter holds both the summed mix and each path to, inside [-1, 1].
     pub soft_clip_knee: f64,
     /// Time constant the limiter's gain recovers towards unity with.
     ///
@@ -735,16 +748,20 @@ pub struct AudioCalibration {
     pub structural_gain: f64,
     /// Modal bank the cylinder-pressure rise rings.
     pub structural_modes: Vec<StructuralMode>,
-    /// Level of the torque-driven body path against the exhaust path.
+    /// Level of the torque/pressure-driven body path against the exhaust path.
     pub body_gain: f64,
-    /// Modal bank the fluctuating crank torque shakes through the mounts.
+    /// Ambient-normalised pressure rise per second to body drive, in seconds.
+    pub body_pressure_rate_gain_s: f64,
+    /// Relative pressure coupling by cylinder index; audio only.
+    pub body_pressure_weights: Vec<f64>,
+    /// Modal bank driven by crank torque and cylinder-specific pressure rise.
     pub body_modes: Vec<StructuralMode>,
     /// Level of the starter's mesh path against the exhaust path.
     ///
-    /// Only ever audible while the pinion is in mesh. With it retracted the path
-    /// emits exactly zero, which is what keeps every steady operating point
-    /// bit-identical to the three-path model this replaced.
+    /// Includes loaded mesh, rotating motor and the housing decay.
     pub starter_gain: f64,
+    /// Rotating motor contribution relative to loaded tooth contact.
+    pub starter_rotor_gain: f64,
     /// Modal bank the pinion's tooth-mesh force rings.
     ///
     /// The starter nose cone and the bell housing it bolts to: aluminium, much
@@ -900,6 +917,7 @@ impl EngineConfig {
                 self.air_path.exhaust_restriction_pa_per_kg2_s2
             }
             "air_path.crankcase_pressure_pa" => self.air_path.crankcase_pressure_pa,
+            "air_path.ring_leakage_area_m2" => self.air_path.ring_leakage_area_m2,
             "air_path.volumetric_efficiency" => self.air_path.volumetric_efficiency,
 
             "turbo.shaft_inertia_kg_m2" => self.turbo.shaft_inertia_kg_m2,
@@ -975,6 +993,11 @@ impl EngineConfig {
             "starter.pinion_teeth" => f64::from(self.starter.pinion_teeth),
             "starter.ring_gear_teeth" => f64::from(self.starter.ring_gear_teeth),
             "starter.circuit_resistance_ohm" => self.starter.circuit_resistance_ohm,
+            "starter.supply_resistance_ohm" => self.starter.supply_resistance_ohm,
+            "starter.rotor_inertia_kg_m2" => self.starter.rotor_inertia_kg_m2,
+            "starter.drive_stiffness_nm_per_rad" => self.starter.drive_stiffness_nm_per_rad,
+            "starter.drive_damping_nm_per_rad_s" => self.starter.drive_damping_nm_per_rad_s,
+            "starter.commutator_segments" => f64::from(self.starter.commutator_segments),
             "starter.torque_constant_nm_per_a2" => self.starter.torque_constant_nm_per_a2,
             "starter.field_saturation_a" => self.starter.field_saturation_a,
             "starter.internal_drag_nm_per_rad_s" => self.starter.internal_drag_nm_per_rad_s,
@@ -1018,8 +1041,11 @@ impl EngineConfig {
             "audio.structural_gain" => self.audio.structural_gain,
             "audio.structural_modes" => return None,
             "audio.body_gain" => self.audio.body_gain,
+            "audio.body_pressure_rate_gain_s" => self.audio.body_pressure_rate_gain_s,
+            "audio.body_pressure_weights" => return None,
             "audio.body_modes" => return None,
             "audio.starter_gain" => self.audio.starter_gain,
+            "audio.starter_rotor_gain" => self.audio.starter_rotor_gain,
             "audio.starter_modes" => return None,
 
             "rated.max_power_w" => self.rated.max_power_w,
