@@ -841,32 +841,44 @@ fn the_structural_path_is_what_puts_energy_above_the_firing_harmonics() {
     // *share* of its own much smaller output can look large while the energy up
     // there is negligible. The claim being made is about how much is up there.
     //
-    // Measured above 1 kHz rather than above 500 Hz. This boundary was chosen
-    // when the bank's lowest mode was at 480 Hz, so "above 500 Hz" meant "where
-    // only the block is". The bank now starts at 210 Hz, to give the engine the
-    // size a 12.8 litre iron structure ought to have, and the exhaust path
-    // legitimately carries content through the same region — so 500 Hz stopped
-    // separating the two paths and started straddling both. A kilohertz is
-    // where the block is still the only thing radiating.
-    // Three times rather than the four this asserted through milestone 11, and
-    // the reason is the change that moved it rather than the failure it caused.
-    // That constant was fitted while a fifth of the block path's content above
-    // 2 kHz was a boundary assignment being rung — milestone 11 measured exactly
-    // that and predicted, in advance, that fixing the intake side would take the
-    // content with it. It did: this ratio read 3.98 immediately afterwards, and
-    // the artefact was the difference.
+    // **Measured above 300 Hz, and the boundary has now moved twice for the same
+    // kind of reason.** It was 500 Hz when the bank's lowest mode was at 480; it
+    // became 1 kHz when the bank was lowered to start at 210 and the exhaust
+    // began carrying content through the same region.
     //
-    // The claim being made is dominance, not a particular ratio. At three times
-    // the modal bank still supplies about three quarters of the energy above a
-    // kilohertz, which is what "this path is the mechanism" means, and there is
-    // now margin on both sides of the number instead of 0.02 on one.
-    let with_energy = high_band_energy(&with, 1_000.0);
-    let without_energy = high_band_energy(&without, 1_000.0);
+    // Milestone 15 moved the bank's weight *out* of the top end — the shape had
+    // been ascending 0.25 to 12.0, which a listener heard as too much high
+    // frequency from the block and which starved the 220-750 Hz band a diesel
+    // growls in. The bank's loudest octave is now 315-630 Hz. So "above 1 kHz" has
+    // stopped being where this path lives, and a test measuring there is
+    // measuring the tail of the mechanism rather than the mechanism.
+    //
+    // This is the third boundary and the second threshold this assertion has had,
+    // which is worth being uncomfortable about. What has stayed fixed is the
+    // claim: silence the bank and the band it exists to supply goes with it. What
+    // keeps moving is where that band is, because the bank keeps being re-aimed —
+    // and each move is recorded in `README.md` with the measurement that forced
+    // it rather than being quietly re-fitted.
+    // Measured with a resonator at 750 Hz rather than a high pass, and that is
+    // the substantive change. A high pass above any corner now sums the block
+    // against an exhaust path that carries comparable energy through the same
+    // region — 1.7 times above 300 Hz, 2.1 above a kilohertz — so it cannot show
+    // dominance wherever the corner is put. It is not supposed to: the block is
+    // 8 dB below the exhaust overall, and the claim was never that it is the
+    // loudest thing in the mix.
+    //
+    // The claim is that it is *the mechanism for its own band*, and asked that way
+    // the answer is unambiguous: at 750 Hz, where the bank's heaviest mode sits,
+    // silencing it takes four fifths of the energy away. The companion test
+    // `the_modal_bank_only_rings_where_it_is_told_to` asks the same thing from the
+    // other side, by moving the mode off 750 Hz rather than switching it off.
+    let with_energy = tone_energy(&with, 750.0, 4.0);
+    let without_energy = tone_energy(&without, 750.0, 4.0);
     assert!(
         with_energy > without_energy * 3.0,
-        "the modal bank should dominate above 1 kHz: {with_energy:.4e} with it \
-         against {without_energy:.4e} without, which is not a large enough difference \
-         to be the mechanism this path claims to be"
+        "the modal bank should dominate its own band: at 750 Hz, {with_energy:.4e} \
+         with it against {without_energy:.4e} without, which is not a large enough \
+         difference to be the mechanism this path claims to be"
     );
 }
 
@@ -899,8 +911,24 @@ fn the_modal_bank_only_rings_where_it_is_told_to() {
         40_000,
     );
 
-    // Measured at 5.7 kHz, where the raised bank's top mode lands and the shipped
-    // one has nothing, with a resonator rather than a high pass.
+    // **Measured at the frequency the bank has *vacated*, not the one it moved
+    // to, and that inversion is forced by the reshape in milestone 15.**
+    //
+    // This used to probe 5.7 kHz, where the raised bank's top mode lands. It
+    // worked while that mode carried a weight of 12.0. It cannot work now that it
+    // carries 2.5: measured across shifts of 1.5x, 2x and 3x and probes from
+    // 1.1 to 2.8 kHz, *every* combination reads between 0.76 and 1.11 times the
+    // shipped bank. Raising a mode into a region the drive barely reaches loses
+    // more than the mode gains, which is exactly the headwind the note above
+    // describes — and with the weights no longer ascending to compensate for it,
+    // the headwind wins.
+    //
+    // So the question is asked the other way round. Move the bank up by half and
+    // 750 Hz, where its heaviest mode sits, must go quiet: it reads **0.25 times**,
+    // a fourfold drop. Two guards keep that honest. The drop must be much larger
+    // than the change in the output's *total* energy, so "everything got quieter"
+    // cannot pass; and the probe is a resonator rather than a one-pole corner,
+    // because a gentle corner cannot say which side of it a mode is on.
     //
     // This test used to compare the *share* above 2 kHz after halving the bank,
     // and both halves of that were wrong once the exhaust path was radiating
@@ -913,12 +941,25 @@ fn the_modal_bank_only_rings_where_it_is_told_to() {
     // 5.7 kHz read within a factor of two of each other, because the 2.5-5 kHz
     // band leaks through in quantity and moves the opposite way. A resonator
     // sees the 31x difference that is actually there.
-    let shipped = tone_energy(&shipped_bank, 5_700.0, 8.0);
-    let raised = tone_energy(&raised_bank, 5_700.0, 8.0);
+    let shipped = tone_energy(&shipped_bank, 750.0, 8.0);
+    let raised = tone_energy(&raised_bank, 750.0, 8.0);
+    let ratio = raised / shipped.max(1.0e-30);
     assert!(
-        raised > shipped * 4.0,
-        "moving every mode up by half should put the top one at 5.7 kHz, but the \
-         energy there went {shipped:.4e} -> {raised:.4e}"
+        ratio < 0.5,
+        "moving every mode up by half should vacate 750 Hz, but the energy there \
+         went {shipped:.4e} -> {raised:.4e} ({ratio:.3}x)"
+    );
+
+    // The control: it has to be the *mode* leaving rather than the whole output
+    // getting quieter, so the drop at 750 Hz must be well beyond what happened to
+    // the total.
+    let total =
+        |samples: &[f32]| -> f64 { samples.iter().map(|s| f64::from(*s) * f64::from(*s)).sum() };
+    let total_ratio = total(&raised_bank) / total(&shipped_bank).max(1.0e-30);
+    assert!(
+        ratio < total_ratio * 0.6,
+        "750 Hz fell {ratio:.3}x while the whole output fell {total_ratio:.3}x, \
+         which is a quieter engine rather than a bank that moved"
     );
 }
 
@@ -1921,13 +1962,19 @@ fn the_paths_are_emitted_in_the_documented_order() {
     let frames = frames_at(config(), 1_400.0, 1.0, 293.15, 32_768);
     let f0 = firing_hz(1_400.0, config().config().geometry.cylinders);
 
+    // The high half is a *band* above 300 Hz rather than two spectral lines.
+    //
+    // It was lines at 1500 and 3000 Hz, which stopped meaning what it was
+    // written to mean in milestone 15: the block's modal bank was reshaped away
+    // from the top end, so its energy at those two frequencies collapsed and the
+    // ratio inverted — the block measured as the *lower* path than the exhaust
+    // while still holding 69% of its energy above 300 Hz against the exhaust's
+    // 10%. Two lines sample where a bank happens to sit; a band asks the question
+    // the test is actually asking.
     let low_heavy = |path: usize| {
         let samples = path_of(&frames, path);
         let low: f64 = (1..=2).map(|n| line_power(&samples, f0 * n as f64)).sum();
-        let high: f64 = [1_500.0, 3_000.0]
-            .iter()
-            .map(|hz| line_power(&samples, *hz))
-            .sum();
+        let high = high_band_energy(&samples, 300.0);
         low / high.max(1.0e-30)
     };
 

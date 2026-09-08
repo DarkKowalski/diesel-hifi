@@ -160,6 +160,16 @@ next would have amplified it.
 
 | 14 | **The cab stops reflecting treble it should swallow, and the bass is found to have no harmonics**: the generated room tail gets two decay rates instead of one — a quarter as long above 900 Hz, because a cab lined with seats, carpet and a headliner absorbs several times more there than at 125 Hz — and the early reflections get a damping filter, because what bounces off a seat back is not a full-bandwidth copy. Measuring the forcings to explain a listening report then found the larger problem: the **torque drive is 87% fundamental with a crest factor of 4.8 dB**, so the body path can only ever be a tone. Cab change delivered; the bass finding recorded. |
 
+| 15 | **The block stops shouting and starts growling**: the structural modal bank's weights ascended 0.25 to 12.0 with frequency, so the block path shouted above 1 kHz and was nearly silent in the 220–750 Hz band a diesel growls in. Both of those were listener reports. Reshaped to span 6.7 dB instead of 16.8 and re-levelled to hold the balance: the block path goes from **22.6% to 49.8%** of its energy in the first four firing orders at cruise, its loudest octave moves to **315–630 Hz**, `>2 kHz` in the mix falls by 5 to 17 times, and `light-900` clears the exhaust-over-block floor it had been failing for three milestones. |
+
+Milestone 15 is the source half of the bass problem, and it is a mistake being
+corrected rather than a feature being added. The block bank's ascending weights
+are documented as compensating for a drive that is too smooth at its onset —
+which is true, and the compensation was overdone by enough that a listener heard
+it twice, once as too much treble and once as a missing growl. Those turned out
+to be one number. See **What the drive contains** for what changed and
+**Verification, milestone 15** for the three tests whose claims moved with it.
+
 Milestone 14 is two things that arrived together because one was found while
 looking into the other. The cab change is the listener's own suggestion — a
 cabin is full of soft things and soft things absorb treble — and it is
@@ -1771,7 +1781,7 @@ none of it supplies these numbers.
 | Exhaust acoustics | 20 Hz rumble filter, soft-clip knee 0.85, exhaust gain 9.5, structural gain 0.40 and body gain 0.09, set so the start transient approaches the knee without saturating and so the exhaust leads the block by 6 to 10 dB across the range. The pipe mouth's radiation transfer is a one-pole high pass at `exhaust_system.radiation_cutoff_hz` rather than a bare difference — the same corner the duct uses on the reflected wave, because it is the same physical corner. There is no muffler roll-off parameter: a two-pole low pass standing in for an entire exhaust system is a tone control, and the duct below replaced it |
 | Structural modes | 210, 380, 750, 1400, 2400 and 3600 Hz at Q 9, 10, 11, 12, 13 and 14, weighted 0.25, 0.4, 0.9, 3.0, 7.0 and 12.0. The bank used to start at 480 Hz; a 12.8 L iron structure bends lower than that, and the lowest mode is the cue for how big the engine is. Q is in the low tens throughout rather than up to 25, so the clatter is broadband texture instead of a pitched ring |
 | **Exhaust system** | 3.5 m tailpipe of 0.008 m² section; open-end reflection −0.8 with 2 kHz radiation loss; 12 L of free aftertreatment volume acting as 1.5 m of added acoustic length, and a substrate transmission of 0.61 per traverse acting as its flow resistance; 14 dB turbine insertion loss above 400 Hz; runners spanning 100–700 mm. **None of this geometry is published** |
-| **Combustion noise** | The weights still *ascend* with frequency, which is the opposite of the radiating physics. This was re-examined and kept: descending weights were tried, on the argument that a big engine should ring low, and they starved the top end to under 1% above 2 kHz because the drive genuinely falls that steeply — the premixed Wiebe rise starts with zero slope, so the model's burn onset drives the upper modes far more weakly than a real one would. The weights compensate for a shortfall in the drive rather than claiming an engine radiates more at 3.6 kHz than at 750 Hz. What changed instead is where the bank *starts* and how sharp it is |
+| **Combustion noise** | The weights **no longer** ascend with frequency: 1.15, 1.3, 2.2, 1.5, 2.0 and 2.5 across the six modes, a span of 6.7 dB, with the peak at 750 Hz. They *used to* ascend steeply (0.25 to 12.0, 16.8 dB), compensating for the premixed Wiebe rise starting with zero slope and so driving the upper modes too weakly. That compensation was overdone — a listener heard the top end as too harsh and the 220–750 Hz growl band as empty, which turned out to be one number — and the bank was reshaped in milestone 15. **The shortfall in the drive is still real**, so the weights still rise a little from the lowest two modes rather than descending as radiating physics would suggest, but the corrected values let the block path's loudest octave sit at 315–630 Hz where it belongs |
 | **Cylinder build scatter** | ±2% exhaust port area, ±1.5% injector delivery, drawn once per cylinder at reset from the reset seed and never per step. Six bit-identical cylinders sum to a pure harmonic comb the ear hears as synthesised. Far too small to move any calibration result, and a test asserts peak power and torque are unchanged by it |
 | **Cycle-to-cycle scatter** | ±2% delivered fuel, drawn once per cylinder *per cycle* at intake valve closing from the same seeded stream. Build scatter makes the cylinders differ from each other; this was the only thing making a cylinder differ from its own last cycle until milestone 12, and is now the smaller of two such things — trapping through a real port carries the residual forward, which does the same job at roughly twice the size. Its effect is honestly modest, it is kept because it is still a working lever, and see **Modelling simplifications** for the measurement |
 | **Cockpit listening stage** | Per path: exhaust at 0 dB, low-passed at 1.6 kHz with −3 dB at 400 Hz, delayed 12 ms, full room send; block at −3 dB, low-passed at 3.2 kHz with +2 dB at 1 kHz, delayed 2 ms, 0.4 room send; body at **+1.5 dB**, low-passed at 250 Hz with +1 dB at 120 Hz, no delay and **no room send at all**. The three path levels say where the driver is sitting and are applied inside the cab chain only, so the raw stage stays exactly the sum the solver emitted. Then shared: 30 Hz high pass; +5 dB low shelf at 150 Hz; +2.5 dB at 200 Hz, Q 0.9; −2 dB at 600 Hz, Q 1.0; reflections at 7.3 ms (−11 dB, left) and 11.9 ms (−13 dB, right), both through a 1.8 kHz low pass because what they bounce off is upholstery; a 180 ms seeded impulse response after 6 ms of predelay, band-limited at 5 kHz and decaying over **130 ms below 900 Hz and 35 ms above it** — a lined cabin absorbs several times more at 2 kHz than at 125 Hz — at a level of 0.20; compressor at −18 dB, ratio 2, 25/180 ms, trimmed 0.42 in and 1.39 out. No shared low pass: one figure could not describe a tailpipe metres away and an engine through the bulkhead at once. Presentation only — downstream of everything, changes no state, bypassable |
@@ -2168,6 +2178,32 @@ checked against a real fix, it turned out to predict one to within half a
 percentage point.
 
 [`analysis::jumps`]: crates/sim-core/src/analysis.rs
+
+### Verification, milestone 15
+
+Run on Windows 11. A source change: the block modal bank's weights and Q values were
+reshaped, and `structural_gain` was halved to hold the balance. No listening-stage
+code was touched, so the web suite was not re-run.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | 0 files formatted |
+| `cargo clippy --workspace --all-targets` | 0 warnings |
+| `cargo test --workspace` | 310 passed, 0 failed |
+
+Three acoustic tests had their claims deliberately changed, and each change is
+documented in place:
+
+| Test | What changed |
+|---|---|
+| `the_structural_path_is_what_puts_energy_above_the_firing_harmonics` | Moved from measuring above 1 kHz with a high pass to measuring at 750 Hz with a resonator. A high pass sums the block against an exhaust that now carries comparable energy through the same region, so it cannot show dominance. At 750 Hz, where the bank's heaviest mode sits, silencing it takes four fifths of the energy away |
+| `the_modal_bank_only_rings_where_it_is_told_to` | Moved from raising every mode by half and probing 5.7 kHz to raising by half and probing the frequency *vacated*. The weights no longer ascend, so raising a mode into a region the drive barely reaches loses more than the mode gains. Vacating 750 Hz drops the energy there to 0.25 times, a fourfold drop |
+| `the_paths_are_emitted_in_the_documented_order` | Moved from measuring the high half as two spectral lines at 1500 and 3000 Hz to measuring it as a band above 300 Hz. The lines sampled where the old bank sat; when the bank moved away from the top they inverted and the block measured as lower than the exhaust while still holding 69% of its energy above 300 Hz |
+
+The first two are the same measurement stated from opposite sides, and both are about
+localisation: the bank determines where the energy is, demonstrated by switching it
+off (first test) or by moving it away (second test). The third is about what a metric
+means when the mechanism it measures moves.
 
 ### Verification, milestone 14
 

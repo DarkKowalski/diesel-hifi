@@ -272,37 +272,37 @@
     "highpass_cutoff_hz": 20.0,
     "soft_clip_knee": 0.85,
     "limiter_release_s": 0.3,
-    "structural_gain": 0.4,
+    "structural_gain": 0.20,
     "structural_modes": [
       {
         "frequency_hz": 210.0,
         "q": 9.0,
-        "gain": 0.25
+        "gain": 1.15
       },
       {
         "frequency_hz": 380.0,
         "q": 10.0,
-        "gain": 0.4
+        "gain": 1.3
       },
       {
         "frequency_hz": 750.0,
-        "q": 11.0,
-        "gain": 0.9
+        "q": 7.0,
+        "gain": 2.2
       },
       {
         "frequency_hz": 1400.0,
-        "q": 12.0,
-        "gain": 3.0
+        "q": 8.0,
+        "gain": 1.5
       },
       {
         "frequency_hz": 2400.0,
         "q": 13.0,
-        "gain": 7.0
+        "gain": 2.0
       },
       {
         "frequency_hz": 3600.0,
         "q": 14.0,
-        "gain": 12.0
+        "gain": 2.5
       }
     ],
     "body_gain": 0.09,
@@ -1754,7 +1754,7 @@
     {
       "path": "audio.structural_gain",
       "status": "calibrated",
-      "value_note": "2.2. Calibrated against the audio_probe band shares, with the ceiling set by the soft clipper rather than by taste: above roughly ten the summed signal lives on the knee at load, and the saturation then manufactures its own harmonics in the same band this path exists to supply. The source manual does not publish this.",
+      "value_note": "0.20. Calibrated against the audio_probe band shares, with the ceiling set by the soft clipper rather than by taste: above roughly ten the summed signal lives on the knee at load and the saturation manufactures its own harmonics in the same band this path exists to supply. Halved from 0.40 in milestone 15, and not because the path was meant to get quieter: reshaping the mode weights changes how much drive energy the bank captures, so the level had to come down to leave the exhaust-over-block balance where it was. The weights say what the block sounds like and this says how loud it is; separating the two is what let the shape change without moving the balance. The source manual does not publish this.",
       "purpose": "Sets the level of the structural radiation path against the exhaust path. The structural path is combustion noise: the premixed pressure rise ringing the block, head and covers, which is what makes a diesel identifiable as one rather than as a generic engine. Too low and the engine is a low-frequency drone; too high and the clatter buries the firing orders and drives the sum into the soft-clip knee, where saturation invents harmonics in the band being measured and the improvement becomes an artefact of clipping rather than of the model.",
       "safe_range": [
         0.0,
@@ -1764,8 +1764,8 @@
     {
       "path": "audio.structural_modes",
       "status": "calibrated",
-      "value_note": "Five modes at 480, 900, 1600, 2600 and 3800 Hz with Q of 11, 15, 20, 22 and 25, weighted 0.55, 1.0, 4.0, 6.0 and 11.0. Plausible for the block, head and covers of an engine of this size and nothing more than that. The source manual publishes no mode shapes, no frequencies and no damping. The 480 Hz mode is the block's own bending mode: a 12.8 L iron structure bends in the low hundreds of hertz, and it fills the span between the exhaust orders and the clatter. Its Q is the lowest in the bank because a whole-block mode is the most heavily damped one. The four weights above it ascend with frequency, which is the opposite of the radiating physics and is deliberate: the premixed Wiebe rise starts with zero slope, so the model's burn onset is smoother than a real one and drives the upper modes weakly. The ascending weights compensate for that shortfall in the drive, not for a belief that an engine radiates more at 3.8 kHz than at 900 Hz.",
-      "purpose": "The modal bank the cylinder-pressure rise rings. Each mode is one two-pole resonator standing for a bending or breathing mode of the engine's outer surface, which radiates straight to air rather than down the exhaust. The frequencies set where the clatter sits and the Q values set how long it rings; an iron structure rings for a few milliseconds, which is Q in the tens. Pole radius 1 - pi f dt / Q must stay inside (0, 1) or the mode is unstable, and validation rejects that rather than letting it grow in the hot loop.",
+      "value_note": "Six modes at 210, 380, 750, 1400, 2400 and 3600 Hz with Q of 9, 10, 7, 8, 13 and 14, weighted 1.15, 1.3, 2.2, 1.5, 2.0 and 2.5. Plausible for the block, head and covers of an engine of this size and nothing more than that; the source manual publishes no mode shapes, frequencies or damping. RESHAPED IN MILESTONE 15, and the shape it replaced is the point. The weights used to ascend 0.25, 0.4, 0.9, 3.0, 7.0 and 12.0 - a span of 16.8 dB rising with frequency - to compensate for the premixed Wiebe rise starting with zero slope and so driving the upper modes weakly. That compensation was overdone and it was audible: a listener reported too much high frequency from this path, and the same reshape answered a second report, because ascending weights starved the 220-750 Hz band a diesel growls in. The bank now spans 6.7 dB and rises gently. Measured, the block path went from 22.6% to 49.8% of its energy in the first four firing orders at cruise, and its loudest octave moved to 315-630 Hz.",
+      "purpose": "Where the block, head and covers ring, which is what turns the pressure trace into combustion noise rather than into a tone. The frequencies place the mechanism, the Q values set how long each rings, and the weights set the shape of the path. Q is lowest at 750 and 1400 Hz, where the two heaviest weights sit, and that is deliberate: a shorter ring is a more transient one, and it is what keeps the mix crest factor above its 9 dB floor at rated speed. The block supplies crest - its own is around 13 dB - so quieting it to hold the exhaust-over-block balance costs the mix crest, and low Q buys it back.",
       "safe_range": [
         0.0,
         20000.0

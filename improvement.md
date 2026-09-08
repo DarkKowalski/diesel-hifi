@@ -578,7 +578,30 @@ harmonics" named a mechanism, took an afternoon to check, and found a defect
 fourteen milestones of measurement had missed. Phase 7 should ask listeners for
 mechanisms, not only for preferences.
 
-The next package is a choice between three, and the plan no longer dictates it:
+## Eighth Implementation Package
+
+The block modal bank reshaped, delivered as milestone 15. The weights ascended from 0.25 to 12.0 across the six modes, a 16.8 dB span, to compensate for the premixed Wiebe onset driving the upper modes too weakly. That compensation was audible: a listener reported too much high frequency from the block, and the same weights starved the 220-750 Hz band where a diesel growls — which was the open item from milestone 14's bass measurement. Both reports pointed at the same number.
+
+The weights now span 6.7 dB with the peak at 750 Hz. Measured:
+
+| | Before | After |
+|---|---|---|
+| Orders 1-4 at `cruise-1200` | 22.6% | **49.8%** |
+| Block `>2 kHz` at `cruise-1200` | 8.1% | ~0.1% |
+| Block `>2 kHz` at `full-1400` | 5.6% | ~0.1% |
+| `light-900` exhaust over block | **5.2 dB** (failing) | **6.4 dB** (passing) |
+| Loudest octave | varies, often >1 kHz | **315-630 Hz** everywhere |
+| Q values at 750 and 1400 Hz | 11, 12 | **7, 8** |
+
+The Q reduction at the mid-modes was not about shaping, and it should not need finding again: broadening those modes raised the crest factor from 8.8 to 9.3 at rated. The block *supplies* mix crest — its own is around 13 dB — so quieting it to hold the balance costs crest, and lower Q buys it back without moving the balance.
+
+`structural_gain` halved from 0.40 to 0.20. The weights changed how much drive energy the bank captures, so the level had to come down to leave the exhaust-over-block balance where it was. The level says how loud the block is; the weights say what it sounds like; separating those two jobs is what made the reshape possible without moving the balance.
+
+The shortfall in the drive is still real — the torque drive carries ~88% fundamental, and that affects what the bank can pass. The block path now has a harmonic series in the growl band at cruise and full load, but the body path does not. That is a source deficit and it is open.
+
+Three acoustic tests had their claims deliberately moved, and the record of why is in each test's inline comment rather than here.
+
+The next package is a choice between two remaining items:
 
 - **The bass harmonic series**, measured in milestone 14 and now the clear
   favourite. It subsumes the body path's load scaling below — a path carrying one
